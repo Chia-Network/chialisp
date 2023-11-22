@@ -37,6 +37,7 @@ binascii = "0.1.4"
 yaml-rust = "0.4"
 linked-hash-map = "0.5.6"
 serde = { version = "1.0", features = ["derive", "rc"] }
+gimli = "0.28.0"
 
 [dependencies.pyo3]
 version = "0.14.2"
@@ -98,3 +99,7 @@ path = "src/classic/bins/clisp_to_json.rs"
 [[bin]]
 name = "repl"
 path = "src/classic/bins/repl.rs"
+
+[[bin]]
+name = "armtx"
+path = "src/classic/bins/armtx.rs"
