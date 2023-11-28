@@ -912,9 +912,9 @@ impl Program {
 
     fn push_be(&mut self, srcloc: &Srcloc, instr: Instr, begin_end_block: Option<BeginEndBlock>) {
         let size = instr.size(self.current_addr);
+        self.finished_insns.push(instr.clone());
         if size != 0 {
             let next_addr = self.current_addr + size;
-            self.finished_insns.push(instr.clone());
             self.dwarf_builder.add_instr(self.current_addr, srcloc, instr, begin_end_block);
             self.current_addr = next_addr;
         }
