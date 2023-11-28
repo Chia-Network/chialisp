@@ -4,15 +4,28 @@ use std::fmt;
 use std::fmt::Formatter;
 use std::fs;
 use std::mem::swap;
+use std::path::PathBuf;
 use std::rc::Rc;
 
-use gimli::write::Dwarf;
+use argh::FromArgs;
+use clvmr::Allocator;
+use gimli::{Encoding, Format, LineEncoding, LittleEndian};
+use gimli::write::{Address, DirectoryId, Dwarf, FileId, LineProgram, LineString, Section, Sections, UnitId, Unit};
 
 use clvm_tools_rs::classic::clvm::casts::bigint_to_bytes_clvm;
 use clvm_tools_rs::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
+use clvm_tools_rs::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
+
 use clvm_tools_rs::compiler::clvm::{sha256tree, truthy};
-use clvm_tools_rs::compiler::sexp::{Atom, NodeSel, SelectNode, SExp, ThisNode, parse_sexp};
+use clvm_tools_rs::compiler::comptypes::CompilerOpts;
+use clvm_tools_rs::compiler::compiler::{DefaultCompilerOpts, compile_file};
+use clvm_tools_rs::compiler::sexp::{Atom, decode_string, NodeSel, SelectNode, SExp, ThisNode, parse_sexp};
 use clvm_tools_rs::compiler::srcloc::Srcloc;
+
+const ENV_PTR: i32 = 4;
+const STACK_TOP: i32 = 8;
+const NEXT_ALLOC_OFFSET: i32 = 12;
+const FUNCTION_ADDRS: i32 = 16;
 
 //
 // Compile each program to clvm, then decompose into arm assembly.
@@ -102,6 +115,7 @@ enum Instr {
     Align4,
     Text,
     Data,
+    Section(String),
     Globl(String),
     Label(String),
     Space(usize,u8),
@@ -120,6 +134,7 @@ enum Instr {
     Bl(String),
     Bx(Register),
     Adr(Register,String),
+    Lea(Register,String),
     Swi(usize),
     SwiEq(usize),
     Cmpi(Register,usize),
@@ -128,12 +143,38 @@ enum Instr {
     Bytes(Vec<u8>),
 }
 
+impl Instr {
+    fn size(&self, current: usize) -> usize {
+        match self {
+            Instr::Align4 => {
+                let next = (current + 3) & !3;
+                next - current
+            }
+            Instr::Text => 0,
+            Instr::Data => 0,
+            Instr::Section(_) => 0,
+            Instr::Space(size,fill) => *size,
+            Instr::Globl(l) => 0,
+            Instr::Label(l) => 0,
+            Instr::Bytes(v) => v.len(),
+            _ => 4
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BeginEndBlock {
+    BeginBlock,
+    EndBlock
+}
+
 impl fmt::Display for Instr {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Instr::Align4 => write!(f, "  .align 4"),
             Instr::Text => write!(f, "  .text"),
             Instr::Data => write!(f, "  .data"),
+            Instr::Section(s) => write!(f, "  .section {s}"),
             Instr::Space(size,fill) => write!(f, "  .space {size},{fill}"),
             Instr::Globl(l) => write!(f, "  .globl {l}"),
             Instr::Label(l) => write!(f, "{l}:"),
@@ -169,6 +210,7 @@ impl fmt::Display for Instr {
             Instr::BEq(l) => write!(f, "  beq {l}"),
             Instr::Bx(r) => write!(f, "  bx {r}"),
             Instr::Adr(r,l) => write!(f, "  adr {r}, {l}"),
+            Instr::Lea(r,l) => write!(f, "  ldr {r}, ={l}"),
             Instr::Swi(n) => write!(f, "  swi {n}"),
             Instr::SwiEq(n) => write!(f, "  swieq {n}"),
             Instr::Long(n) => write!(f, "  .long {n}"),
@@ -186,27 +228,216 @@ impl fmt::Display for Instr {
     }
 }
 
-#[derive(Debug, Clone)]
-struct SrclocAndInstr {
-    loc: Srcloc,
-    instr: Instr,
-}
-
-impl fmt::Display for SrclocAndInstr {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}", self.instr)
-    }
-}
-
-impl SrclocAndInstr {
-    fn new(loc: Srcloc, instr: Instr) -> Self {
-        SrclocAndInstr { loc, instr }
-    }
-}
-
-#[derive(Default)]
 struct DwarfBuilder {
+    unit_id: UnitId,
+    file_to_id: HashMap<Vec<u8>, (DirectoryId, FileId)>,
+    directory_to_id: HashMap<Vec<u8>, DirectoryId>,
+
+    seq_addr_start: usize,
+
     dwarf: Dwarf
+}
+
+#[derive(Default, Clone, Debug)]
+struct DwarfSectionWriter {
+    pub written: Vec<u8>
+}
+
+impl gimli::write::Writer for DwarfSectionWriter {
+    type Endian = LittleEndian;
+
+    fn endian(&self) -> Self::Endian {
+        return LittleEndian::default();
+    }
+
+    fn len(&self) -> usize {
+        self.written.len()
+    }
+
+    fn write(&mut self, bytes: &[u8]) -> gimli::write::Result<()> {
+        for b in bytes.iter() {
+            self.written.push(*b);
+        }
+
+        Ok(())
+    }
+
+    fn write_at(&mut self, offset: usize, bytes: &[u8]) -> gimli::write::Result<()> {
+        let mut to_skip = 0;
+        if offset < self.written.len() {
+            to_skip = self.written.len() - offset;
+            for (i, b) in bytes.iter().enumerate().take(to_skip) {
+                self.written[offset + i] = *b;
+            }
+        }
+
+        while offset > self.written.len() {
+            self.written.push(0);
+        }
+
+        for b in bytes.iter().skip(to_skip) {
+            self.written.push(*b);
+        }
+
+        Ok(())
+    }
+}
+
+impl DwarfBuilder {
+    fn new(filename: &str) -> Self {
+        let mut path = PathBuf::new();
+        path.push(filename);
+        path.pop();
+        let dirname = path.into_os_string().to_string_lossy().as_bytes().to_vec();
+
+        path = PathBuf::new();
+        path.push(filename);
+        let filename = path.file_name().map(|f| f.to_string_lossy().as_bytes().to_vec()).unwrap_or_else(|| filename.as_bytes().to_vec());
+
+        let line_encoding = LineEncoding {
+            minimum_instruction_length: 4,
+            maximum_operations_per_instruction: 1,
+            default_is_stmt: false,
+            line_base: 0,
+            line_range: 1
+        };
+
+        let mut dwarf = Dwarf::default();
+        let encoding = Encoding {
+            address_size: 4,
+            format: Format::Dwarf32,
+            version: 2
+        };
+
+        let dirstring = LineString::String(dirname.clone());
+        let filestring = LineString::String(filename.clone());
+        let mut line_program = LineProgram::new(
+            encoding.clone(),
+            line_encoding,
+            dirstring.clone(),
+            filestring.clone(),
+            None
+        );
+        let mut directory_to_id = HashMap::new();
+        let directory_id = line_program.add_directory(dirstring);
+        directory_to_id.insert(dirname.clone(), directory_id.clone());
+        let mut file_to_id = HashMap::new();
+        let file_id = line_program.add_file(
+            filestring,
+            directory_id.clone(),
+            None
+        );
+        file_to_id.insert(filename.clone(), (directory_id, file_id));
+
+        let unit = Unit::new(encoding, line_program);
+
+        let unit_id = dwarf.units.add(unit);
+
+        let obj = DwarfBuilder {
+            seq_addr_start: 0,
+            unit_id,
+            file_to_id,
+            directory_to_id,
+            dwarf,
+        };
+
+        obj
+    }
+
+    fn add_file_having_dirid(&mut self, dirid: DirectoryId, filename: &[u8]) -> (DirectoryId, FileId) {
+        let unit = self.dwarf.units.get_mut(self.unit_id);
+        let filestring = LineString::String(filename.to_vec());
+        let fileid = unit.line_program.add_file(
+            filestring,
+            dirid.clone(),
+            None
+        );
+        self.file_to_id.insert(filename.to_vec(), (dirid.clone(), fileid.clone()));
+        (dirid, fileid)
+    }
+
+    fn add_file(&mut self, filename_str: &str) -> (DirectoryId, FileId) {
+        let mut path = PathBuf::new();
+        path.push(filename_str);
+        let filename = path.file_name().map(|f| f.to_string_lossy().as_bytes().to_vec()).unwrap_or_else(|| filename_str.as_bytes().to_vec());
+        if let Some((dirid, fileid)) = self.file_to_id.get(&filename) {
+            return (*dirid, *fileid);
+        }
+
+        path = PathBuf::new();
+        path.push(filename_str);
+        path.pop();
+
+        let mut dirname = path.into_os_string().to_string_lossy().as_bytes().to_vec();
+        let use_dirname =
+            if dirname.is_empty() {
+                vec![b'.']
+            } else {
+                dirname.clone()
+            };
+
+        if let Some(dirid) = self.directory_to_id.get(&use_dirname) {
+            return self.add_file_having_dirid(*dirid, &filename);
+        }
+
+        let dirstring = LineString::String(use_dirname.clone());
+        let unit = self.dwarf.units.get_mut(self.unit_id);
+        let dirid = unit.line_program.add_directory(dirstring);
+        self.directory_to_id.insert(use_dirname, dirid.clone());
+        self.add_file_having_dirid(dirid, &filename)
+    }
+
+    fn add_instr(&mut self, addr: usize, loc: &Srcloc, instr: Instr, begin_end_block: Option<BeginEndBlock>) {
+        let (_, file_id) = self.add_file(&loc.file);
+        let unit = self.dwarf.units.get_mut(self.unit_id);
+        if !unit.line_program.in_sequence() {
+            return;
+        }
+        let row = unit.line_program.row();
+        row.address_offset = (addr - self.seq_addr_start) as u64;
+        row.file = file_id;
+        row.line = loc.line as u64;
+        row.column = loc.col as u64;
+        row.is_statement = addr == self.seq_addr_start;
+        row.basic_block = begin_end_block == Some(BeginEndBlock::BeginBlock);
+        unit.line_program.generate_row();
+    }
+
+    fn start(&mut self, addr: usize) {
+        let unit = self.dwarf.units.get_mut(self.unit_id);
+        self.seq_addr_start = addr;
+        unit.line_program.begin_sequence(Some(Address::Constant(addr as u64)));
+    }
+
+    fn end(&mut self, addr: usize) {
+        let unit = self.dwarf.units.get_mut(self.unit_id);
+        unit.line_program.end_sequence((addr - self.seq_addr_start) as u64);
+    }
+
+    fn write_section(&self, name: &str, section: &dyn Section<DwarfSectionWriter>, instrs: &mut Vec<Instr>) {
+        instrs.push(Instr::Align4);
+        instrs.push(Instr::Section(name.to_string()));
+        instrs.push(Instr::Bytes(section.written.clone()));
+    }
+
+    fn write(&mut self, instrs: &mut Vec<Instr>) -> gimli::write::Result<()> {
+        let mut sections = Sections::<DwarfSectionWriter>::default();
+        self.dwarf.write(&mut sections)?;
+
+        self.write_section(".debug_abbrev", &sections.debug_abbrev, instrs);
+        self.write_section(".debug_info", &sections.debug_info, instrs);
+        self.write_section(".debug_line", &sections.debug_line, instrs);
+        self.write_section(".debug_line_str", &sections.debug_line_str, instrs);
+        self.write_section(".debug_ranges", &sections.debug_ranges, instrs);
+        self.write_section(".debug_rnglists", &sections.debug_rnglists, instrs);
+        self.write_section(".debug_loc", &sections.debug_loc, instrs);
+        self.write_section(".debug_loclists", &sections.debug_loclists, instrs);
+        self.write_section(".debug_str", &sections.debug_str, instrs);
+        self.write_section(".debug_frame", &sections.debug_frame, instrs);
+        self.write_section(".eh_frame", &sections.eh_frame, instrs);
+
+        return Ok(());
+    }
 }
 
 enum Constant {
@@ -223,63 +454,29 @@ impl Constant {
     }
 }
 
-#[derive(Default)]
 struct Program {
-    finished_insns: Vec<SrclocAndInstr>,
+    finished_insns: Vec<Instr>,
     first_label: String,
+    env_label: String,
     encounters_of_code: HashMap<Vec<u8>, usize>,
+    labels_by_hash: HashMap<Vec<u8>, String>,
     waiting_programs: HashMap<String, Rc<SExp>>,
     constants: HashMap<Vec<u8>, Constant>,
+    symbol_table: HashMap<String, String>,
+    current_addr: usize,
     dwarf_builder: DwarfBuilder,
 }
 
 impl fmt::Display for Program {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let write_vec = |f: &mut Formatter, v: &[SrclocAndInstr]| -> fmt::Result {
+        let write_vec = |f: &mut Formatter, v: &[Instr]| -> fmt::Result {
             for i in v.iter() {
                 write!(f, "{i}\n")?;
             }
             Ok(())
         };
 
-        writeln!(f, "{}", Instr::Text);
-        writeln!(f, "{}", Instr::Align4);
-        writeln!(f, "{}", Instr::Globl("_start".to_string()));
-        writeln!(f, "{}", Instr::Label("_start".to_string()));
-        writeln!(f, "{}", Instr::Adr(Register::R(0), "_run".to_string()));
-        writeln!(f, "{}", Instr::Ldr(Register::SP, Register::R(0), 8));
-        writeln!(f, "{}", Instr::B(self.first_label.clone()));
-
-        write_vec(f, &self.finished_insns)?;
-
-        writeln!(f, "{}", Instr::Align4);
-        writeln!(f, "{}", Instr::Globl("_run".to_string()));
-        writeln!(f, "{}", Instr::Label("_run".to_string()));
-        writeln!(f, "{}", Instr::Long(0x1000000));
-        writeln!(f, "{}", Instr::Addr("_4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a".to_string()));
-        writeln!(f, "{}", Instr::Long(0x7ff0));
-
-        writeln!(f, "{}", Instr::Align4);
-        for (k, c) in self.constants.iter() {
-            match c {
-                Constant::Atom(label, bytes) => {
-                    writeln!(f, "{}", Instr::Align4);
-                    writeln!(f, "{}", Instr::Globl(label.clone()));
-                    writeln!(f, "{}", Instr::Label(label.clone()));
-                    writeln!(f, "{}", Instr::Long(bytes.len() * 2 + 1));
-                    writeln!(f, "{}", Instr::Bytes(bytes.clone()));
-                }
-                Constant::Cons(label, a_label, b_label) => {
-                    writeln!(f, "{}", Instr::Align4);
-                    writeln!(f, "{}", Instr::Globl(label.clone()));
-                    writeln!(f, "{}", Instr::Label(label.clone()));
-                    writeln!(f, "{}", Instr::Addr(a_label.clone()));
-                    writeln!(f, "{}", Instr::Addr(b_label.clone()));
-                }
-            }
-        }
-
-        Ok(())
+        write_vec(f, &self.finished_insns)
     }
 }
 
@@ -314,6 +511,16 @@ fn is_wrapped_atom(a: Rc<SExp>) -> Option<(Srcloc, Vec<u8>)> {
     None
 }
 
+fn dequote(a: Rc<SExp>) -> Option<Rc<SExp>> {
+    if let Ok(NodeSel::Cons(q, v)) =
+        NodeSel::Cons(Atom::Here("\x01"), ThisNode).select_nodes(a)
+    {
+        return Some(v.clone());
+    }
+
+    None
+}
+
 impl Program {
     fn get_code_label(&mut self, hash: &[u8]) -> String {
         let n =
@@ -329,7 +536,7 @@ impl Program {
 
     fn do_throw(&mut self, loc: &Srcloc, hash: &[u8]) {
         self.load_atom(loc, hash, hash);
-        self.finished_insns.push(SrclocAndInstr::new(loc.clone(), Instr::Swi(0)));
+        self.push(loc, Instr::Swi(0));
     }
 
     fn add_sexp(&mut self, loc: &Srcloc, hash: &[u8], s: Rc<SExp>) -> String {
@@ -360,10 +567,7 @@ impl Program {
 
     fn load_sexp(&mut self, loc: &Srcloc, hash: &[u8], s: Rc<SExp>) {
         let label = self.add_sexp(loc, hash, s);
-        self.finished_insns.push(SrclocAndInstr::new(
-            loc.clone(),
-            Instr::Adr(Register::R(0), label)
-        ));
+        self.push(loc, Instr::Lea(Register::R(0), label));
     }
 
     fn first_rest(&mut self, loc: &Srcloc, hash: &[u8], lst: &[SExp], offset: i32) {
@@ -372,34 +576,34 @@ impl Program {
         }
 
         let subexp = self.add(Rc::new(lst[0].clone()));
-        self.finished_insns.push(SrclocAndInstr::new(
-            loc.clone(),
+        self.push(
+            loc,
             Instr::Addi(Register::R(0), Register::R(5), 0)
-        ));
-        self.finished_insns.push(SrclocAndInstr::new(
-            loc.clone(),
+        );
+        self.push(
+            loc,
             Instr::Bl(subexp)
-        ));
+        );
         // Determine if the result is a cons.
-        self.finished_insns.push(SrclocAndInstr::new(
-            loc.clone(),
+        self.push(
+            loc,
             Instr::Andi(Register::R(1), Register::R(0), 1)
-        ));
-        self.finished_insns.push(SrclocAndInstr::new(
-            loc.clone(),
+        );
+        self.push(
+            loc,
             Instr::Cmpi(Register::R(1), 1)
-        ));
-        self.finished_insns.push(SrclocAndInstr::new(
-            loc.clone(),
+        );
+        self.push(
+            loc,
             Instr::SwiEq(0)
-        ));
-        self.finished_insns.push(SrclocAndInstr::new(
-            loc.clone(),
+        );
+        self.push(
+            loc,
             Instr::Ldr(Register::R(0), Register::R(0), offset)
-        ));
+        );
     }
 
-    fn do_operator(&mut self, loc: &Srcloc, hash: &[u8], a: &[u8], b: Rc<SExp>, quoted: bool) {
+    fn do_operator(&mut self, loc: &Srcloc, hash: &[u8], a: &[u8], b: Rc<SExp>, treat_as_quoted: bool) {
         if a == b"" {
             return self.do_throw(loc, hash);
         }
@@ -423,7 +627,102 @@ impl Program {
                 return self.do_throw(loc, hash);
             }
 
-            todo!();
+            let env_comp = self.add(Rc::new(lst[1].clone()));
+
+            self.push(
+                loc,
+                Instr::Bl(env_comp)
+            );
+            if let Some(quoted_code) = dequote(Rc::new(lst[0].clone())) {
+                // Short circuit by reading out the quoted code and running it.
+                let code_comp = self.add(quoted_code.clone());
+
+                // Swap r0 (env) with r5[ENV_PTR]
+                self.push(
+                    loc,
+                    Instr::Ldr(Register::R(4), Register::R(5), ENV_PTR),
+                );
+                self.push(
+                    loc,
+                    Instr::Str(Register::R(0), Register::R(5), ENV_PTR),
+                );
+
+                // r0 = env ptr
+                self.push(
+                    loc,
+                    Instr::Addi(Register::R(0), Register::R(5), 0),
+                );
+                self.push(
+                    loc,
+                    Instr::Bl(code_comp)
+                );
+
+                // Reload the old env.
+                self.push(
+                    loc,
+                    Instr::Str(Register::R(4), Register::R(5), ENV_PTR),
+                );
+                return;
+            }
+
+            let code_comp = self.add(Rc::new(lst[0].clone()));
+
+            // Move env result to r4.
+            self.push(
+                loc,
+                Instr::Addi(Register::R(4), Register::R(0), 0)
+            );
+            self.push(
+                loc,
+                Instr::Bl(code_comp)
+            );
+
+            // New code is in r0, new env in r4.  Swap r5[ENV_PTR] and r4.
+            self.push(
+                loc,
+                Instr::Ldr(Register::R(1), Register::R(5), ENV_PTR),
+            );
+            self.push(
+                loc,
+                Instr::Str(Register::R(4), Register::R(5), ENV_PTR),
+            );
+            self.push(
+                loc,
+                Instr::Addi(Register::R(4), Register::R(1), 0),
+            );
+
+            // General case: don't know what code we have yet.
+            //
+            // Now r4 is the old env ptr (and will be preserved when executing
+            // called code).  We'll restore it before leaving this apply.
+
+            // r0 was code, move it to r6 (callee save).
+            self.push(
+                loc,
+                Instr::Addi(Register::R(6), Register::R(0), 0),
+            );
+            // Load the env into arg0.
+            self.push(
+                loc,
+                Instr::Addi(Register::R(0), Register::R(5), 0),
+            );
+            // Load the code into arg1.
+            self.push(
+                loc,
+                Instr::Addi(Register::R(1), Register::R(6), 0),
+            );
+            // Dispatch the code.
+            self.push(
+                loc,
+                Instr::Bl("dispatch_code".to_string())
+            );
+
+            // Reload the old env.
+            self.push(
+                loc,
+                Instr::Str(Register::R(4), Register::R(5), ENV_PTR),
+            );
+            return;
         } else if a == &[3] {
             // If operator
             if lst.len() != 3 {
@@ -436,34 +735,34 @@ impl Program {
 
             let else_label = self.get_code_label(hash);
 
-            self.finished_insns.push(SrclocAndInstr::new(
-                loc.clone(),
+            self.push(
+                loc,
                 Instr::Bl(cond_clause)
-            ));
-            self.finished_insns.push(SrclocAndInstr::new(
-                loc.clone(),
+            );
+            self.push(
+                loc,
                 Instr::Ldr(Register::R(1), Register::R(0), 0)
-            ));
-            self.finished_insns.push(SrclocAndInstr::new(
-                loc.clone(),
+            );
+            self.push(
+                loc,
                 Instr::Cmpi(Register::R(1), 1)
-            ));
-            self.finished_insns.push(SrclocAndInstr::new(
-                loc.clone(),
+            );
+            self.push(
+                loc,
                 Instr::BEq(else_label.clone())
-            ));
-            self.finished_insns.push(SrclocAndInstr::new(
-                loc.clone(),
+            );
+            self.push(
+                loc,
                 Instr::Bl(then_clause),
-            ));
-            self.finished_insns.push(SrclocAndInstr::new(
-                loc.clone(),
+            );
+            self.push(
+                loc,
                 Instr::Label(else_label),
-            ));
-            self.finished_insns.push(SrclocAndInstr::new(
-                loc.clone(),
+            );
+            self.push(
+                loc,
                 Instr::Bl(else_clause),
-            ));
+            );
             return;
         } else if a == &[4] {
             // Cons operator
@@ -473,54 +772,54 @@ impl Program {
 
             let rest_label = self.add(Rc::new(lst[1].clone()));
             let first_label = self.add(Rc::new(lst[0].clone()));
-            self.finished_insns.push(SrclocAndInstr::new(
-                loc.clone(),
+            self.push(
+                loc,
                 Instr::Addi(Register::R(0), Register::R(5), 0),
-            ));
-            self.finished_insns.push(SrclocAndInstr::new(
-                loc.clone(),
+            );
+            self.push(
+                loc,
                 Instr::Bl(rest_label),
-            ));
-            self.finished_insns.push(SrclocAndInstr::new(
-                loc.clone(),
+            );
+            self.push(
+                loc,
                 Instr::Addi(Register::R(4), Register::R(0), 0),
-            ));
-            self.finished_insns.push(SrclocAndInstr::new(
-                loc.clone(),
+            );
+            self.push(
+                loc,
                 Instr::Addi(Register::R(0), Register::R(5), 0),
-            ));
-            self.finished_insns.push(SrclocAndInstr::new(
-                loc.clone(),
+            );
+            self.push(
+                loc,
                 Instr::Bl(first_label),
-            ));
+            );
             // R1 = next allocated address.
-            self.finished_insns.push(SrclocAndInstr::new(
-                loc.clone(),
-                Instr::Ldr(Register::R(1), Register::R(5), 0)
-            ));
+            self.push(
+                loc,
+                Instr::Ldr(Register::R(1), Register::R(5), NEXT_ALLOC_OFFSET)
+            );
             // R2 = R1 + 8 (size of cons)
-            self.finished_insns.push(SrclocAndInstr::new(
-                loc.clone(),
+            self.push(
+                loc,
                 Instr::Addi(Register::R(2), Register::R(1), 8)
-            ));
-            self.finished_insns.push(SrclocAndInstr::new(
-                loc.clone(),
+            );
+            self.push(
+                loc,
                 Instr::Str(Register::R(2), Register::R(5), 0)
-            ));
+            );
             // Build cons
-            self.finished_insns.push(SrclocAndInstr::new(
-                loc.clone(),
+            self.push(
+                loc,
                 Instr::Str(Register::R(0), Register::R(1), 0)
-            ));
-            self.finished_insns.push(SrclocAndInstr::new(
-                loc.clone(),
+            );
+            self.push(
+                loc,
                 Instr::Str(Register::R(4), Register::R(1), 4)
-            ));
+            );
             // Move the result to r0
-            self.finished_insns.push(SrclocAndInstr::new(
-                loc.clone(),
+            self.push(
+                loc,
                 Instr::Addi(Register::R(0), Register::R(1), 0)
-            ));
+            );
             return;
         } else if a == &[5] {
             return self.first_rest(loc, hash, &lst, 0);
@@ -532,10 +831,55 @@ impl Program {
         todo!("generic op {a:?}");
     }
 
-    // R0 = the address of the target item in the environment.  If it's not
-    // reachable, this results in a throw.
+    // R0 = the address of the env block.
     fn env_select(&mut self, loc: &Srcloc, hash: &[u8], v: &[u8]) {
-        todo!();
+        if v.is_empty() {
+            self.load_atom(loc, hash, v);
+            return;
+        }
+
+        // Let r0 be our pointer.
+        self.push(
+            loc,
+            Instr::Ldr(Register::R(0), Register::R(5), ENV_PTR),
+        );
+
+        // Whole env ref.
+        if v == &[1] {
+            return;
+        }
+
+        for (i, byt) in v.iter().enumerate().rev() {
+            for bit in 0..8 {
+                let remaining = byt / (1 << bit);
+                if remaining == 1 && i == 0 {
+                    // We have the right value.
+                    return;
+                } else {
+                    let offset = ((remaining & 1) * 4) as i32;
+
+                    // Check for a cons.
+                    self.push(
+                        loc,
+                        Instr::Andi(Register::R(1), Register::R(0), 1)
+                    );
+                    self.push(
+                        loc,
+                        Instr::Cmpi(Register::R(1), 1)
+                    );
+                    // Break if it was an atom.
+                    self.push(
+                        loc,
+                        Instr::SwiEq(0)
+                    );
+                    // Load if it was a cons.
+                    self.push(
+                        loc,
+                        Instr::Ldr(Register::R(0), Register::R(0), offset)
+                    );
+                }
+            }
+        }
     }
 
     fn add_atom(&mut self, loc: &Srcloc, hash: &[u8], v: &[u8]) -> String {
@@ -551,7 +895,10 @@ impl Program {
     fn load_atom(&mut self, loc: &Srcloc, hash: &[u8], v: &[u8]) {
         let s = hexify(hash);
         let label = self.add_atom(loc, hash, v);
-        self.finished_insns.push(SrclocAndInstr::new(loc.clone(), Instr::Adr(Register::R(0), label)));
+        self.push(
+            loc,
+            Instr::Lea(Register::R(0), label)
+        );
     }
 
     fn add(&mut self, sexp: Rc<SExp>) -> String {
@@ -563,6 +910,20 @@ impl Program {
         body_label
     }
 
+    fn push_be(&mut self, srcloc: &Srcloc, instr: Instr, begin_end_block: Option<BeginEndBlock>) {
+        let size = instr.size(self.current_addr);
+        if size != 0 {
+            let next_addr = self.current_addr + size;
+            self.finished_insns.push(instr.clone());
+            self.dwarf_builder.add_instr(self.current_addr, srcloc, instr, begin_end_block);
+            self.current_addr = next_addr;
+        }
+    }
+
+    fn push(&mut self, srcloc: &Srcloc, instr: Instr) {
+        self.push_be(srcloc, instr, None);
+    }
+
     fn emit_waiting(&mut self) {
         let mut current_waiting = HashMap::new();
         swap(&mut current_waiting, &mut self.waiting_programs);
@@ -571,24 +932,28 @@ impl Program {
             for (label, sexp) in current_waiting.iter() {
                 let hash = sha256tree(sexp.clone());
 
-                self.finished_insns.push(SrclocAndInstr::new(
-                    sexp.loc(),
+                self.labels_by_hash.insert(hash.clone(), label.clone());
+                self.dwarf_builder.start(self.current_addr);
+
+                self.push(
+                    &sexp.loc(),
                     Instr::Globl(label.clone())
-                ));
-                self.finished_insns.push(SrclocAndInstr::new(
-                    sexp.loc(),
+                );
+                self.push(
+                    &sexp.loc(),
                     Instr::Label(label.clone())
-                ));
-                self.finished_insns.push(SrclocAndInstr::new(
-                    sexp.loc(),
-                    Instr::Push(vec![Register::LR, Register::R(4), Register::R(5)])
-                ));
+                );
+                self.push_be(
+                    &sexp.loc(),
+                    Instr::Push(vec![Register::R(4), Register::R(5), Register::R(6), Register::LR]),
+                    Some(BeginEndBlock::BeginBlock)
+                );
 
                 // Grab the env pointer.
-                self.finished_insns.push(SrclocAndInstr::new(
-                    sexp.loc(),
+                self.push(
+                    &sexp.loc(),
                     Instr::Addi(Register::R(5), Register::R(0), 0),
-                ));
+                );
 
                 // Translate body.
                 match sexp.borrow() {
@@ -629,14 +994,16 @@ impl Program {
                     }
                 }
 
-                self.finished_insns.push(SrclocAndInstr::new(
-                    sexp.loc(),
-                    Instr::Pop(vec![Register::LR, Register::R(4), Register::R(5)]),
-                ));
-                self.finished_insns.push(SrclocAndInstr::new(
-                    sexp.loc(),
+                self.push(
+                    &sexp.loc(),
+                    Instr::Pop(vec![Register::R(4), Register::R(5), Register::R(6), Register::LR]),
+                );
+                self.push_be(
+                    &sexp.loc(),
                     Instr::Bx(Register::LR),
-                ));
+                    Some(BeginEndBlock::EndBlock)
+                );
+                self.dwarf_builder.end(self.current_addr);
             }
 
             current_waiting.clear();
@@ -644,36 +1011,204 @@ impl Program {
         }
     }
 
-    fn new(sexp: Rc<SExp>) -> Self {
-        let mut p: Program = Program::default();
+    fn start_insns(&mut self) {
+        let srcloc = Srcloc::start("*prolog*");
+        for i in &[
+            Instr::Text,
+            Instr::Align4,
+            Instr::Globl("_start".to_string()),
+            Instr::Label("_start".to_string()),
+            Instr::Lea(Register::R(0), "_run".to_string()),
+            Instr::Ldr(Register::SP, Register::R(0), STACK_TOP),
+            Instr::Bl(self.first_label.clone()),
+            Instr::Label("_end".to_string()),
+            Instr::B("_end".to_string())
+        ] {
+            self.push(&srcloc, i.clone());
+        }
+    }
+
+    fn finish_insns(&mut self) {
+        let srcloc = Srcloc::start("*epilog*");
+        for i in [
+            Instr::Align4,
+            Instr::Globl("_run".to_string()),
+            Instr::Label("_run".to_string()),
+            Instr::Long(2),
+            Instr::Addr(self.env_label.clone()),
+            Instr::Long(0x7ff0),
+            Instr::Long(0x1000000),
+            Instr::Addr("_funaddrs".to_string()),
+
+            // Write the function table.
+            Instr::Align4,
+            Instr::Globl("_funaddrs".to_string()),
+            Instr::Label("_funaddrs".to_string())
+        ].iter() {
+            self.push(&srcloc, i.clone());
+        }
+
+        let mut labels_by_hash = HashMap::new();
+        swap(&mut labels_by_hash, &mut self.labels_by_hash);
+        for (k, v) in labels_by_hash.iter() {
+            self.push(
+                &srcloc,
+                Instr::Addr(v.clone())
+            );
+            self.push(
+                &srcloc,
+                Instr::Bytes(k.to_vec())
+            );
+        }
+        swap(&mut labels_by_hash, &mut self.labels_by_hash);
+
+        self.push(
+            &srcloc,
+            Instr::Long(0)
+        );
+
+        // Write the constant data.
+        let mut constants = HashMap::new();
+        swap(&mut constants, &mut self.constants);
+        for (k, c) in constants.iter() {
+            match c {
+                Constant::Atom(label, bytes) => {
+                    self.push(
+                        &srcloc,
+                        Instr::Align4
+                    );
+                    self.push(
+                        &srcloc,
+                        Instr::Globl(label.clone())
+                    );
+                    self.push(
+                        &srcloc,
+                        Instr::Label(label.clone())
+                    );
+                    self.push(
+                        &srcloc,
+                        Instr::Long(bytes.len() * 2 + 1)
+                    );
+                    self.push(
+                        &srcloc,
+                        Instr::Bytes(bytes.clone())
+                    );
+                }
+                Constant::Cons(label, a_label, b_label) => {
+                    self.push(
+                        &srcloc,
+                        Instr::Align4
+                    );
+                    self.push(
+                        &srcloc,
+                        Instr::Globl(label.clone())
+                    );
+                    self.push(
+                        &srcloc,
+                        Instr::Label(label.clone())
+                    );
+                    self.push(
+                        &srcloc,
+                        Instr::Addr(a_label.clone())
+                    );
+                    self.push(
+                        &srcloc,
+                        Instr::Addr(b_label.clone())
+                    );
+                }
+            }
+        }
+        swap(&mut constants, &mut self.constants);
+
+        self.dwarf_builder.write(&mut self.finished_insns).unwrap();
+    }
+
+    fn new(filename: &str, sexp: Rc<SExp>, env: Rc<SExp>, symbol_table: HashMap<String, String>) -> Self {
+        let dwarf_builder = DwarfBuilder::new(filename);
+        let mut p: Program = Program {
+            finished_insns: Vec::new(),
+            first_label: Default::default(),
+            env_label: Default::default(),
+            encounters_of_code: Default::default(),
+            labels_by_hash: Default::default(),
+            waiting_programs: Default::default(),
+            constants: Default::default(),
+            symbol_table: Default::default(),
+            current_addr: 12,
+            dwarf_builder
+        };
+
+        p.symbol_table = symbol_table;
+        let loc = Srcloc::start("*env*");
+        let envhash = sha256tree(env.clone());
         p.first_label = p.add(sexp);
+        p.start_insns();
+        p.env_label = p.add_sexp(&loc, &envhash, env);
         p.emit_waiting();
+        p.finish_insns();
         p
     }
 }
 
+/// Translate a chialisp program to debug as an arm elf executable.
+#[derive(FromArgs)]
+struct Args {
+    /// include paths
+    #[argh(option, short='i')]
+    pub include: Vec<String>,
+
+    /// file name
+    #[argh(positional)]
+    pub filename: String,
+
+    /// initial env
+    #[argh(positional)]
+    pub env: String,
+}
+
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.is_empty() {
-        println!("must provide programs to convert");
-        return;
+     let args: Args = argh::from_env();
+
+    let mut search_paths = args.include.clone();
+
+    let (filename, argfile) =
+        if let Ok(res) = fs::read(&args.filename) {
+            (args.filename.clone(), res)
+        } else {
+            panic!("error reading {}", args.filename);
+        };
+
+    let srcloc = Srcloc::start(&args.filename);
+    let mut allocator = Allocator::new();
+    let runner: Rc<dyn TRunProgram> = Rc::new(DefaultProgramRunner::new());
+    let mut symbol_table = HashMap::new();
+    let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(&args.filename)).set_search_paths(&search_paths);
+    let compiled =
+        match compile_file(
+            &mut allocator,
+            runner,
+            opts,
+            &decode_string(&argfile),
+            &mut symbol_table,
+        ) {
+            Ok(res) => res,
+            Err(e) => panic!("{:?}", e)
+        };
+    let mut env =
+        match parse_sexp(srcloc.clone(), args.env.bytes()) {
+            Ok(res) => res,
+            Err(e) => panic!("{:?}", e)
+        };
+
+    if env.is_empty() {
+        env.push(Rc::new(SExp::Nil(srcloc.clone())));
     }
 
-    let argfile =
-        if let Ok(res) = fs::read(&args[0]) {
-            res
-        } else {
-            panic!("error reading {}", args[0]);
-        };
-
-    let srcloc = Srcloc::start(&args[0]);
-    let parsed =
-        if let Ok(res) = parse_sexp(srcloc, argfile.iter().copied()) {
-            res
-        } else {
-            panic!("error parsing {}", args[0]);
-        };
-
-    let program = Program::new(parsed[0].clone());
+    let program = Program::new(
+        &args.filename,
+        Rc::new(compiled),
+        env[0].clone(),
+        symbol_table
+    );
     println!("{program}");
 }

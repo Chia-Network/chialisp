@@ -38,6 +38,7 @@ yaml-rust = "0.4"
 linked-hash-map = "0.5.6"
 serde = { version = "1.0", features = ["derive", "rc"] }
 gimli = "0.28.0"
+argh = "0.1.12"
 
 [dependencies.pyo3]
 version = "0.14.2"
