@@ -153,7 +153,6 @@ enum Instr {
     BEq(String),
     Bl(String),
     Bx(Register),
-    Adr(Register,String),
     Lea(Register,String),
     Swi(usize),
     SwiEq(usize),
@@ -205,10 +204,10 @@ impl ToU32 for ArmCond {
 }
 
 fn vec_from_u32(v: &mut Vec<u8>, data: u32) {
-    v.push((data & 0xff) as u8);
-    v.push(((data >> 8) & 0xff) as u8);
-    v.push(((data >> 16) & 0xff) as u8);
     v.push((data >> 24) as u8);
+    v.push(((data >> 16) & 0xff) as u8);
+    v.push(((data >> 8) & 0xff) as u8);
+    v.push((data & 0xff) as u8);
 }
 
 enum ArmDataOp {
@@ -343,12 +342,19 @@ impl Encodable for Instr {
             Instr::Bx(r) => {
                 vec_from_u32(v, ArmCond::Unconditional.to_u32() | 0x12fff10 | r.to_u32());
             }
-            Instr::Adr(_r,_target) => {
-                
-                todo!();
-            }
-            Instr::Lea(_r,_target) => {
-                todo!();
+            Instr::Lea(rd,target) => {
+                // Emit a load from +8 (0 as encoded).
+                vec_from_u32(v, ArmCond::Unconditional.to_u32() | 1 << 26 | 1 << 25 | 1 << 24 | 1 << 23 | 1 << 20 | Rn(Register::PC).to_u32() | Rd(rd.clone()).to_u32() | (((65536 + 0) & 0xffff) as u32));
+                // Emit a jump to +8
+                vec_from_u32(v, ArmCond::Unconditional.to_u32() | 5 << 25 | 0);
+                r.push(Relocation {
+                    kind: RelocationKind::Long,
+                    function: function.to_string(),
+                    code_location: v.len(),
+                    reloc_target: target.clone()
+                });
+                // Relocatable space.
+                vec_from_u32(v, 0);
             }
             Instr::Swi(_n) => {
                 todo!();
@@ -411,7 +417,6 @@ impl fmt::Display for Instr {
             Instr::Bl(l) => write!(f, "  bl {l}"),
             Instr::BEq(l) => write!(f, "  beq {l}"),
             Instr::Bx(r) => write!(f, "  bx {r}"),
-            Instr::Adr(r,l) => write!(f, "  adr {r}, {l}"),
             Instr::Lea(r,l) => write!(f, "  ldr {r}, ={l}"),
             Instr::Swi(n) => write!(f, "  swi {n}"),
             Instr::SwiEq(n) => write!(f, "  swieq {n}"),
@@ -490,7 +495,11 @@ impl DwarfBuilder {
         let mut path = PathBuf::new();
         path.push(filename);
         path.pop();
-        let dirname = path.into_os_string().to_string_lossy().as_bytes().to_vec();
+        let mut dirname = path.into_os_string().to_string_lossy().as_bytes().to_vec();
+
+        if dirname.is_empty() {
+            dirname = b".".to_vec();
+        }
 
         path = PathBuf::new();
         path.push(filename);
@@ -945,7 +954,7 @@ impl Program {
             // Dispatch the code.
             self.push(
                 loc,
-                Instr::Adr(Register::LR, "dispatch_code".to_string())
+                Instr::Lea(Register::LR, "dispatch_code".to_string())
             );
             self.push(
                 loc,
@@ -1363,6 +1372,20 @@ impl Program {
         }
         swap(&mut constants, &mut self.constants);
 
+        // Write the function table.
+        self.push(
+            &srcloc,
+            Instr::Align4
+        );
+        self.push(
+            &srcloc,
+            Instr::Globl("_end".to_string())
+        );
+        self.push(
+            &srcloc,
+            Instr::Label("_end".to_string())
+        );
+
         self.dwarf_builder.write(&mut self.finished_insns).unwrap();
 
         Ok(())
@@ -1374,34 +1397,54 @@ impl Program {
             .name(output.to_owned())
             .finish();
         // Collect declarations
+        let mut waiting_for_debug_info = None;
         let decls: Vec<(String, Decl)> = self.finished_insns.iter().filter_map(|i| {
             if let Instr::Section(name) = i {
-                sections.push(name.clone());
-                if name.starts_with(".debug") {
+                if name.starts_with(".debug") || name.starts_with(".eh") {
+                    waiting_for_debug_info = Some(name.clone());
                     return Some((name.to_string(), Decl::section(SectionKind::Debug).into()));
                 } else if name == ".text" {
-                    return Some((name.to_string(), Decl::section(SectionKind::Text).into()));
+                    // Predefined.
+                    return None;
                 } else {
                     return Some((name.to_string(), Decl::section(SectionKind::Data).into()));
                 }
             } else if let Instr::Globl(name) = i {
                 return Some((name.to_string(), Decl::function().global().into()));
+            } else if let Instr::Bytes(b) = i {
+                // Define section in the faerie way.
+                if let Some(waiting) = waiting_for_debug_info.clone() {
+                    waiting_for_debug_info = None;
+                    sections.push((waiting, b.clone()));
+                }
             }
 
             None
         }).collect();
         obj.declarations(decls.into_iter()).map_err(|e| format!("{e:?}"))?;
 
+        for (name, bytes) in sections.iter() {
+            obj.define(name, bytes.clone()).map_err(|e| format!("{e:?}"))?;
+        }
+
         let mut relocations = Vec::new();
         let mut function_body = Vec::new();
         let mut in_function = None;
+
+        let mut handle_def_end = |function_body: &mut Vec<u8>, in_function: &mut Option<String>| -> Result<(), String> {
+            if let Some(defname) = in_function.as_ref() {
+                if !function_body.is_empty() {
+                    obj.define(defname, function_body.clone()).map_err(|e| format!("{e:?}"))?;
+                    *function_body = Vec::new();
+                }
+            }
+
+            Ok(())
+        };
+
         for i in self.finished_insns.iter() {
             if let Instr::Globl(name) = i {
-                if !function_body.is_empty() {
-                    obj.define(&name, function_body).map_err(|e| format!("{e:?}"))?;
-                    function_body = Vec::new();
-                }
-
+                handle_def_end(&mut function_body, &mut in_function)?;
                 in_function = Some(name.to_string());
             }
 
@@ -1410,17 +1453,19 @@ impl Program {
             }
         }
 
+        handle_def_end(&mut function_body, &mut in_function)?;
+
         for r in relocations.iter() {
-            obj.link(Link { from: &r.function, to: &r.reloc_target, at: r.code_location as u64}).map_err(|e| format!("{e:?}"))?;
+            obj.link(Link { from: &r.function, to: &r.reloc_target, at: r.code_location as u64}).map_err(|e| format!("link {e:?}"))?;
         }
 
-        let file = NamedTempFile::new().map_err(|e| format!("{e:?}"))?;
+        let mut file = NamedTempFile::new().map_err(|e| format!("named temp {e:?}"))?;
         let name = file.path().to_str().unwrap().to_string();
-        obj.write(file.into_file()).map_err(|e| format!("{e:?}"))?;
-        let mut file = File::open(&name).map_err(|e| format!("{e:?}"))?;
-        file.seek(SeekFrom::Start(0)).map_err(|e| format!("{e:?}"))?;
+        let mut reread_file = File::open(&name).map_err(|e| format!("reopen {e:?}"))?;
+        obj.write(file.into_file()).map_err(|e| format!("obj write {e:?}"))?;
+        reread_file.seek(SeekFrom::Start(0)).map_err(|e| format!("seek {e:?}"))?;
         let mut result_buf = Vec::new();
-        file.read_to_end(&mut result_buf).map_err(|e| format!("{e:?}"))?;
+        reread_file.read_to_end(&mut result_buf).map_err(|e| format!("capture {e:?}"))?;
         Ok(result_buf)
     }
 
@@ -1529,5 +1574,4 @@ fn main() {
 
     let elf_out = program.to_elf(&args.output).expect("should be writable");
     fs::write(&args.output, &elf_out).expect("should be able to write file");
-    todo!();
 }
