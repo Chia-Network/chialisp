@@ -200,16 +200,16 @@ impl ToU32 for ArmCond {
     fn to_u32(&self) -> u32 {
         match self {
             ArmCond::Unconditional => 14 << 28,
-            ArmCond::Equal => 0 << 28,
+            ArmCond::Equal => 0,
         }
     }
 }
 
 fn vec_from_u32(v: &mut Vec<u8>, data: u32) {
-    v.push((data >> 24) as u8);
-    v.push(((data >> 16) & 0xff) as u8);
-    v.push(((data >> 8) & 0xff) as u8);
     v.push((data & 0xff) as u8);
+    v.push(((data >> 8) & 0xff) as u8);
+    v.push(((data >> 16) & 0xff) as u8);
+    v.push((data >> 24) as u8);
 }
 
 enum ArmDataOp {
@@ -392,6 +392,14 @@ fn test_arm_encoding_add_1_3_7() {
     let mut r = Vec::new();
     Instr::Add(Register::R(1), Register::R(3), Register::R(7)).encode(&mut v, &mut r, "test");
     assert_eq!(b"\x07\x10\x83\xe0".to_vec(), v);
+}
+
+#[test]
+fn test_arm_encoding_swi() {
+    let mut v = Vec::new();
+    let mut r = Vec::new();
+    Instr::Swi(13).encode(&mut v, &mut r, "test");
+    assert_eq!(b"\x0d\x00\x00\xef".to_vec(), v);
 }
 
 impl fmt::Display for Instr {
