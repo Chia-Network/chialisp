@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::Formatter;
 use std::fs;
@@ -26,6 +26,8 @@ use clvm_tools_rs::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, 
 use clvm_tools_rs::compiler::clvm::{sha256tree, truthy};
 use clvm_tools_rs::compiler::comptypes::CompilerOpts;
 use clvm_tools_rs::compiler::compiler::{DefaultCompilerOpts, compile_file};
+use clvm_tools_rs::compiler::debug::build_symbol_table_mut;
+use clvm_tools_rs::compiler::dialect::AcceptedDialect;
 use clvm_tools_rs::compiler::sexp::{Atom, decode_string, NodeSel, SelectNode, SExp, ThisNode, parse_sexp};
 use clvm_tools_rs::compiler::srcloc::Srcloc;
 
@@ -198,7 +200,7 @@ impl ToU32 for ArmCond {
     fn to_u32(&self) -> u32 {
         match self {
             ArmCond::Unconditional => 14 << 28,
-            ArmCond::Equal => 0,
+            ArmCond::Equal => 0 << 28,
         }
     }
 }
@@ -215,6 +217,7 @@ enum ArmDataOp {
     And,
     Sub,
     Mov,
+    Cmp,
 }
 
 impl ToU32 for ArmDataOp {
@@ -223,7 +226,20 @@ impl ToU32 for ArmDataOp {
             ArmDataOp::Add => 4 << 21,
             ArmDataOp::And => 0,
             ArmDataOp::Sub => 2 << 21,
+            ArmDataOp::Cmp => 10 << 21,
             ArmDataOp::Mov => 13 << 21,
+        }
+    }
+}
+
+enum ArmOp {
+    Swi
+}
+
+impl ToU32 for ArmOp {
+    fn to_u32(&self) -> u32 {
+        match self {
+            ArmOp::Swi => 15 << 24
         }
     }
 }
@@ -344,7 +360,7 @@ impl Encodable for Instr {
             }
             Instr::Lea(rd,target) => {
                 // Emit a load from +8 (0 as encoded).
-                vec_from_u32(v, ArmCond::Unconditional.to_u32() | 1 << 26 | 1 << 25 | 1 << 24 | 1 << 23 | 1 << 20 | Rn(Register::PC).to_u32() | Rd(rd.clone()).to_u32() | (((65536 + 0) & 0xffff) as u32));
+                vec_from_u32(v, ArmCond::Unconditional.to_u32() | 1 << 26 | 1 << 25 | 1 << 24 | 1 << 23 | 1 << 20 | Rn(Register::PC).to_u32() | Rd(rd.clone()).to_u32());
                 // Emit a jump to +8
                 vec_from_u32(v, ArmCond::Unconditional.to_u32() | 5 << 25 | 0);
                 r.push(Relocation {
@@ -356,14 +372,14 @@ impl Encodable for Instr {
                 // Relocatable space.
                 vec_from_u32(v, 0);
             }
-            Instr::Swi(_n) => {
-                todo!();
+            Instr::Swi(n) => {
+                vec_from_u32(v, ArmCond::Unconditional.to_u32() | ArmOp::Swi.to_u32() | (*n as u32));
             }
-            Instr::SwiEq(_n) => {
-                todo!();
+            Instr::SwiEq(n) => {
+                vec_from_u32(v, ArmCond::Equal.to_u32() | ArmOp::Swi.to_u32() | (*n as u32));
             }
-            Instr::Cmpi(_r,_n) => {
-                todo!();
+            Instr::Cmpi(r,n) => {
+                vec_from_u32(v, ArmCond::Unconditional.to_u32() | ArmDataOp::Cmp.to_u32() | 1 << 25 | 1 << 20 | Rn(r.clone()).to_u32() | (*n as u32));
             }
             _ => {}
         }
@@ -610,6 +626,7 @@ impl DwarfBuilder {
         row.line = loc.line as u64;
         row.column = loc.col as u64;
         row.is_statement = addr == self.seq_addr_start;
+        eprintln!("line row {} at {:?}", row.address_offset, loc);
         row.basic_block = begin_end_block == Some(BeginEndBlock::BeginBlock);
         unit.line_program.generate_row();
     }
@@ -671,7 +688,8 @@ struct Program {
     env_label: String,
     encounters_of_code: HashMap<Vec<u8>, usize>,
     labels_by_hash: HashMap<Vec<u8>, String>,
-    waiting_programs: HashMap<String, Rc<SExp>>,
+    done_programs: HashSet<String>,
+    waiting_programs: Vec<(String, Rc<SExp>)>,
     constants: HashMap<Vec<u8>, Constant>,
     symbol_table: HashMap<String, String>,
     current_addr: usize,
@@ -850,6 +868,7 @@ impl Program {
 
         // Quote is special.
         if a == &[1] {
+            self.add(b.clone());
             return self.load_sexp(loc, hash, b);
         }
 
@@ -1153,7 +1172,11 @@ impl Program {
 
         // Note: get_code_label issues a fresh label for this hash every time.
         let body_label = self.get_code_label(&hash);
-        self.waiting_programs.insert(body_label.clone(), sexp.clone());
+        if !self.done_programs.contains(&body_label) {
+            eprintln!("add {:?} {sexp}", sexp.loc());
+            self.done_programs.insert(body_label.clone());
+            self.waiting_programs.push((body_label.clone(), sexp.clone()));
+        }
         body_label
     }
 
@@ -1172,89 +1195,82 @@ impl Program {
     }
 
     fn emit_waiting(&mut self) {
-        let mut current_waiting = HashMap::new();
-        swap(&mut current_waiting, &mut self.waiting_programs);
+        while let Some((label, sexp)) = self.waiting_programs.pop() {
+            eprintln!("{} sexp {:?} {}", label, sexp.loc(), sexp);
+            let hash = sha256tree(sexp.clone());
 
-        while !current_waiting.is_empty() {
-            for (label, sexp) in current_waiting.iter() {
-                let hash = sha256tree(sexp.clone());
+            self.labels_by_hash.insert(hash.clone(), label.clone());
+            self.dwarf_builder.start(self.current_addr);
 
-                self.labels_by_hash.insert(hash.clone(), label.clone());
-                self.dwarf_builder.start(self.current_addr);
+            self.push(
+                &sexp.loc(),
+                Instr::Globl(label.clone())
+            );
+            self.push(
+                &sexp.loc(),
+                Instr::Label(label.clone())
+            );
+            self.push_be(
+                &sexp.loc(),
+                Instr::Push(vec![Register::R(4), Register::R(5), Register::R(6), Register::LR]),
+                Some(BeginEndBlock::BeginBlock)
+            );
 
-                self.push(
-                    &sexp.loc(),
-                    Instr::Globl(label.clone())
-                );
-                self.push(
-                    &sexp.loc(),
-                    Instr::Label(label.clone())
-                );
-                self.push_be(
-                    &sexp.loc(),
-                    Instr::Push(vec![Register::R(4), Register::R(5), Register::R(6), Register::LR]),
-                    Some(BeginEndBlock::BeginBlock)
-                );
+            // Grab the env pointer.
+            self.push(
+                &sexp.loc(),
+                Instr::Addi(Register::R(5), Register::R(0), 0),
+            );
 
-                // Grab the env pointer.
-                self.push(
-                    &sexp.loc(),
-                    Instr::Addi(Register::R(5), Register::R(0), 0),
-                );
-
-                // Translate body.
-                match sexp.borrow() {
-                    SExp::Cons(l,a,b) => {
-                        if let Some((loc, a)) = is_atom(a.clone()) {
-                            // do quoted operator
-                            self.do_operator(&loc, &hash, &a, b.clone(), false);
-                        } else if let Some((loc, a)) = is_wrapped_atom(a.clone()) {
-                            // do unquoted operator
-                            self.do_operator(&loc, &hash, &a, b.clone(), true);
-                        } else {
-                            // invalid head form, just throw.
-                            self.do_throw(&l, &hash);
-                        }
-                    },
-                    SExp::Nil(l) => {
-                        self.load_atom(l, &hash, &[])
+            // Translate body.
+            match sexp.borrow() {
+                SExp::Cons(l,a,b) => {
+                    if let Some((loc, a)) = is_atom(a.clone()) {
+                        // do quoted operator
+                        self.do_operator(&loc, &hash, &a, b.clone(), false);
+                    } else if let Some((loc, a)) = is_wrapped_atom(a.clone()) {
+                        // do unquoted operator
+                        self.do_operator(&loc, &hash, &a, b.clone(), true);
+                    } else {
+                        // invalid head form, just throw.
+                        self.do_throw(&l, &hash);
                     }
-                    SExp::Atom(l, v) => {
-                        if v.is_empty() {
-                            return self.load_atom(l, &hash, &[]);
-                        }
-                        self.env_select(l, &hash, v);
-                    }
-                    SExp::QuotedString(l, _, v) => {
-                        if v.is_empty() {
-                            return self.load_atom(l, &hash, &[]);
-                        }
-                        self.env_select(l, &hash, v);
-                    }
-                    SExp::Integer(l, i) => {
-                        let v = bigint_to_bytes_clvm(&i);
-                        let v_ref = v.data();
-                        if v_ref.is_empty() {
-                            return self.load_atom(l, &hash, &[]);
-                        }
-                        self.env_select(l, &hash, v_ref);
-                    }
+                },
+                SExp::Nil(l) => {
+                    self.load_atom(l, &hash, &[])
                 }
-
-                self.push(
-                    &sexp.loc(),
-                    Instr::Pop(vec![Register::R(4), Register::R(5), Register::R(6), Register::LR]),
-                );
-                self.push_be(
-                    &sexp.loc(),
-                    Instr::Bx(Register::LR),
-                    Some(BeginEndBlock::EndBlock)
-                );
-                self.dwarf_builder.end(self.current_addr);
+                SExp::Atom(l, v) => {
+                    if v.is_empty() {
+                        return self.load_atom(l, &hash, &[]);
+                    }
+                    self.env_select(l, &hash, v);
+                }
+                SExp::QuotedString(l, _, v) => {
+                    if v.is_empty() {
+                        return self.load_atom(l, &hash, &[]);
+                    }
+                    self.env_select(l, &hash, v);
+                }
+                SExp::Integer(l, i) => {
+                    let v = bigint_to_bytes_clvm(&i);
+                    let v_ref = v.data();
+                    if v_ref.is_empty() {
+                        return self.load_atom(l, &hash, &[]);
+                    }
+                    self.env_select(l, &hash, v_ref);
+                }
             }
 
-            current_waiting.clear();
-            swap(&mut current_waiting, &mut self.waiting_programs);
+            self.push(
+                &sexp.loc(),
+                Instr::Pop(vec![Register::R(4), Register::R(5), Register::R(6), Register::LR]),
+            );
+            self.push_be(
+                &sexp.loc(),
+                Instr::Bx(Register::LR),
+                Some(BeginEndBlock::EndBlock)
+            );
+            self.dwarf_builder.end(self.current_addr);
         }
     }
 
@@ -1483,6 +1499,7 @@ impl Program {
             env_label: Default::default(),
             encounters_of_code: Default::default(),
             labels_by_hash: Default::default(),
+            done_programs: Default::default(),
             waiting_programs: Default::default(),
             constants: Default::default(),
             symbol_table: Default::default(),
@@ -1526,7 +1543,7 @@ struct Args {
 }
 
 fn main() {
-     let args: Args = argh::from_env();
+    let args: Args = argh::from_env();
 
     let mut search_paths = args.include.clone();
 
@@ -1541,7 +1558,14 @@ fn main() {
     let mut allocator = Allocator::new();
     let runner: Rc<dyn TRunProgram> = Rc::new(DefaultProgramRunner::new());
     let mut symbol_table = HashMap::new();
-    let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(&args.filename)).set_search_paths(&search_paths);
+    let opts = Rc::new(DefaultCompilerOpts::new(&args.filename))
+        .set_dialect(AcceptedDialect {
+            stepping: Some(21),
+            strict: true,
+        })
+        .set_optimize(false)
+        .set_search_paths(&search_paths)
+        .set_frontend_opt(false);
     let compiled =
         match compile_file(
             &mut allocator,
@@ -1553,6 +1577,8 @@ fn main() {
             Ok(res) => res,
             Err(e) => panic!("{:?}", e)
         };
+    build_symbol_table_mut(&mut symbol_table, &compiled);
+    eprintln!("symbols {symbol_table:?}");
     let mut env =
         match parse_sexp(srcloc.clone(), args.env.bytes()) {
             Ok(res) => res,
