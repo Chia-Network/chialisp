@@ -8,7 +8,7 @@ use num_bigint::ToBigInt;
 
 use crate::classic::clvm::__type_compatibility__::bi_one;
 
-use crate::compiler::clvm::run;
+use crate::compiler::clvm::{run, truthy};
 use crate::compiler::compiler::is_at_capture;
 use crate::compiler::comptypes::{
     fold_m, join_vecs_to_string, list_to_cons, Binding, BindingPattern, BodyForm, CallSpec,
@@ -24,7 +24,7 @@ use crate::compiler::inline::{replace_in_inline, synthesize_args};
 use crate::compiler::lambda::lambda_codegen;
 use crate::compiler::prims::{primapply, primcons, primquote};
 use crate::compiler::runtypes::RunFailure;
-use crate::compiler::sexp::{decode_string, SExp};
+use crate::compiler::sexp::{decode_string, printable, SExp};
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::StartOfCodegenOptimization;
 use crate::compiler::{BasicCompileContext, CompileContextWrapper};
@@ -67,6 +67,33 @@ fn cons_bodyform(loc: Srcloc, left: Rc<BodyForm>, right: Rc<BodyForm>) -> BodyFo
         ],
         None,
     )
+}
+
+fn empty_left_env(env: Rc<SExp>) -> Option<Rc<SExp>> {
+    if let SExp::Cons(_, l, r) = env.borrow() {
+        if truthy(l.clone()) {
+            None
+        } else {
+            Some(r.clone())
+        }
+    } else {
+        // It's an unusual env, so be conservative.
+        None
+    }
+}
+
+fn enable_nil_env_mode_for_stepping_23_or_greater(
+    opts: Rc<dyn CompilerOpts>,
+    code_generator: &mut PrimaryCodegen,
+) {
+    if let Some(s) = opts.dialect().stepping {
+        if s >= 23 && opts.optimize() {
+            if let Some(whole_env) = empty_left_env(code_generator.env.clone()) {
+                code_generator.left_env = false;
+                code_generator.env = whole_env;
+            }
+        }
+    }
 }
 
 /*
@@ -187,6 +214,7 @@ fn create_name_lookup_(
 // will make variable references to it capture the program's function
 // environment.
 fn is_defun_in_codegen(compiler: &PrimaryCodegen, name: &[u8]) -> bool {
+    // Check for an input defun that matches the name.
     for h in compiler.original_helpers.iter() {
         if matches!(h, HelperForm::Defun(false, _)) && h.name() == name {
             return true;
@@ -311,7 +339,8 @@ pub fn get_callable(
             let defun = create_name_lookup(compiler, l.clone(), name, false);
             let prim = get_prim(l.clone(), compiler.prims.clone(), name);
             let atom_is_com = *name == "com".as_bytes().to_vec();
-            let atom_is_at = *name == "@".as_bytes().to_vec();
+            let atom_is_at =
+                *name == "@".as_bytes().to_vec() || *name == "@*env*".as_bytes().to_vec();
             match (macro_def, inline, defun, prim, atom_is_com, atom_is_at) {
                 (Some(macro_def), _, _, _, _, _) => {
                     let macro_def_clone: &SExp = macro_def.borrow();
@@ -535,6 +564,10 @@ fn compile_call(
                             l.clone(),
                             Rc::new(SExp::Integer(l.clone(), i.clone())),
                         )),
+                        BodyForm::Quoted(SExp::Integer(l, i)) => Ok(CompiledCode(
+                            l.clone(),
+                            Rc::new(SExp::Integer(l.clone(), i.clone())),
+                        )),
                         _ => Err(CompileErr(
                             al.clone(),
                             "@ form only accepts integers at present".to_string(),
@@ -629,6 +662,30 @@ pub fn do_mod_codegen(
     ))
 }
 
+fn is_cons(bf: &BodyForm) -> bool {
+    if let BodyForm::Value(v) = bf {
+        if let SExp::Atom(_, vec) = v.atomize() {
+            return vec == [4] || vec == b"r";
+        }
+    }
+
+    false
+}
+
+fn is_at_env(bf: &BodyForm) -> bool {
+    if let BodyForm::Value(v) = bf {
+        if let SExp::Atom(_, vec) = v.atomize() {
+            return vec == b"@*env*";
+        }
+    }
+
+    false
+}
+
+fn addresses_user_env(call: &[Rc<BodyForm>]) -> bool {
+    call.len() == 2 && is_cons(call[0].borrow()) && is_at_env(call[1].borrow())
+}
+
 pub fn generate_expr_code(
     context: &mut BasicCompileContext,
     opts: Rc<dyn CompilerOpts>,
@@ -651,7 +708,7 @@ pub fn generate_expr_code(
         BodyForm::Value(v) => {
             match v {
                 SExp::Atom(l, atom) => {
-                    if *atom == "@".as_bytes().to_vec() {
+                    if *atom == "@".as_bytes().to_vec() || *atom == "@*env*".as_bytes().to_vec() {
                         Ok(CompiledCode(
                             l.clone(),
                             Rc::new(SExp::Integer(l.clone(), bi_one())),
@@ -671,17 +728,17 @@ pub fn generate_expr_code(
                         create_name_lookup(compiler, l.clone(), atom, true)
                             .map(|f| Ok(CompiledCode(l.clone(), f)))
                             .unwrap_or_else(|_| {
-                                // Finally enable strictness for variable names.
-                                // This is possible because the modern macro system
-                                // takes great care to preserve as much information
-                                // from the source code as possible.
-                                //
-                                // When we come here in strict mode, we have
-                                // a string, integer or atom depending on the
-                                // user's desire and the explicitly generated
-                                // result from the macro, therefore we can return
-                                // an error if this atom didn't have a binding.
-                                if opts.dialect().strict {
+                                if opts.dialect().strict && printable(atom, false) {
+                                    // Finally enable strictness for variable names.
+                                    // This is possible because the modern macro system
+                                    // takes great care to preserve as much information
+                                    // from the source code as possible.
+                                    //
+                                    // When we come here in strict mode, we have
+                                    // a string, integer or atom depending on the
+                                    // user's desire and the explicitly generated
+                                    // result from the macro, therefore we can return
+                                    // an error if this atom didn't have a binding.
                                     return Err(CompileErr(
                                         l.clone(),
                                         format!(
@@ -730,6 +787,13 @@ pub fn generate_expr_code(
             }
         }
         BodyForm::Call(l, list, tail) => {
+            // Recognize attempts to get the input arguments.  They're paired with
+            // a left env in the usual case, but it can be omitted if there are no
+            // freestanding functions.  In that case, the user args are just the
+            // whole env.
+            if !compiler.left_env && addresses_user_env(list) {
+                return generate_expr_code(context, opts, compiler, list[1].clone());
+            }
             if list.is_empty() {
                 Err(CompileErr(
                     l.clone(),
@@ -862,8 +926,12 @@ fn codegen_(
     }
 }
 
-fn is_defun(b: &HelperForm) -> bool {
-    matches!(b, HelperForm::Defun(false, _))
+fn is_defun_or_tabled_constant(b: &HelperForm) -> bool {
+    match b {
+        HelperForm::Defun(false, _) => true,
+        HelperForm::Defconstant(cdata) => cdata.tabled,
+        _ => false,
+    }
 }
 
 pub fn empty_compiler(prim_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>, l: Srcloc) -> PrimaryCodegen {
@@ -873,6 +941,7 @@ pub fn empty_compiler(prim_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>, l: Srcloc) -> Pr
     PrimaryCodegen {
         prims: prim_map,
         constants: HashMap::new(),
+        tabled_constants: HashMap::new(),
         inlines: HashMap::new(),
         macros: HashMap::new(),
         defuns: HashMap::new(),
@@ -883,6 +952,7 @@ pub fn empty_compiler(prim_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>, l: Srcloc) -> Pr
         final_expr: Rc::new(BodyForm::Quoted(nil)),
         final_code: None,
         function_symbols: HashMap::new(),
+        left_env: true,
     }
 }
 
@@ -1170,7 +1240,7 @@ pub fn hoist_body_let_binding(
                             ))),
                             Rc::new(BodyForm::Value(SExp::Atom(
                                 letdata.loc.clone(),
-                                "@".as_bytes().to_vec(),
+                                "@*env*".as_bytes().to_vec(),
                             ))),
                         ],
                         None,
@@ -1364,8 +1434,12 @@ fn start_codegen(
                         )
                     })
                     .map(|res| {
-                        let quoted = primquote(defc.loc.clone(), res);
-                        code_generator.add_constant(&defc.name, Rc::new(quoted))
+                        if defc.tabled {
+                            code_generator.add_tabled_constant(&defc.name, res)
+                        } else {
+                            let quoted = primquote(defc.loc.clone(), res);
+                            code_generator.add_constant(&defc.name, Rc::new(quoted))
+                        }
                     })?
                 }
                 ConstantKind::Complex => {
@@ -1380,14 +1454,13 @@ fn start_codegen(
                         Some(EVAL_STACK_LIMIT),
                     )?;
                     if let BodyForm::Quoted(q) = constant_result.borrow() {
-                        code_generator.add_constant(
-                            &defc.name,
-                            Rc::new(SExp::Cons(
-                                defc.loc.clone(),
-                                Rc::new(SExp::Atom(defc.loc.clone(), vec![1])),
-                                Rc::new(q.clone()),
-                            )),
-                        )
+                        let res = Rc::new(q.clone());
+                        if defc.tabled {
+                            code_generator.add_tabled_constant(&defc.name, res)
+                        } else {
+                            let quoted = primquote(defc.loc.clone(), res);
+                            code_generator.add_constant(&defc.name, Rc::new(quoted))
+                        }
                     } else {
                         return Err(CompileErr(
                             defc.loc.clone(),
@@ -1434,7 +1507,7 @@ fn start_codegen(
     let only_defuns: Vec<HelperForm> = program
         .helpers
         .iter()
-        .filter(|x| is_defun(x))
+        .filter(|x| is_defun_or_tabled_constant(x))
         .cloned()
         .collect();
 
@@ -1484,40 +1557,40 @@ fn finalize_env_(
 ) -> Result<Rc<SExp>, CompileErr> {
     match env.borrow() {
         SExp::Atom(l, v) => {
-            match c.defuns.get(v) {
-                Some(res) => Ok(res.code.clone()),
-                None => {
-                    match c.inlines.get(v) {
-                        Some(res) => {
-                            let (arg_list, arg_tail) = synthesize_args(res.args.clone());
-                            replace_in_inline(
-                                context,
-                                opts.clone(),
-                                c,
-                                l.clone(),
-                                res,
-                                res.args.loc(),
-                                &arg_list,
-                                arg_tail,
-                            )
-                            .map(|x| x.1)
-                        }
-                        None => {
-                            /* Parentfns are functions in progress in the parent */
-                            if c.parentfns.get(v).is_some() {
-                                Ok(Rc::new(SExp::Nil(l.clone())))
-                            } else {
-                                Err(CompileErr(
-                                    l.clone(),
-                                    format!(
-                                        "A defun was referenced in the defun env but not found {}",
-                                        decode_string(v)
-                                    ),
-                                ))
-                            }
-                        }
-                    }
-                }
+            if let Some(res) = c.defuns.get(v) {
+                return Ok(res.code.clone());
+            }
+
+            if let Some(res) = c.tabled_constants.get(v) {
+                return Ok(res.clone());
+            }
+
+            if let Some(res) = c.inlines.get(v) {
+                let (arg_list, arg_tail) = synthesize_args(res.args.clone());
+                return replace_in_inline(
+                    context,
+                    opts.clone(),
+                    c,
+                    l.clone(),
+                    res,
+                    res.args.loc(),
+                    &arg_list,
+                    arg_tail,
+                )
+                .map(|x| x.1);
+            }
+
+            /* Parentfns are functions in progress in the parent */
+            if c.parentfns.contains(v) {
+                Ok(Rc::new(SExp::Nil(l.clone())))
+            } else {
+                Err(CompileErr(
+                    l.clone(),
+                    format!(
+                        "A defun was referenced in the defun env but not found {}",
+                        decode_string(v)
+                    ),
+                ))
             }
         }
 
@@ -1537,7 +1610,13 @@ fn finalize_env(
     c: &PrimaryCodegen,
 ) -> Result<Rc<SExp>, CompileErr> {
     match c.env.borrow() {
-        SExp::Cons(l, h, _) => finalize_env_(context, opts.clone(), c, l.clone(), h.clone()),
+        SExp::Cons(l, h, _) => {
+            if c.left_env {
+                finalize_env_(context, opts.clone(), c, l.clone(), h.clone())
+            } else {
+                Ok(c.env.clone())
+            }
+        }
         _ => Ok(c.env.clone()),
     }
 }
@@ -1567,6 +1646,15 @@ fn dummy_functions(compiler: &PrimaryCodegen) -> Result<PrimaryCodegen, CompileE
                         },
                     )
                 }),
+            HelperForm::Defconstant(cdata) => {
+                if cdata.tabled {
+                    let mut c_copy = compiler.clone();
+                    c_copy.parentfns.insert(cdata.name.clone());
+                    Ok(c_copy)
+                } else {
+                    Ok(compiler.clone())
+                }
+            }
             _ => Ok(compiler.clone()),
         },
         compiler.clone(),
@@ -1625,6 +1713,9 @@ pub fn codegen(
         code_generator = codegen_(context, opts.clone(), &code_generator, &f)?;
     }
 
+    // If stepping 23 or greater, we support no-env mode.
+    enable_nil_env_mode_for_stepping_23_or_greater(opts.clone(), &mut code_generator);
+
     *context.symbols() = code_generator.function_symbols.clone();
     context
         .symbols()
@@ -1652,7 +1743,7 @@ pub fn codegen(
                     );
 
                     Ok(final_code)
-                } else {
+                } else if code_generator.left_env {
                     let final_code = primapply(
                         code.0.clone(),
                         Rc::new(primquote(code.0.clone(), code.1)),
@@ -1664,6 +1755,9 @@ pub fn codegen(
                     );
 
                     Ok(final_code)
+                } else {
+                    let code_borrowed: &SExp = code.1.borrow();
+                    Ok(code_borrowed.clone())
                 }
             }
         }

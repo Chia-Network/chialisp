@@ -1,0 +1,6 @@
+(mod (X)
+  (include *standard-cl-23*)
+  (include reverse.clinc)
+
+  (reverse X)
+  )

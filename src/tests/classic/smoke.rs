@@ -13,8 +13,9 @@ use crate::classic::clvm::__type_compatibility__::{
     pybytes_repr, t, Bytes, Stream, UnvalidatedBytesFromType,
 };
 use crate::classic::clvm::serialize::{sexp_from_stream, SimpleCreateCLVMObject};
-use crate::classic::clvm::sexp::{First, NodeSel, Rest, SelectNode, ThisNode};
+use crate::classic::clvm::sexp::{sexp_as_bin, First, NodeSel, Rest, SelectNode, ThisNode};
 use crate::classic::clvm::syntax_error::SyntaxErr;
+use crate::classic::clvm_tools::binutils;
 use crate::classic::clvm_tools::cmds::{launch_tool, OpcConversion, OpdConversion, TConversion};
 
 use crate::classic::clvm_tools::binutils::{assemble, assemble_from_ir, disassemble};
@@ -256,6 +257,17 @@ fn compile_program<'a>(
     let res = runner.run_program(allocator, run_script, input_sexp, None);
 
     return res.map(|x| disassemble(allocator, x.1, Some(0)));
+}
+
+#[test]
+fn binutils_assemble() {
+    let mut allocator = Allocator::new();
+    let src = "(q)".to_string();
+    let assembled = binutils::assemble(&mut allocator, &src)
+        .map_err(|e| e.to_string())
+        .map(|sexp| t(sexp, sexp_as_bin(&mut allocator, sexp).hex()))
+        .unwrap();
+    assert_eq!(assembled.rest(), "ff0180");
 }
 
 #[test]

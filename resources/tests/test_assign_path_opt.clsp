@@ -1,0 +1,8 @@
+(mod (Z)
+  (include *strict-cl-21*)
+  (defun F (X) (* X 5))
+  (assign
+    (_0 _1 _2 _3 _4 (_50 (_51 _52 _53 Q))) Z
+    (F Q)
+    )
+  )

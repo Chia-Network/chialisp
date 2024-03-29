@@ -4,11 +4,8 @@ use std::cmp::Ordering;
 use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
-use std::option::Option;
-use std::string::String;
 
 use bls12_381::G1Affine;
-use hex;
 use sha2::Digest;
 use sha2::Sha256;
 

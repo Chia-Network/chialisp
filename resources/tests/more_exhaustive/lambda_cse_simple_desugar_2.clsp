@@ -1,0 +1,8 @@
+(mod (A B)
+     (include *standard-cl-23*)
+     (defun lambda_$_53 ((cse_$_50 X_$_46 Y_$_47) Z_$_49) (* Z_$_49 cse_$_50))
+     (defun-inline letbinding_$_52 (((X_$_46 Y_$_47) cse_$_50) L_$_48) (* (a L_$_48 (4 X_$_46 ())) cse_$_50))
+     (defun letbinding_$_51 ((X_$_46 Y_$_47) cse_$_50) (letbinding_$_52 (r @) (4 2 (4 (4 1 lambda_$_53) (4 (4 4 (4 (4 1 (4 cse_$_50 (c X_$_46 (c Y_$_47 (q))))) (4 1 (q)))) (q))))))
+     (defun F (X_$_46 Y_$_47) (letbinding_$_51 (r @) (* X_$_46 Y_$_47)))
+     (F A B)
+     )

@@ -272,6 +272,8 @@ pub struct DefconstData {
     pub nl: Srcloc,
     /// The location of the body expression, whatever it is.
     pub body: Rc<BodyForm>,
+    /// This constant should exist in the left env rather than be inlined.
+    pub tabled: bool,
 }
 
 /// Specifies where a constant is the classic kind (unevaluated) or a proper
@@ -365,6 +367,7 @@ pub struct DefunCall {
 pub struct PrimaryCodegen {
     pub prims: Rc<HashMap<Vec<u8>, Rc<SExp>>>,
     pub constants: HashMap<Vec<u8>, Rc<SExp>>,
+    pub tabled_constants: HashMap<Vec<u8>, Rc<SExp>>,
     pub macros: HashMap<Vec<u8>, Rc<SExp>>,
     pub inlines: HashMap<Vec<u8>, InlineFunction>,
     pub defuns: HashMap<Vec<u8>, DefunCall>,
@@ -375,6 +378,7 @@ pub struct PrimaryCodegen {
     pub final_expr: Rc<BodyForm>,
     pub final_code: Option<CompiledCode>,
     pub function_symbols: HashMap<String, String>,
+    pub left_env: bool,
 }
 
 /// The CompilerOpts specifies global options used during compilation.
@@ -891,6 +895,12 @@ impl PrimaryCodegen {
     pub fn add_constant(&self, name: &[u8], value: Rc<SExp>) -> Self {
         let mut codegen_copy = self.clone();
         codegen_copy.constants.insert(name.to_owned(), value);
+        codegen_copy
+    }
+
+    pub fn add_tabled_constant(&self, name: &[u8], value: Rc<SExp>) -> Self {
+        let mut codegen_copy = self.clone();
+        codegen_copy.tabled_constants.insert(name.to_owned(), value);
         codegen_copy
     }
 

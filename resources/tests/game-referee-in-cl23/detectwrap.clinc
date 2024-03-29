@@ -1,0 +1,17 @@
+(
+    (defun get-straight-hand (my_straight_high last cards)
+        (if (print "gsh cards" cards)
+            (let ((next (get-straight-hand my_straight_high (r cards))))
+                (if (logior
+                        (logand (= my_straight_high 5) (= (f (f cards)) 14))
+                        (logand
+                            (>= my_straight_high (f (f cards)))
+                            (<= (- my_straight_high 4) (f (f cards)))))
+                    (c (f cards) next)
+                    next
+                )
+           )
+           ()
+        )
+    )
+)

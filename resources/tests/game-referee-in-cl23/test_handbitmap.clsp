@@ -1,0 +1,13 @@
+(mod ()
+
+  (include *standard-cl-23*)
+  (include print.clinc)
+  (include map.clinc)
+  (include deep_compare.clinc)
+  (include handbitmap.clinc)
+
+  (ranks_from_hand
+    (list ((1 . 14) (1 . 13) (1 . 12) (1 . 11) (1 . 10) (1 . 8)))
+    (list (12 . 1) (11 . 1) (14 . 1) (13 . 1) (10 . 1) (8 . 1))
+    )
+  )

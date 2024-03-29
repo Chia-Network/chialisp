@@ -1,0 +1,66 @@
+(
+    (defun mem (choice lst)
+        (if lst
+             (if (deep= choice (f lst))
+                 lst
+                 (mem choice (r lst))
+             )
+             ()
+        )
+    )
+
+    (defun bitmap_from_members (chosen cards)
+        (if cards
+            (logior (not (not (mem (f cards) chosen))) (lsh (bitmap_from_members chosen (r cards)) 1))
+            0
+        )
+    )
+
+    (defun find_hand_indices_x (hand cards)
+        (bitmap_from_members (ranks_from_hand hand cards) cards)
+    )
+
+    (defun find_hand_indices (hand cards)
+        (find_hand_indices_x hand cards)
+    )
+
+    (defun member_of_hand (rank hand)
+        (if hand
+            (if (= (f (f hand)) rank)
+                1
+                (member_of_hand rank (r hand))
+            )
+            0
+        )
+    )
+
+    (defun remove_rank_from_hand (rank (@ hand (f_hand . r_hand)))
+        (if hand
+            (if (= (f f_hand) rank)
+                (if (> (r f_hand) 1)
+                    (c (c (f f_hand) (- (r f_hand) 1)) r_hand)
+                    r_hand
+                )
+                (c (f hand) (remove_rank_from_hand rank r_hand))
+            )
+            ()
+        )
+    )
+
+    (defun ranks_from_hand_real (hand (@ cards ((@ first_card (first_rank . first_suit)) . remaining_cards)))
+        (if cards
+            (if (member_of_hand first_rank hand)
+                (assign
+                    new_hand (remove_rank_from_hand first_rank hand)
+                    (c first_card (ranks_from_hand new_hand remaining_cards))
+                )
+                (ranks_from_hand hand remaining_cards)
+            )
+            ()
+        )
+    )
+
+    (defun ranks_from_hand (hand cards)
+       (ranks_from_hand_real (map (lambda (count . rank) (c rank count)) cards))
+    )
+)

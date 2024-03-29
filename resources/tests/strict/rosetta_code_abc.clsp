@@ -1,0 +1,76 @@
+;; Adapted from https://rosettacode.org/wiki/ABC_problem#Scheme
+(mod (word)
+
+  (include *standard-cl-23*)
+
+  (defconst *blocks*
+    (list
+      (c "B" "O") (c "X" "K") (c "D" "Q") (c "C" "P") (c "N" "A")
+      (c "G" "T") (c "R" "E") (c "T" "G") (c "Q" "D") (c "F" "S")
+      (c "J" "W") (c "H" "U") (c "V" "I") (c "A" "N") (c "O" "B")
+      (c "E" "R") (c "F" "S") (c "L" "Y") (c "P" "C") (c "Z" "M")))
+
+  (defun-inline block-member (e s)
+    (logior (= e (f s)) (= e (r s)))
+    )
+
+  ;; Make short-circuiting and.
+  (defun and_ (CLAUSES)
+    (if (r CLAUSES)
+      (qq (if (unquote (f CLAUSES)) (unquote (and_ (r CLAUSES))) ()))
+      (f CLAUSES)
+      )
+    )
+
+  (defmac and CLAUSES (if CLAUSES (and_ CLAUSES) 1))
+
+  ;; Make short-circuiting or.
+  (defun or_ (CLAUSES)
+    (if (r CLAUSES)
+      (qq (if (unquote (f CLAUSES)) 1 (unquote (or_ (r CLAUSES)))))
+      (f CLAUSES)
+      )
+    )
+
+  (defmac or CLAUSES (if CLAUSES (or_ CLAUSES) ()))
+
+  (defun exists (p? li)
+    (and li (or (a p? (list (f li))) (exists p? (r li))))
+    )
+
+  (defun remove-one (x li)
+    (or
+      (not li)
+      (if (and (= (f (f li)) (f x)) (= (r (f li)) (r x)))
+        (r li)
+        (c (f li) (remove-one x (r li)))
+        )
+      )
+    )
+
+  (defun can-make-list? (li blocks)
+    (or
+      (not li)
+      (exists
+        (lambda ((& li blocks) block)
+          (and
+            (block-member (f li) block)
+            (can-make-list? (r li) (remove-one block blocks))
+            )
+          )
+        blocks
+        )
+      )
+    )
+
+  (defun can-make-word? (word) (can-make-list? word *blocks*))
+
+  (defun wordify (W)
+    (if W
+      (c (substr W 0 1) (wordify (substr W 1)))
+      ()
+      )
+    )
+
+  (can-make-word? (wordify word))
+  )

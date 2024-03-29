@@ -1,5 +1,11 @@
 # clvm_tools_rs Changelog
 
+## 0.1.41
+### Changed
+- Addition of assemble, disassemble and compile from string to python api.
+### Fixed
+- Issue in parsing lambdas supporting the LSP.
+
 ## 0.1.34
 ### Fixed
 - Fixed chialisp compilation issues
@@ -47,3 +53,8 @@ Skipped
 ## 0.1.39
 
 - Support conversion from Uint8Array to IProgram in wasm.
+
+## 0.1.40
+
+- New language sigil ```*standard-cl-23*``` is here which is the same language as that introduced by ```*strict-cl-21*``` but has much better optimization.
+- Syntactic tree lists using #(...) syntax in cl21 and cl23 (matt-o-how).

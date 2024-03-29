@@ -12,6 +12,7 @@ use crate::compiler::comptypes::{
     ArgsAndTail, BodyForm, CallSpec, Callable, CompileErr, CompiledCode, CompilerOpts,
     InlineFunction, LambdaData, PrimaryCodegen,
 };
+use crate::compiler::lambda::make_cons;
 use crate::compiler::sexp::{decode_string, SExp};
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::{BasicCompileContext, CompileContextWrapper};
@@ -440,7 +441,34 @@ fn replace_inline_body(
                 }
             }
         }
-        BodyForm::Value(SExp::Atom(_, a)) => {
+        BodyForm::Value(SExp::Atom(l, a)) => {
+            if a == b"@*env*" {
+                // Reify the environment as it looks from here.
+                let left_env = Rc::new(BodyForm::Call(
+                    l.clone(),
+                    vec![
+                        Rc::new(BodyForm::Value(SExp::Atom(l.clone(), b"@".to_vec()))),
+                        Rc::new(BodyForm::Value(SExp::Integer(
+                            l.clone(),
+                            2_u32.to_bigint().unwrap(),
+                        ))),
+                    ],
+                    // Builtin
+                    None,
+                ));
+                let mut env = Rc::new(BodyForm::Quoted(SExp::Nil(l.clone())));
+                for arg in args.iter().rev() {
+                    env = Rc::new(make_cons(l.clone(), arg.clone(), env));
+                }
+                env = Rc::new(make_cons(l.clone(), left_env, env));
+                return Ok(env);
+            } else if a == b"@" {
+                return Ok(Rc::new(BodyForm::Value(SExp::Atom(
+                    l.clone(),
+                    b"@".to_vec(),
+                ))));
+            }
+
             let alookup = arg_lookup(callsite, inline.args.clone(), args, tail, a.clone())?
                 .unwrap_or_else(|| expr.clone());
             Ok(alookup)

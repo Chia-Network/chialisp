@@ -117,4 +117,6 @@ jobs:
       run: |
         . ./activate
         cp support/test-game-referee.sh .
+        sh test-game-referee.sh resources/tests/game-referee-in-cl23
         sh test-game-referee.sh resources/tests/game-referee-in-cl21
+        sh test-game-referee.sh resources/tests/game-referee-after-cl21

@@ -1,3 +1,10 @@
+pub mod above22;
+pub mod bodyform;
+pub mod brief;
+pub mod cse;
+pub mod deinline;
+pub mod depgraph;
+pub mod double_apply;
 pub mod strategy;
 
 #[cfg(test)]
@@ -17,19 +24,21 @@ use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 use crate::classic::clvm_tools::stages::stage_2::optimize::optimize_sexp;
 
 use crate::compiler::clvm::{convert_from_clvm_rs, convert_to_clvm_rs, run};
-use crate::compiler::codegen::{codegen, get_callable};
+use crate::compiler::codegen::{codegen, do_mod_codegen, get_callable};
 use crate::compiler::comptypes::{
     BodyForm, CallSpec, Callable, CompileErr, CompileForm, CompilerOpts, DefunData, HelperForm,
     PrimaryCodegen, SyntheticType,
 };
-use crate::compiler::evaluate::{build_reflex_captures, Evaluator, EVAL_STACK_LIMIT};
+use crate::compiler::evaluate::{
+    build_reflex_captures, dequote, is_i_atom, is_not_atom, Evaluator, EVAL_STACK_LIMIT,
+};
+use crate::compiler::optimize::above22::Strategy23;
 use crate::compiler::optimize::strategy::ExistingStrategy;
 use crate::compiler::runtypes::RunFailure;
-use crate::compiler::sexp::SExp;
 #[cfg(test)]
-use crate::compiler::sexp::{enlist, parse_sexp};
+use crate::compiler::sexp::parse_sexp;
+use crate::compiler::sexp::{AtomValue, NodeSel, SExp, SelectNode, ThisNode};
 use crate::compiler::srcloc::Srcloc;
-use crate::compiler::BasicCompileContext;
 use crate::compiler::CompileContextWrapper;
 use crate::compiler::StartOfCodegenOptimization;
 use crate::util::u8_from_number;
@@ -196,28 +205,51 @@ fn test_sexp_scale_increases_with_atom_size() {
     );
 }
 
-#[test]
-fn test_sexp_scale_increases_with_list_of_atoms() {
-    let l = Srcloc::start("*test*");
-    let one_atom = Rc::new(SExp::Integer(l.clone(), bi_one()));
-    let target_scale = 4 + 3 * sexp_scale(one_atom.borrow());
-    let list_of_atom = enlist(
-        l.clone(),
-        &[one_atom.clone(), one_atom.clone(), one_atom.clone()],
-    );
-    assert_eq!(target_scale, sexp_scale(&list_of_atom));
+fn is_not_condition(bf: &BodyForm) -> Option<Rc<BodyForm>> {
+    // Checking for a primitive so no tail.
+    if let BodyForm::Call(_, parts, None) = bf {
+        if parts.len() != 2 {
+            return None;
+        }
+
+        if is_not_atom(parts[0].to_sexp()) {
+            return Some(parts[1].clone());
+        }
+    }
+
+    None
 }
 
 /// Changes (i (not c) a b) into (i c b a)
 fn condition_invert_optimize(
     opts: Rc<dyn CompilerOpts>,
-    _loc: &Srcloc,
-    _forms: &[Rc<BodyForm>],
+    loc: &Srcloc,
+    forms: &[Rc<BodyForm>],
 ) -> Option<BodyForm> {
     if let Some(res) = opts.dialect().stepping {
-        // Only perform on chialisp above stepping 23.
-        if res < 23 {
-            return None;
+        // Only perform on chialisp above the appropriate stepping.
+        if res >= 23 {
+            if forms.len() != 4 {
+                return None;
+            }
+
+            if !is_i_atom(forms[0].to_sexp()) {
+                return None;
+            }
+
+            // We have a (not cond)
+            if let Some(condition) = is_not_condition(forms[1].borrow()) {
+                return Some(BodyForm::Call(
+                    loc.clone(),
+                    vec![
+                        forms[0].clone(),
+                        condition,
+                        forms[3].clone(),
+                        forms[2].clone(),
+                    ],
+                    None,
+                ));
+            }
         }
     }
 
@@ -229,15 +261,115 @@ fn condition_invert_optimize(
 ///
 /// The result is the constant result of invoking the function.
 fn constant_fun_result(
-    _allocator: &mut Allocator,
+    allocator: &mut Allocator,
     opts: Rc<dyn CompilerOpts>,
-    _runner: Rc<dyn TRunProgram>,
-    _compiler: &PrimaryCodegen,
-    _call_spec: &CallSpec,
+    runner: Rc<dyn TRunProgram>,
+    compiler: &PrimaryCodegen,
+    call_spec: &CallSpec,
 ) -> Option<Rc<BodyForm>> {
     if let Some(res) = opts.dialect().stepping {
-        if res < 23 {
-            return None;
+        if res >= 23 {
+            let mut constant = true;
+            let optimized_args: Vec<(bool, Rc<BodyForm>)> = call_spec
+                .args
+                .iter()
+                .skip(1)
+                .map(|a| {
+                    let optimized =
+                        optimize_expr(allocator, opts.clone(), runner.clone(), compiler, a.clone());
+                    constant = constant && optimized.as_ref().map(|x| x.0).unwrap_or_else(|| false);
+                    optimized
+                        .map(|x| (x.0, x.1))
+                        .unwrap_or_else(|| (false, a.clone()))
+                })
+                .collect();
+
+            let optimized_tail: Option<(bool, Rc<BodyForm>)> = call_spec.tail.as_ref().map(|t| {
+                let optimized =
+                    optimize_expr(allocator, opts.clone(), runner.clone(), compiler, t.clone());
+                constant = constant && optimized.as_ref().map(|x| x.0).unwrap_or_else(|| false);
+                optimized
+                    .map(|x| (x.0, x.1))
+                    .unwrap_or_else(|| (false, t.clone()))
+            });
+
+            if !constant {
+                return None;
+            }
+
+            let compiled_body = {
+                let to_compile = CompileForm {
+                    loc: call_spec.loc.clone(),
+                    include_forms: Vec::new(),
+                    helpers: compiler.original_helpers.clone(),
+                    args: Rc::new(SExp::Atom(call_spec.loc.clone(), b"__ARGS__".to_vec())),
+                    exp: Rc::new(BodyForm::Call(
+                        call_spec.loc.clone(),
+                        vec![
+                            Rc::new(BodyForm::Value(SExp::Atom(call_spec.loc.clone(), vec![2]))),
+                            Rc::new(BodyForm::Value(SExp::Atom(
+                                call_spec.loc.clone(),
+                                call_spec.name.to_vec(),
+                            ))),
+                            Rc::new(BodyForm::Value(SExp::Atom(
+                                call_spec.loc.clone(),
+                                b"__ARGS__".to_vec(),
+                            ))),
+                        ],
+                        // Proper call: we're calling 'a' on behalf of our
+                        // single capture argument.
+                        None,
+                    )),
+                };
+                let optimizer = if let Ok(res) = get_optimizer(&call_spec.loc, opts.clone()) {
+                    res
+                } else {
+                    return None;
+                };
+
+                let mut symbols = HashMap::new();
+                let mut wrapper =
+                    CompileContextWrapper::new(allocator, runner.clone(), &mut symbols, optimizer);
+
+                if let Ok(code) = codegen(&mut wrapper.context, opts.clone(), &to_compile) {
+                    code
+                } else {
+                    return None;
+                }
+            };
+
+            // Reified args reflect the actual ABI shape with a tail if any.
+            let mut reified_args = if let Some((_, t)) = optimized_tail {
+                if let Ok(res) = dequote(call_spec.loc.clone(), t) {
+                    res
+                } else {
+                    return None;
+                }
+            } else {
+                Rc::new(SExp::Nil(call_spec.loc.clone()))
+            };
+            for (_, v) in optimized_args.iter().rev() {
+                let unquoted = if let Ok(res) = dequote(call_spec.loc.clone(), v.clone()) {
+                    res
+                } else {
+                    return None;
+                };
+                reified_args = Rc::new(SExp::Cons(call_spec.loc.clone(), unquoted, reified_args));
+            }
+            let borrowed_args: &SExp = reified_args.borrow();
+            let new_body = BodyForm::Call(
+                call_spec.loc.clone(),
+                vec![
+                    Rc::new(BodyForm::Value(SExp::Atom(call_spec.loc.clone(), vec![2]))),
+                    Rc::new(BodyForm::Quoted(compiled_body)),
+                    Rc::new(BodyForm::Quoted(borrowed_args.clone())),
+                ],
+                // The constructed call is proper because we're feeding something
+                // we constructed above.
+                None,
+            );
+
+            return Some(Rc::new(new_body));
         }
     }
 
@@ -387,10 +519,31 @@ pub fn optimize_expr(
             true,
             Rc::new(BodyForm::Quoted(SExp::Integer(l.clone(), i.clone()))),
         )),
-        BodyForm::Mod(_l, _cf) => {
+        BodyForm::Mod(l, cf) => {
             if let Some(stepping) = opts.dialect().stepping {
-                if stepping < 23 {
-                    return None;
+                if stepping >= 23 {
+                    let mut throwaway_symbols = HashMap::new();
+                    if let Ok(optimizer) = get_optimizer(l, opts.clone()) {
+                        let mut wrapper = CompileContextWrapper::new(
+                            allocator,
+                            runner,
+                            &mut throwaway_symbols,
+                            optimizer,
+                        );
+                        if let Ok(compiled) = do_mod_codegen(&mut wrapper.context, opts.clone(), cf)
+                        {
+                            if let Ok(NodeSel::Cons(_, body)) =
+                                NodeSel::Cons(AtomValue::Here(&[1]), ThisNode)
+                                    .select_nodes(compiled.1)
+                            {
+                                let borrowed_body: &SExp = body.borrow();
+                                return Some((
+                                    true,
+                                    Rc::new(BodyForm::Quoted(borrowed_body.clone())),
+                                ));
+                            }
+                        }
+                    }
                 }
             }
 
@@ -460,56 +613,6 @@ fn test_null_optimization_ok_not_doing_anything() {
     assert_eq!(optimized.to_string(), "(2 (1 (1) (1) (1)) (3))");
 }
 
-// Should take a desugared program.
-pub fn deinline_opt(
-    context: &mut BasicCompileContext,
-    opts: Rc<dyn CompilerOpts>,
-    mut compileform: CompileForm,
-) -> Result<CompileForm, CompileErr> {
-    let mut best_compileform = compileform.clone();
-    let generated_program = codegen(context, opts.clone(), &best_compileform)?;
-    let mut metric = sexp_scale(&generated_program);
-    let flip_helper = |h: &mut HelperForm| {
-        if let HelperForm::Defun(inline, defun) = h {
-            if matches!(&defun.synthetic, Some(SyntheticType::NoInlinePreference)) {
-                *h = HelperForm::Defun(!*inline, defun.clone());
-                return true;
-            }
-        }
-
-        false
-    };
-
-    loop {
-        let start_metric = metric;
-
-        for i in 0..compileform.helpers.len() {
-            // Try flipped.
-            let old_helper = compileform.helpers[i].clone();
-            if !flip_helper(&mut compileform.helpers[i]) {
-                continue;
-            }
-
-            let maybe_smaller_program = codegen(context, opts.clone(), &compileform)?;
-            let new_metric = sexp_scale(&maybe_smaller_program);
-
-            // Don't keep this change if it made things worse.
-            if new_metric >= metric {
-                compileform.helpers[i] = old_helper;
-            } else {
-                metric = new_metric;
-                best_compileform = compileform.clone();
-            }
-        }
-
-        if start_metric == metric {
-            break;
-        }
-    }
-
-    Ok(best_compileform)
-}
-
 fn fe_opt(
     allocator: &mut Allocator,
     runner: Rc<dyn TRunProgram>,
@@ -534,14 +637,8 @@ fn fe_opt(
                 let new_helper = HelperForm::Defun(
                     *inline,
                     Box::new(DefunData {
-                        loc: defun.loc.clone(),
-                        nl: defun.nl.clone(),
-                        kw: defun.kw.clone(),
-                        name: defun.name.clone(),
-                        args: defun.args.clone(),
-                        orig_args: defun.orig_args.clone(),
-                        synthetic: defun.synthetic.clone(),
                         body: body_rc.clone(),
+                        ..*defun.clone()
                     }),
                 );
                 optimized_helpers.push(new_helper);
@@ -569,7 +666,7 @@ fn fe_opt(
     })
 }
 
-fn run_optimizer(
+pub fn run_optimizer(
     allocator: &mut Allocator,
     runner: Rc<dyn TRunProgram>,
     r: Rc<SExp>,
@@ -602,11 +699,13 @@ pub fn get_optimizer(
                 loc.clone(),
                 format!("minimum language stepping is 21, {s} specified"),
             ));
-        } else if s > 22 {
+        } else if s > 23 {
             return Err(CompileErr(
                 loc.clone(),
-                format!("maximum language stepping is 22 at this time, {s} specified"),
+                format!("maximum language stepping is 23 at this time, {s} specified"),
             ));
+        } else if s == 23 && opts.optimize() {
+            return Ok(Box::new(Strategy23::new()));
         }
     }
 
@@ -620,8 +719,7 @@ pub fn maybe_finalize_program_via_classic_optimizer(
     runner: Rc<dyn TRunProgram>,
     _opts: Rc<dyn CompilerOpts>, // Currently unused but I want this interface
     // to consider opts in the future when required.
-    opt_flag: bool, // Command line flag and other features control this in oldest
-    // versions
+    opt_flag: bool, // Command line flag and other features control this in oldest-    // versions
     unopt_res: &SExp,
 ) -> Result<Rc<SExp>, CompileErr> {
     if opt_flag {

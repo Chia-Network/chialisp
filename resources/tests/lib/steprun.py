@@ -18,10 +18,10 @@ def compile_module_with_symbols(include_paths: List[Path], source: Path):
         str(path_obj.resolve()), str(target_file.absolute()), [str(p) for p in include_paths], True
     )
     print(f"Writing to {target_file} {compile_result}")
-    # symbols = compile_result["symbols"]
-    # if len(symbols) != 0:
-    #    with open(str(sym_file.absolute()), "w") as symfile:
-    #        symfile.write(json.dumps(symbols))
+    symbols = compile_result["symbols"]
+    if len(symbols) != 0:
+        with open(str(sym_file.absolute()), "w") as symfile:
+            symfile.write(json.dumps(symbols))
 
 
 def run_until_end(p):
@@ -37,7 +37,9 @@ def run_until_end(p):
 
     return last
 
-def diag_run_clvm(program, args, symbols, options):
+def diag_run_clvm(program, args, symbols, options=None):
+    if options is None:
+        options = {}
     hex_form_of_program = binascii.hexlify(bytes(program)).decode('utf8')
     hex_form_of_args = binascii.hexlify(bytes(args)).decode('utf8')
     symbols = json.loads(open(symbols).read())

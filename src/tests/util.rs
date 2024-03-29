@@ -1,5 +1,8 @@
-use crate::util::toposort;
+use rand::prelude::*;
+use rand::Error;
 use std::collections::HashSet;
+
+use crate::util::toposort;
 
 #[derive(Debug, Clone)]
 struct TopoSortCheckItem {
@@ -93,4 +96,56 @@ fn test_topo_sort_1() {
     );
 
     assert!(result.is_err());
+}
+
+// A simple pseudo RNG based on an lfsr.  Good enough to generate interesting
+// deterministic patterns.
+pub struct RngLFSR {
+    generator: u32,
+}
+
+impl RngLFSR {
+    pub fn new(state: u32) -> Self {
+        RngLFSR { generator: state }
+    }
+    fn next(&mut self) -> u32 {
+        self.generator = lfsr::galois::Galois16::up(self.generator);
+        self.generator
+    }
+}
+
+impl RngCore for RngLFSR {
+    fn next_u32(&mut self) -> u32 {
+        let a = self.next();
+        let b = self.next();
+        (a << 16) | b
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let a = self.next_u32() as u64;
+        let b = self.next_u32() as u64;
+        (a << 32) | b
+    }
+
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        if dest.is_empty() {
+            return;
+        }
+
+        for i in 0..(dest.len() / 2) {
+            let a = self.next();
+            dest[i * 2] = (a & 0xff) as u8;
+            dest[i * 2 + 1] = ((a >> 8) & 0xff) as u8;
+        }
+
+        if (dest.len() & 1) != 0 {
+            let a = self.next();
+            dest[dest.len() - 1] = (a & 0xff) as u8;
+        }
+    }
+
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Error> {
+        self.fill_bytes(dest);
+        Ok(())
+    }
 }

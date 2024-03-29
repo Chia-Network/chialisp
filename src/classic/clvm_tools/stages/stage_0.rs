@@ -1,5 +1,5 @@
 use clvm_rs::allocator::{Allocator, NodePtr};
-use clvm_rs::chia_dialect::{ChiaDialect, ENABLE_BLS_OPS, ENABLE_SECP_OPS, NO_UNKNOWN_OPS};
+use clvm_rs::chia_dialect::{ChiaDialect, NO_UNKNOWN_OPS};
 use clvm_rs::cost::Cost;
 use clvm_rs::reduction::Response;
 
@@ -47,7 +47,7 @@ impl TRunProgram for DefaultProgramRunner {
 
         run_program_with_pre_eval(
             allocator,
-            &ChiaDialect::new(NO_UNKNOWN_OPS | ENABLE_BLS_OPS | ENABLE_SECP_OPS),
+            &ChiaDialect::new(NO_UNKNOWN_OPS),
             program,
             args,
             max_cost,

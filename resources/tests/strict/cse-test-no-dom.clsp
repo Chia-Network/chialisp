@@ -1,0 +1,23 @@
+(mod (X)
+  (include *standard-cl-23*)
+
+  (defun S (C)
+    (if C
+      (assign-lambda 
+        Z (f (f C))
+        Y (r (f C))
+        R (r C)
+        (if (= Z 2)
+          (if (= 1 (f Y))
+            (r Y)
+            (S R)
+            )
+          (S R)
+          )
+        )
+        ()
+      )
+    )
+
+  (S X)
+  )

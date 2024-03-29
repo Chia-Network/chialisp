@@ -1,6 +1,10 @@
 use num_bigint::BigInt;
 use std::collections::HashSet;
+use std::fs;
+use std::io::Write;
 use std::mem::swap;
+use std::path::Path;
+use tempfile::NamedTempFile;
 use unicode_segmentation::UnicodeSegmentation;
 
 pub type Number = BigInt;
@@ -81,7 +85,7 @@ where
     let mut finished_idx = 0;
 
     // Determine what's defined in these bindings.
-    for (_, item) in items.iter().enumerate() {
+    for item in items.iter() {
         for new_item in item.has.iter() {
             possible.insert(new_item.clone());
         }
@@ -144,4 +148,57 @@ where
     fn err_into(self) -> Result<DestRes, DestErr> {
         self.map_err(|e| e.into())
     }
+}
+
+pub fn atomic_write_file(
+    input_path: &str,
+    output_path: &str,
+    target_data: &str,
+) -> Result<(), String> {
+    let output_path_obj = Path::new(output_path);
+    let output_dir = output_path_obj
+        .parent()
+        .map(Ok)
+        .unwrap_or_else(|| Err("could not get parent of output path"))?;
+
+    // Make the contents appear atomically so that other test processes
+    // won't mistake an empty file for intended output.
+    let mut temp_output_file = NamedTempFile::new_in(output_dir)
+        .map_err(|e| format!("error creating temporary compiler output for {input_path}: {e:?}"))?;
+
+    let err_text = format!("failed to write to {:?}", temp_output_file.path());
+    let translate_err = |_| err_text.clone();
+
+    temp_output_file
+        .write_all(target_data.as_bytes())
+        .map_err(translate_err)?;
+
+    temp_output_file
+        .persist(output_path)
+        .map_err(|e| format!("error persisting temporary compiler output {output_path}: {e:?}"))?;
+
+    Ok(())
+}
+
+pub fn gentle_overwrite(
+    input_path: &str,
+    output_path: &str,
+    target_data: &str,
+) -> Result<(), String> {
+    if let Ok(prev_content) = fs::read_to_string(output_path) {
+        let prev_trimmed = prev_content.trim();
+        let trimmed = target_data.trim();
+        if prev_trimmed == trimmed {
+            // We should try to overwrite here, but not fail if it doesn't
+            // work.  This will accomodate both the read only scenario and
+            // the scenario where a target file is newer and people want the
+            // date to be updated.
+            atomic_write_file(input_path, output_path, target_data).ok();
+
+            // It's the same program, bail regardless.
+            return Ok(());
+        }
+    }
+
+    atomic_write_file(input_path, output_path, target_data)
 }

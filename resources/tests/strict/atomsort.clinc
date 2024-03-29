@@ -1,0 +1,53 @@
+(
+ (defun merge (a b)
+   (if (not a)
+       b
+       (if (not b)
+           a
+           (if (> (f a) (f b))
+               (c (f a) (merge (r a) b))
+               (c (f b) (merge a (r b)))
+               )
+           )
+       )
+   )
+
+ ;; Sorts atoms into descending order
+ ;; This is optimized for sorting short lists
+ ;; A more general function would return a list of lists of ascending sizes
+ ;; to be merged
+ (defun atomsort ((@ firstpos (first @ secondpos (second @ thirdpos (third . remaining)))))
+   (if firstpos
+       (if secondpos
+           (if thirdpos
+               (assign-lambda
+                mylist
+                (if (> first second)
+                    (if (> second third)
+                        (list first second third)
+                        (if (> first third)
+                            (list first third second)
+                            (list third first second)
+                            )
+                        )
+                    (if (> first third)
+                        (list second first third)
+                        (if (> second third)
+                            (list second third first)
+                            (list third second first)
+                            )
+                        )
+                    )
+                (merge mylist (atomsort remaining))
+                )
+               (if (> first second)
+                   firstpos
+                   (list second first)
+                   )
+               )
+           firstpos
+           )
+       0
+       )
+   )
+)

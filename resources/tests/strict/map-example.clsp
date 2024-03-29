@@ -1,0 +1,15 @@
+(mod (Z)
+
+  (include *standard-cl-23*)
+
+  (defun add-one (X) (+ X 1))
+
+  (defun map (F L)
+    (if L
+      (c (a F (list (f L))) (map F (r L)))
+      ()
+      )
+    )
+    
+  (map add-one Z)
+  )

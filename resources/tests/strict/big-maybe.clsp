@@ -1,0 +1,9 @@
+(mod (p)
+
+  (include *standard-cl-23*)
+
+  (defun fromMaybe (v (@ m (content))) (if m content v))
+  (defun mapMaybe (f (@ m (content))) (if m (list (a f (list content))) ()))
+
+  (fromMaybe 0 (mapMaybe (lambda ((@ pt (x y))) (+ x y)) p))
+  )

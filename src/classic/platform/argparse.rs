@@ -397,7 +397,7 @@ impl ArgumentParser {
             }
         }
 
-        if params.get(&"help".to_string()).is_some() {
+        if params.contains_key("help") {
             let usage = self.compile_help_messages();
             return Err(usage);
         }

@@ -28,7 +28,7 @@ def run_coverage_test():
     subprocess.check_call(['cargo','test'],env=env)
 
 def is_my_code(desc):
-    for path in ['.cargo','library/std','src/py','src/classic/bins']:
+    for path in ['.cargo','library/std','src/py','src/classic/bins','/rustc']:
         if path in desc['name']:
             return False
 

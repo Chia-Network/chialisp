@@ -11,14 +11,13 @@ use crate::compiler::runtypes::RunFailure;
 use crate::compiler::sexp::SExp;
 use crate::compiler::srcloc::Srcloc;
 
-pub fn map_err_to_pyerr(srcloc: Srcloc, r: PyResult<Py<PyAny>>) -> Result<Py<PyAny>, RunFailure> {
+pub fn map_err_to_pyerr<PA>(srcloc: Srcloc, r: PyResult<PA>) -> Result<PA, RunFailure> {
     r.map_err(|e| RunFailure::RunErr(srcloc, format!("{e}")))
 }
 
-pub fn python_value_to_clvm(py: Python, val: Py<PyAny>) -> Result<Rc<SExp>, RunFailure> {
+pub fn python_value_to_clvm(val: &PyAny) -> Result<Rc<SExp>, RunFailure> {
     let srcloc = Srcloc::start("*python*");
-    val.as_ref(py)
-        .downcast::<PyList>()
+    val.downcast::<PyList>()
         .ok()
         .map(|l| {
             if l.is_empty() {
@@ -27,11 +26,10 @@ pub fn python_value_to_clvm(py: Python, val: Py<PyAny>) -> Result<Rc<SExp>, RunF
                 let mut result = SExp::Nil(srcloc.clone());
                 for i_rev in 0..l.len() {
                     let i = l.len() - i_rev - 1;
-                    let item = l.get_item(i as isize).extract();
-                    let any_of_elt = map_err_to_pyerr(srcloc.clone(), item)?;
+                    let any_of_elt = map_err_to_pyerr(srcloc.clone(), l.get_item(i))?;
                     result = SExp::Cons(
                         srcloc.clone(),
-                        python_value_to_clvm(py, any_of_elt)?,
+                        python_value_to_clvm(any_of_elt)?,
                         Rc::new(result),
                     );
                 }
@@ -40,8 +38,7 @@ pub fn python_value_to_clvm(py: Python, val: Py<PyAny>) -> Result<Rc<SExp>, RunF
         })
         .map(Some)
         .unwrap_or_else(|| {
-            val.as_ref(py)
-                .downcast::<PyTuple>()
+            val.downcast::<PyTuple>()
                 .map(|t| {
                     if t.len() != 2 {
                         Err(RunFailure::RunErr(
@@ -49,12 +46,12 @@ pub fn python_value_to_clvm(py: Python, val: Py<PyAny>) -> Result<Rc<SExp>, RunF
                             "tuple must have len 2".to_string(),
                         ))
                     } else {
-                        let any_of_e0 = map_err_to_pyerr(srcloc.clone(), t.get_item(0).extract())?;
-                        let any_of_e1 = map_err_to_pyerr(srcloc.clone(), t.get_item(1).extract())?;
+                        let any_of_e0 = map_err_to_pyerr(srcloc.clone(), t.get_item(0))?;
+                        let any_of_e1 = map_err_to_pyerr(srcloc.clone(), t.get_item(1))?;
                         Ok(Rc::new(SExp::Cons(
                             srcloc.clone(),
-                            python_value_to_clvm(py, any_of_e0)?,
-                            python_value_to_clvm(py, any_of_e1)?,
+                            python_value_to_clvm(any_of_e0)?,
+                            python_value_to_clvm(any_of_e1)?,
                         )))
                     }
                 })
@@ -62,8 +59,7 @@ pub fn python_value_to_clvm(py: Python, val: Py<PyAny>) -> Result<Rc<SExp>, RunF
         })
         .map(Some)
         .unwrap_or_else(|| {
-            val.as_ref(py)
-                .downcast::<PyBytes>()
+            val.downcast::<PyBytes>()
                 .map(|b| Ok(Rc::new(SExp::Atom(srcloc.clone(), b.as_bytes().to_vec()))))
                 .ok()
         })

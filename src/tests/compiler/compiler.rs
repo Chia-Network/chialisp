@@ -2433,3 +2433,16 @@ fn test_handle_explicit_empty_atom() {
     .expect("should run");
     assert_eq!(outcome.to_string(), "1");
 }
+
+#[test]
+fn test_almost_empty_lambda_gives_error() {
+    let prog = indoc! {"
+(mod (X)
+  (include *standard-cl-21*)
+  (lambda)
+  )"}
+    .to_string();
+    let res = run_string(&prog, &"()".to_string());
+    assert!(res.is_err());
+    assert!(format!("{res:?}").contains("Must provide at least arguments and body to lambda"));
+}

@@ -1,0 +1,18 @@
+(mod (X)
+  (include *standard-cl-23*)
+
+  ;; (+ X 1) should be an eliminated subexpression but it doesn't dominate the
+  ;; condition.
+  (defun-inline F1 (X)
+    (let ((Z X))
+      (if X
+        (* (+ Z 1) (+ Z 1) (+ Z 1) (+ X 1) (+ X 1) (+ X 1))
+        17
+        )
+      )
+    )
+
+  (defun F (X) (F1 X))
+  
+  (F X)
+  )

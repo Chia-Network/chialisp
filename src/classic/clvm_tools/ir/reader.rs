@@ -185,7 +185,7 @@ pub fn consume_atom(s: &mut IRReader, b: &Bytes) -> Result<Option<IRRepr>, Synta
     }
 }
 
-fn enlist_ir(vec: &mut Vec<IRRepr>, tail: IRRepr) -> IRRepr {
+fn enlist_ir(vec: &mut [IRRepr], tail: IRRepr) -> IRRepr {
     let mut result = tail;
     for i_reverse in 0..vec.len() {
         let i = vec.len() - i_reverse - 1;

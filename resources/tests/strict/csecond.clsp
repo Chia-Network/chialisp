@@ -1,0 +1,33 @@
+(mod (X)
+ (include *standard-cl-23*)
+
+ (defun asort ((@ firstpos (first @ secondpos (second @ thirdpos (third . remaining)))))
+   (if firstpos
+       (if secondpos
+           (if thirdpos
+               (if (> first second)
+                   (if (> first third)
+                       "test1"
+                       (if (> second third)
+                           "test2"
+                           "test3"
+                           )
+                       )
+                   (if (> first second)
+                       "test4"
+                       "test5"
+                       )
+                   )
+               (if (> first second)
+                   "test6"
+                   "test7"
+                   )
+               )
+           firstpos
+           )
+       0
+       )
+   )
+
+ (asort X)
+ )

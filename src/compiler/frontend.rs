@@ -471,7 +471,7 @@ pub fn compile_bodyform(
                                 let subparse = frontend(opts, &[body.clone()])?;
                                 Ok(BodyForm::Mod(op.loc(), subparse))
                             } else if *atom_name == b"lambda" {
-                                handle_lambda(opts, Some(l.clone()), &v)
+                                handle_lambda(opts, body.loc(), Some(l.clone()), &v)
                             } else {
                                 application()
                             }
@@ -514,7 +514,7 @@ fn compile_defconst(
     name: Vec<u8>,
     body: Rc<SExp>,
 ) -> Result<HelperForm, CompileErr> {
-    let bf = compile_bodyform(opts, body)?;
+    let bf = compile_bodyform(opts.clone(), body)?;
     Ok(HelperForm::Defconstant(DefconstData {
         kw: kl,
         nl,
@@ -522,6 +522,7 @@ fn compile_defconst(
         kind: ConstantKind::Complex,
         name: name.to_vec(),
         body: Rc::new(bf),
+        tabled: opts.frontend_opt() || opts.dialect().stepping.unwrap_or(0) > 22,
     }))
 }
 
@@ -542,6 +543,7 @@ fn compile_defconstant(
             kind: ConstantKind::Simple,
             name: name.to_vec(),
             body: Rc::new(BodyForm::Value(body_borrowed.clone())),
+            tabled: false,
         }))
     } else {
         compile_bodyform(opts, body).map(|bf| {
@@ -552,6 +554,7 @@ fn compile_defconstant(
                 kind: ConstantKind::Simple,
                 name: name.to_vec(),
                 body: Rc::new(bf),
+                tabled: false,
             })
         })
     }
@@ -876,6 +879,33 @@ fn frontend_start(
             })
             .unwrap_or_else(|| frontend_step_finish(opts, includes, pre_forms))
     }
+}
+
+/// Given the available helper list and the main expression, compute the list of
+/// reachable helpers.
+pub fn compute_live_helpers(
+    opts: Rc<dyn CompilerOpts>,
+    helper_list: &[HelperForm],
+    main_exp: Rc<BodyForm>,
+) -> Vec<HelperForm> {
+    let expr_names: HashSet<Vec<u8>> = collect_used_names_bodyform(main_exp.borrow())
+        .iter()
+        .map(|x| x.to_vec())
+        .collect();
+
+    let mut helper_map = HashMap::new();
+
+    for h in helper_list.iter() {
+        helper_map.insert(h.name().clone(), h.clone());
+    }
+
+    let helper_names = calculate_live_helpers(&HashSet::new(), &expr_names, &helper_map);
+
+    helper_list
+        .iter()
+        .filter(|h| !opts.frontend_check_live() || helper_names.contains(h.name()))
+        .cloned()
+        .collect()
 }
 
 /// Entrypoint for compilation.  This yields a CompileForm which represents a full

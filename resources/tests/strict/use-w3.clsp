@@ -1,0 +1,9 @@
+(mod (items)
+  (include *standard-cl-23*)
+
+  (defun assert_ (items_$_41) (letbinding_$_44 (r @*env*) (f items_$_41)))
+  (defun letbinding_$_44 ((items_$_41) cse_$_43)
+    (a (com cse_$_43) @)
+    )
+  (assert_ items)
+  )

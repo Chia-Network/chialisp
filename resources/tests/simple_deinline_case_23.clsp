@@ -1,0 +1,8 @@
+(mod (X)
+  (include *standard-cl-23*)
+  (defconstant Z 1000000)
+  (let
+      ((X1 (+ X Z)))
+    (+ X1 X1 X1 X1 X1 X1)
+    )
+  )

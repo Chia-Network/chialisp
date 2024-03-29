@@ -1,0 +1,31 @@
+(mod ((VALIDATION_PROGRAM_HASH AMOUNT) action . args)
+
+    (include *strict-cl-21*)
+
+    (defconstant CREATE_COIN 51)
+
+    (defun reduce (fun lst init)
+        (if lst
+            (reduce fun (r lst) (a fun (list (f lst) init)))
+            init
+        )
+    )
+
+    (let
+      ((new_puzzle_hash 38911)
+       )
+      (reduce
+       (lambda ((@ condition (condname arg1 arg2)) agg)
+         (if agg
+             1
+             (if (= condname CREATE_COIN)
+                 (logand (= arg1 new_puzzle_hash) (= arg2 100))
+                 0
+                 )
+             )
+         )
+       conditions
+       0
+       )
+      )
+    )

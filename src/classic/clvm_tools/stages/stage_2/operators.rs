@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
-use clvm_rs::chia_dialect::{ChiaDialect, ENABLE_BLS_OPS, ENABLE_SECP_OPS, NO_UNKNOWN_OPS};
+use clvm_rs::chia_dialect::{ChiaDialect, NO_UNKNOWN_OPS};
 use clvm_rs::cost::Cost;
 use clvm_rs::dialect::{Dialect, OperatorSet};
 use clvm_rs::reduction::{EvalErr, Reduction, Response};
@@ -122,9 +122,7 @@ impl Drop for CompilerOperators {
 
 impl CompilerOperatorsInternal {
     pub fn new(source_file: &str, search_paths: Vec<String>, symbols_extra_info: bool) -> Self {
-        let base_dialect = Rc::new(ChiaDialect::new(
-            NO_UNKNOWN_OPS | ENABLE_BLS_OPS | ENABLE_SECP_OPS,
-        ));
+        let base_dialect = Rc::new(ChiaDialect::new(NO_UNKNOWN_OPS));
         let base_runner = Rc::new(DefaultProgramRunner::new());
         CompilerOperatorsInternal {
             base_dialect,

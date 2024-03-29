@@ -1,0 +1,10 @@
+(mod (X)
+  (include *standard-cl-23*)
+
+  ;; (+ X 1) should be an eliminated subexpression but it doesn't dominate the
+  ;; condition.
+  (if X
+    (* (+ X 1) (+ X 1) (+ X 1))
+    17
+    )
+  )

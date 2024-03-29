@@ -1,0 +1,71 @@
+    (mod (X)
+    
+      ;; Specify that this program is compiled with *standard-cl-23*.
+      ;; After release, the chialisp compiler guarantees that programs
+      ;; with a specific sigil (including no sigil) compile to the
+      ;; same representation forever (it is a bug that must be fixed
+      ;; if a program changes representation in a future compiler
+      ;; release).  In this way, program source code can also provide
+      ;; enough information to re-produce a puzzle hash from source
+      ;; code.
+      (include *standard-cl-23*)
+      
+      (defun n-additions-inner (n value i)
+        (if (> i n)
+          ()
+	        (qq (c (+ (unquote i) (unquote value)) (unquote (n-additions-inner n value (+ 1 i)))))
+	        )
+	      )
+      
+      (defmac n-additions (n value) (n-additions-inner n value 1))
+      
+      (defun F (X) (n-additions 3 X))
+      
+      (defun odd (X) (logand X 1))
+      
+      ;; Usual higher order functions work like you might hope.
+      ;; This filter function takes a predicate, "pred", which
+      ;; returns a truthy value to include the result or nil.
+      ;; (@ lst (first . rest)) is similar to a similar 
+      ;; destructuring form in haskell.
+      ;; (@ lst (first . rest))
+      ;; generates the same bindings as simultaneously having
+      ;; (pred lst)
+      ;; and
+      ;; (pred (first . rest))
+      ;; as an argument list.
+      (defun filter (pred (@ lst (first . rest)))
+        (if lst
+          (if (a pred (list first))
+            (c first (filter pred rest))
+            (filter pred rest)
+            )
+          ()
+          )
+        )
+      
+      ;; @ destructuring here takes the place of the
+      ;; whole argument list.
+      (defun sum (@ the-list (first . rest))
+        (if the-list
+          (+ first (a sum rest))
+          0
+          )
+       	)
+      
+      (assign
+        ;; We can destructure the result based on its shape.
+	;; Assign reorders and groups assignments based on their dependencies.
+        (A B C) result-list
+        
+        ;; The bindings can be in any order, like the let forms in elm, haskell
+        ;; and others.
+        result-list (F X)
+        
+        summed (a sum result-list)
+      	odds (filter odd result-list)
+        
+        ;; Result of this form.
+        (list summed odds)
+        )
+      )

@@ -1,0 +1,11 @@
+(mod (A)
+  (include *standard-cl-23*)
+
+  (include defmac_assert.clib)
+
+  (assert
+    1
+    A
+    13
+    )
+  )

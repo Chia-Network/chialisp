@@ -1,0 +1,8 @@
+(mod (rank cards)
+  (include *standard-cl-23*)
+  (include relops.clinc)
+  (include print.clinc)
+  (include detectwrap.clinc)
+
+  (get-straight-hand rank cards)
+)

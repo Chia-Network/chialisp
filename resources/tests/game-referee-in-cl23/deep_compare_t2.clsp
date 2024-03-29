@@ -1,0 +1,6 @@
+(mod (A B)
+  (include *standard-cl-23*)
+  (include deep_compare.clinc)
+  
+  (deep_compare A B)
+  )

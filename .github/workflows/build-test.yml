@@ -31,22 +31,26 @@ jobs:
       with:
         fetch-depth: 0
 
-    - uses: actions/setup-python@v4
-      name: Install Python ${{ matrix.python }}
-      with:
-        python-version: ${{ matrix.python }}
-
-    - name: Update pip
-      run: |
-          python -m pip install --upgrade pip
-
     - name: Set up rust
       uses: actions-rs/toolchain@v1
       with:
         toolchain: stable
 
+    - uses: actions/setup-python@v4
+      name: Install Python ${{ matrix.python }}
+      with:
+        python-version: ${{ matrix.python }}
+
+    - uses: chia-network/actions/create-venv@main
+      id: create-venv
+
+    - uses: chia-network/actions/activate-venv@main
+      with:
+        directories: ${{ steps.create-venv.outputs.activate-venv-directories }}
+
     - name: Install dependencies
       run: |
+          python -m pip install --upgrade pip
           python -m pip install maturin==1.1.0
 
     - name: Build MacOs with maturin on Python ${{ matrix.python }}
@@ -54,35 +58,11 @@ jobs:
       env:
         MACOSX_DEPLOYMENT_TARGET: '11.0'
       run: |
-        python -m venv venv
-        ln -s venv/bin/activate
-        . ./activate
         maturin build -i python --release --strip
 
     - name: Build Linux in manylinux2010 with maturin on Python ${{ matrix.python }}
       if: startsWith(matrix.os, 'ubuntu')
       run: |
-        docker run --rm \
-          -v ${{ github.workspace }}:/ws --workdir=/ws \
-          ghcr.io/chia-network/build-images/centos-pypa-rust-x86_64 \
-          bash -exc '\
-            yum -y install libc6 openssl-devel && \
-            source $HOME/.cargo/env && \
-            rustup target add x86_64-unknown-linux-musl && \
-            rm -rf venv && \
-            PY_VERSION=${{ matrix.python }}
-            PY_VERSION=${PY_VERSION/.} && \
-            echo "Python version with dot removed is $PY_VERSION" && \
-            if [ "$PY_VERSION" = "37" ]; \
-            then export SCND_VERSION="${PY_VERSION}m"; \
-            else export SCND_VERSION="$PY_VERSION"; fi && \
-            echo "Exporting path /opt/python/cp$PY_VERSION-cp$SCND_VERSION/bin" && \
-            export PATH=/opt/python/cp$PY_VERSION-cp$SCND_VERSION/bin/:$PATH && \
-            /opt/python/cp38-cp38/bin/python -m venv venv && \
-            if [ ! -f "activate" ]; then ln -s venv/bin/activate; fi && \
-            . ./activate && \
-            pip install --upgrade pip
-          '
         docker run --rm -v $(pwd):/io ghcr.io/pyo3/maturin:v1.1.0 build --release --strip --manylinux 2014
         # Refresh in case any ownerships changed.
         mv target target.docker && cp -r target.docker target
@@ -91,19 +71,14 @@ jobs:
 
     - name: Build Windows with maturin on Python ${{ matrix.python }}
       if: startsWith(matrix.os, 'windows')
-      shell: bash
       run: |
-        python -m venv venv
-        cp venv/Scripts/activate .
-        . ./activate
         maturin build -i python --release --strip
         # Find and install the newly built wheel
-        python support/wheelname.py
+        pip install --no-index --find-links target/wheels/ clvm_tools_rs
 
     - name: Install clvm_tools_rs wheel
       if: ${{ !startsWith(matrix.os, 'windows') }}
       run: |
-        . ./activate
         ls target/wheels/
         # this mess puts the name of the `.whl` file into `$WHEEL_PATH`
         # remove the dot, use the `glob` lib to grab the file from the directory
@@ -113,13 +88,11 @@ jobs:
 
     - name: Install other wheels
       run: |
-        . ./activate
         python -m pip install pytest
         python -m pip install blspy
 
     - name: install clvm & clvm_tools
       run: |
-        . ./activate
         git clone https://github.com/Chia-Network/clvm.git --branch=main --single-branch
         python -m pip install ./clvm
 
@@ -134,7 +107,6 @@ jobs:
 
     - name: Ensure clvm, clvm_rs, clvm_tools_rs are installed
       run: |
-        . ./activate
         python -c 'import clvm'
         python -c 'import clvm; print(clvm.__file__)'
         python -c 'import clvm_rs; print(clvm_rs.__file__)'
@@ -143,31 +115,35 @@ jobs:
 
     # Test cldb output both run from python and via its command line tool.
     - name: "Run step run tests"
-      shell: bash
       run: |
-        . ./activate
         cargo build
-        pip install .
+        # This finds and installs a compatible wheel from the target directory on linux.
+        # We do it here as a hedge against changes in the python environment that might
+        # have happened due to pulling in the trunk versions of other packages that
+        # depend on clvm_tools_rs.
+        pip install --no-index --find-links target/wheels/ clvm_tools_rs
         pip install clvm_rs
         pip install clvm_tools
-        cd resources/tests && \
-        python test_clvm_step.py && \
+        cd resources/tests
+        python test_clvm_step.py
         python mandelbrot-cldb.py
+        python test_compile_from_string.py
+        python test_binutils_api.py
 
     - name: "Test step run with mandelbrot, setting print only"
-      shell: bash
       run: |
-        . ./activate
-        python ./resources/tests/lib/steprun.py ./resources/tests/mandelbrot/mandelbrot.clvm.hex resources/tests/mandelbrot/mand_args.txt ./resources/tests/mandelbrot/mandelbrot.sym > /tmp/mand_output.txt
-        # Fail if the output differs.
-        diff -s -q /tmp/mand_output.txt ./resources/tests/mandelbrot/mand_test.txt
+        python ./resources/tests/lib/steprun.py ./resources/tests/mandelbrot/mandelbrot.clvm.hex resources/tests/mandelbrot/mand_args.txt ./resources/tests/mandelbrot/mandelbrot.sym > mand_output.txt
+        # git diff invoked this way returns 0 (as /bin/true) if there is no difference or 1 if there is.
+        git diff --no-index -s --quiet -- mand_output.txt ./resources/tests/mandelbrot/mand_test.txt
+        # Remove file in a compatible way using git as a general tool
+        git add mand_output.txt
+        git rm --force mand_output.txt
 
 
     - name: Verify recompilation of old sources match with new compiler
       if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.8')
       run: |
         set -x
-        . ./activate
         # Build cmd line tools
         PYO3_PYTHON=`which python` cargo build --release
 
@@ -179,7 +155,7 @@ jobs:
         cp support/install_deps.sh support/verify_compiler_version.sh chia-blockchain
         (cd chia-blockchain && python -m venv venv && . venv/bin/activate && pip install --upgrade pip && \
           python -m pip install maturin==1.1.0 && \
-          cd .. && python support/wheelname.py && \
+          cd .. && pip install --no-index --find-links target/wheels/ clvm_tools_rs && \
           cd chia-blockchain && \
           # deps for manage_clvm.py
           pip install click typing_extensions chia_rs clvm && \
@@ -191,42 +167,38 @@ jobs:
       run: |
         python -m pip install pytest
         # This script installs the wheel built during this workflow.
-        python support/wheelname.py
+        pip install --no-index --find-links wheel/target/wheels/ clvm_tools_rs
         # TODO: bring in the other tests in resources/tests/cmdline/tests besides cmds_test.py
         (cd resources/tests/cmdline/tests && py.test cmds_test.py )
 
     - name: Verify recompilation of cl21 sources
       if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.8')
       run: |
-        . ./activate
         # We need chia-rs for the following.
         pip install chia-rs
         # Ensure we're using the sources we have.  This is a hedge against
         # changes made by any other step doing operations on pip.
         # This script installs the wheel built during this workflow.
-        python support/wheelname.py
+        pip install --no-index --find-links wheel/target/wheels/ clvm_tools_rs
         (cd resources/tests && python check-recompiles.py)
 
     - name: Verify recompilation follows date and modification rules
       if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.8')
       run: |
-        python support/wheelname.py
+        pip install --no-index --find-links wheel/target/wheels/ clvm_tools_rs
         python resources/tests/test-clvm-recompile-behavior.py
 
     - name: Install pytest
       run: |
-        . ./activate
         pip install pytest pytest-asyncio
 
     - name: Run tests from clvm
       run: |
-        . ./activate
         cd clvm
         pytest tests
 
     - name: Run tests from clvm_tools
       run: |
-        . ./activate
         cd clvm_tools
         pytest tests
 
@@ -282,6 +254,13 @@ jobs:
       with:
         name: wheels
         path: ./target/wheels/
+
+    - name: Check for incompatible wheels and bail if found
+      run: |
+        set -e
+        # Check for a wheel with -linux_x86_64 platform tag, which will
+        # fail uploading to pypi.
+        find target -name \*-linux_x86_64.whl -exec /bin/false '{}' '+'
 
     - name: Publish distribution to PyPI
       if: env.RELEASE == 'true'

@@ -490,7 +490,7 @@ fn is_quote_atom(h: Rc<SExp>) -> bool {
     match_atom_to_prim(vec![b'q'], 1, h)
 }
 
-fn is_apply_atom(h: Rc<SExp>) -> bool {
+pub fn is_apply_atom(h: Rc<SExp>) -> bool {
     match_atom_to_prim(vec![b'a'], 2, h)
 }
 

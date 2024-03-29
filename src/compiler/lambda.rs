@@ -65,7 +65,7 @@ fn make_operator(loc: Srcloc, op: u8, arg1: Rc<BodyForm>, arg2: Rc<BodyForm>) ->
     )
 }
 
-fn make_cons(loc: Srcloc, arg1: Rc<BodyForm>, arg2: Rc<BodyForm>) -> BodyForm {
+pub fn make_cons(loc: Srcloc, arg1: Rc<BodyForm>, arg2: Rc<BodyForm>) -> BodyForm {
     make_operator(loc, 4, arg1, arg2)
 }
 
@@ -129,12 +129,13 @@ pub fn lambda_codegen(name: &[u8], ldata: &LambdaData) -> BodyForm {
 
 pub fn handle_lambda(
     opts: Rc<dyn CompilerOpts>,
+    site_loc: Srcloc,
     kw_loc: Option<Srcloc>,
     v: &[SExp],
 ) -> Result<BodyForm, CompileErr> {
     if v.len() < 2 {
         return Err(CompileErr(
-            v[0].loc(),
+            site_loc,
             "Must provide at least arguments and body to lambda".to_string(),
         ));
     }

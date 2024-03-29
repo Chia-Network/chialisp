@@ -1,0 +1,12 @@
+(mod (X)
+  (include *standard-cl-23*)
+
+  ;; (+ X 1) should be an eliminated subexpression but it doesn't dominate the
+  ;; condition.
+  (let ((Z X))
+    (if X
+      (* (+ Z 1) (+ Z 1) (+ Z 1) (+ X 1) (+ X 1) (+ X 1))
+      17
+      )
+    )
+  )

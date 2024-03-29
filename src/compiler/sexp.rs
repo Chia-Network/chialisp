@@ -9,7 +9,6 @@ use std::borrow::Borrow;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
-use std::string::String;
 
 use binascii::{bin2hex, hex2bin};
 use num_traits::{zero, Num};
@@ -41,9 +40,11 @@ pub enum SExp {
     /// content of the list, but may not depending on the construction of the
     /// list.
     Cons(Srcloc, Rc<SExp>, Rc<SExp>),
-    ///
+    /// Contains an integer which is presented normalized.
     Integer(Srcloc, Number),
+    /// Contains a quoted string or hex constant to reproduce exactly.
     QuotedString(Srcloc, u8, Vec<u8>),
+    /// Contains an identifier like atom.
     Atom(Srcloc, Vec<u8>),
 }
 
@@ -136,7 +137,7 @@ impl Display for SExp {
                 formatter.write_str(&v.to_string())?;
             }
             SExp::QuotedString(_, q, s) => {
-                if printable(s) {
+                if printable(s, true) {
                     formatter.write_str("\"")?;
                     formatter.write_str(&escape_quote(*q, s))?;
                     formatter.write_str("\"")?;
@@ -153,7 +154,7 @@ impl Display for SExp {
             SExp::Atom(l, a) => {
                 if a.is_empty() {
                     formatter.write_str("()")?;
-                } else if printable(a) {
+                } else if printable(a, false) {
                     formatter.write_str(&decode_string(a))?;
                 } else {
                     formatter
@@ -357,14 +358,12 @@ pub fn decode_string(v: &[u8]) -> String {
     return String::from_utf8_lossy(v).as_ref().to_string();
 }
 
-pub fn printable(a: &[u8]) -> bool {
-    for ch in a.iter() {
-        if (*ch as char).is_control() || !(*ch as char).is_ascii() {
-            return false;
-        }
-    }
-
-    true
+pub fn printable(a: &[u8], quoted: bool) -> bool {
+    !a.iter().any(|ch| {
+        (*ch as char).is_control()
+            || !(*ch as char).is_ascii()
+            || (!quoted && ch.is_ascii_whitespace())
+    })
 }
 
 impl SExp {
@@ -1081,6 +1080,10 @@ pub enum Atom<T> {
     Here(T),
 }
 
+pub enum AtomValue<T> {
+    Here(T),
+}
+
 pub trait SelectNode<T, E> {
     fn select_nodes(&self, s: Rc<SExp>) -> Result<T, E>;
 }
@@ -1111,6 +1114,61 @@ impl SelectNode<Srcloc, (Srcloc, String)> for Atom<&str> {
         }
 
         Err((s.loc(), format!("Not an atom named {name}")))
+    }
+}
+
+impl<const N: usize> SelectNode<Srcloc, (Srcloc, String)> for AtomValue<&[u8; N]> {
+    fn select_nodes(&self, s: Rc<SExp>) -> Result<Srcloc, (Srcloc, String)> {
+        let AtomValue::Here(name) = self;
+        match s.borrow() {
+            SExp::Nil(l) => {
+                if name.is_empty() {
+                    return Ok(l.clone());
+                }
+            }
+            SExp::Atom(l, n) => {
+                if n == name {
+                    return Ok(l.clone());
+                }
+            }
+            SExp::QuotedString(l, _, n) => {
+                if n == name {
+                    return Ok(l.clone());
+                }
+            }
+            SExp::Integer(l, i) => {
+                if &u8_from_number(i.clone()) == name {
+                    return Ok(l.clone());
+                }
+            }
+            _ => {}
+        }
+
+        Err((s.loc(), format!("Not an atom with content {name:?}")))
+    }
+}
+
+impl SelectNode<(Srcloc, Vec<u8>), (Srcloc, String)> for AtomValue<()> {
+    fn select_nodes(&self, s: Rc<SExp>) -> Result<(Srcloc, Vec<u8>), (Srcloc, String)> {
+        let AtomValue::Here(name) = self;
+        match s.borrow() {
+            SExp::Nil(l) => {
+                return Ok((l.clone(), vec![]));
+            }
+            SExp::Atom(l, n) => {
+                return Ok((l.clone(), n.clone()));
+            }
+            SExp::QuotedString(l, _, n) => {
+                return Ok((l.clone(), n.clone()));
+            }
+            SExp::Integer(l, i) => {
+                let u8_vec = u8_from_number(i.clone());
+                return Ok((l.clone(), u8_vec));
+            }
+            _ => {}
+        }
+
+        Err((s.loc(), format!("Not an atom with content {name:?}")))
     }
 }
 

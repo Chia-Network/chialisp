@@ -1,6 +1,5 @@
 extern crate clvmr as clvm_rs;
 
-use ::serde_json;
 use std::env;
 use std::rc::Rc;
 

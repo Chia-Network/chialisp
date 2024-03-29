@@ -1,0 +1,61 @@
+;; Adapted from: https://rosettacode.org/wiki/Babbage_problem#Scheme
+(mod (N)
+  (include *standard-cl-23*)
+
+  (defun digits_ (result n)
+    (assign
+      (d . r) (divmod n 10)
+      (if d
+        (digits_ (c r result) d)
+        (c r result)
+        )
+      )
+    )
+
+  (defun digits (n) (if n (digits_ () n) ()))
+
+  (defun reverse_ (result lst)
+    (if lst
+      (reverse_ (c (f lst) result) (r lst))
+      result
+      )
+    )
+
+  (defun reverse (lst) (reverse_ () lst))
+
+  (defun starts-with (lst prefix)
+    (if prefix
+      (if lst
+        (if (= (f prefix) (f lst))
+          (starts-with (r lst) (r prefix))
+          ()
+          )
+        ()
+        )
+      1
+      )
+    )
+
+  (defun ends-with (lst tail)
+    ;; does list end with tail?
+    (starts-with (reverse lst) (reverse tail))
+    )
+
+  (defun loop (start fun)
+    (let ((res (a fun (list start))))
+      (if res
+        (f res)
+        (loop (+ 1 start) fun)
+        )
+      )
+    )
+
+  (loop 1
+    (lambda ((& N) idx)
+      (if (ends-with (digits (* idx idx)) (digits N))
+        (list idx)
+        ()
+        )
+      )
+    )
+  )

@@ -189,7 +189,7 @@ pub fn call_tool(
         return Ok(());
     }
 
-    let args_path_or_code_val = match args.get(&"path_or_code".to_string()) {
+    let args_path_or_code_val = match args.get("path_or_code") {
         None => ArgumentValue::ArgArray(vec![]),
         Some(v) => v.clone(),
     };
@@ -209,7 +209,7 @@ pub fn call_tool(
                 let conv_result = task.conv.invoke(allocator, &s)?;
                 let sexp = *conv_result.first();
                 let text = conv_result.rest();
-                if args.contains_key(&"script_hash".to_string()) {
+                if args.contains_key("script_hash") {
                     let data: Vec<u8> = sha256tree(allocator, sexp).hex().bytes().collect();
                     stream.write(Bytes::new(Some(BytesFromType::Raw(data))));
                 } else if !text.is_empty() {
@@ -719,7 +719,7 @@ pub fn cldb(args: &[String]) {
         Box::new(CldbNoOverride::new_symbols(use_symbol_table.clone())),
     );
 
-    if parsed_args.get("tree").is_some() {
+    if parsed_args.contains_key("tree") {
         let result = cldb_hierarchy(
             runner,
             Rc::new(prim_map),
@@ -761,9 +761,9 @@ pub fn cldb(args: &[String]) {
                     only_print.insert("Print".to_string(), YamlElement::String(p.clone()));
                     output.push(only_print);
                 } else {
-                    let is_final = result.get("Final").is_some();
-                    let is_throw = result.get("Throw").is_some();
-                    let is_failure = result.get("Failure").is_some();
+                    let is_final = result.contains_key("Final");
+                    let is_throw = result.contains_key("Throw");
+                    let is_failure = result.contains_key("Failure");
                     if is_final || is_throw || is_failure {
                         print_tree(&mut output, &result);
                     }
@@ -1298,7 +1298,7 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
         emit_symbol_output = true;
     }
 
-    if parsed_args.get("table").is_some() {
+    if parsed_args.contains_key("table") {
         emit_symbol_output = true;
     }
 
@@ -1356,14 +1356,14 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
         let use_filename = input_file.unwrap_or_else(|| "*command*".to_string());
         let opts = Rc::new(DefaultCompilerOpts::new(&use_filename))
             .set_dialect(dialect.unwrap_or_default())
-            .set_optimize(do_optimize)
+            .set_optimize(do_optimize || stepping > 22)
             .set_search_paths(&search_paths)
-            .set_frontend_opt(stepping > 21)
+            .set_frontend_opt(stepping == 22)
             .set_disassembly_ver(get_disassembly_ver(&parsed_args));
         let mut symbol_table = HashMap::new();
 
         // Short circuit preprocessing display.
-        if parsed_args.get("preprocess").is_some() {
+        if parsed_args.contains_key("preprocess") {
             if let Err(e) = perform_preprocessing(stdout, opts, &use_filename, &input_program) {
                 stdout.write_str(&format!("{}: {}", e.0, e.1));
             }
@@ -1561,7 +1561,7 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
             let result = run_program_result.1;
             let time_done = SystemTime::now();
 
-            if parsed_args.get("cost").is_some() {
+            if parsed_args.contains_key("cost") {
                 if cost > 0 {
                     cost += cost_offset;
                 }
@@ -1569,7 +1569,7 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
             };
 
             if let Some(ArgumentValue::ArgBool(true)) = parsed_args.get("time") {
-                if parsed_args.get("hex").is_some() {
+                if parsed_args.contains_key("hex") {
                     stdout.write_str(&format!(
                         "read_hex: {}\n",
                         time_read_hex
@@ -1651,7 +1651,7 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
         .unwrap_or_else(|| false);
 
     if emit_symbol_output {
-        if parsed_args.get("table").is_some() {
+        if parsed_args.contains_key("table") {
             trace_to_table(
                 &mut allocator,
                 stdout,

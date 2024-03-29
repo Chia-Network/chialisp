@@ -1,0 +1,15 @@
+;; This program should ideally become very terse when compiled since everything
+;; is constant in it, which means we won't necessarily get a runnable program
+;; from chialisp compilation.
+;;
+;; This is used as one test for --test-deinline.
+(mod ()
+  (include *standard-cl-22*)
+  (include utility_macros.clib)
+  (defun-inline test-me (X) (* 3 X))
+  (assert
+   (= (test-me 5) 15)
+   (= (test-me 0) 0)
+   ()
+   )
+  )

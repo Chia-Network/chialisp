@@ -1,0 +1,13 @@
+(mod (word)
+  (include *standard-cl-23*)
+
+  (defconst *blocks* (4 (c "B" "O") (4 (c "X" "K") (4 (c "D" "Q") (4 (c "C" "P") (4 (c "N" "A") (4 (c "G" "T") (4 (c "R" "E") (4 (c "T" "G") (4 (c "Q" "D") (4 (c "F" "S") (4 (c "J" "W") (4 (c "H" "U") (4 (c "V" "I") (4 (c "A" "N") (4 (c "O" "B") (4 (c "E" "R") (4 (c "F" "S") (4 (c "L" "Y") (4 (c "P" "C") (4 (c "Z" "M") ())))))))))))))))))))))
+
+  (defun-inline block-member (e_$_420 s_$_421) (logior (= e_$_420 (f s_$_421)) (= e_$_420 (r s_$_421))))
+  (defun exists (p?_$_428 li_$_429) (a (i li_$_429 (com (a (i (a p?_$_428 (4 (f li_$_429) ())) (com 1) (com (exists p?_$_428 (r li_$_429)))) @)) (com ())) @))
+  (defun remove-one (x_$_430 li_$_431) (a (i (not li_$_431) (com 1) (com (a (i (a (i (= (f (f li_$_431)) (f x_$_430)) (com (= (r (f li_$_431)) (r x_$_430))) (com ())) @) (com (r li_$_431)) (com (c (f li_$_431) (remove-one x_$_430 (r li_$_431))))) @))) @))
+  (defun can-make-list? (li_$_432 blocks_$_433) (a (i (not li_$_432) (com 1) (com (exists (lambda ((& li_$_432 blocks_$_433) block_$_434) (a (i (block-member (f li_$_432) block_$_434) (com (can-make-list? (r li_$_432) (remove-one block_$_434 blocks_$_433))) (com ())) @)) blocks_$_433))) @))
+  (defun can-make-word? (word_$_435) (can-make-list? word_$_435 *blocks*)) (defun wordify (W_$_436) (a (i W_$_436 (com (c (substr W_$_436 () 1) (wordify (substr W_$_436 1)))) (com ())) @))
+
+  (can-make-word? (wordify word))
+  )

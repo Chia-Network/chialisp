@@ -1,7 +1,12 @@
 use std::collections::HashMap;
 use std::fs;
+use std::rc::Rc;
 
-use crate::classic::clvm_tools::clvmc::compile_clvm;
+use clvmr::Allocator;
+
+use crate::classic::clvm_tools::clvmc::{compile_clvm, compile_clvm_text};
+use crate::compiler::compiler::DefaultCompilerOpts;
+use crate::compiler::comptypes::CompilerOpts;
 use crate::tests::classic::run::read_json_from_file;
 
 #[test]
@@ -49,4 +54,55 @@ fn test_compile_clvm_with_previous_data() {
     )
     .expect("should compile");
     fs::remove_file(bridge_hex_file).expect("should have existed");
+}
+
+#[test]
+fn test_classic_compile_error_output() {
+    let mut allocator = Allocator::new();
+    let mut symbols = HashMap::new();
+    let path = "*test*";
+    let content = "(mod (X) (xxx X))";
+    let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(path));
+    let res = compile_clvm_text(
+        &mut allocator,
+        opts.clone(),
+        &mut symbols,
+        &content,
+        &path,
+        true,
+    )
+    .map_err(|e| e.format(&allocator, opts));
+    assert_eq!(
+        Err(
+            "error can't compile (\"xxx\" 88), unknown operator compiling (\"xxx\" 88)".to_string()
+        ),
+        res
+    );
+}
+
+#[test]
+fn test_modern_compile_error_output() {
+    let mut allocator = Allocator::new();
+    let mut symbols = HashMap::new();
+    let path = "*test*";
+    let content = indoc! {
+    "(mod (X)
+           (include *standard-cl-23*)
+           (+ X1 X)
+           )
+        "};
+    let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(path));
+    let res = compile_clvm_text(
+        &mut allocator,
+        opts.clone(),
+        &mut symbols,
+        &content,
+        &path,
+        true,
+    )
+    .map_err(|e| e.format(&allocator, opts));
+    assert_eq!(
+        Err("*test*(3):4-*test*(3):6: Unbound use of X1 as a variable name".to_string()),
+        res
+    );
 }

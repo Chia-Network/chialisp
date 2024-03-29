@@ -1,0 +1,6 @@
+(mod (A B)
+  (include *standard-cl-23*)
+  (defun letbinding_$_51 ((X_$_46 Y_$_47) cse_$_50) (list X_$_46 Y_$_47 cse_$_50))
+  (defun F (X_$_46 Y_$_47) (letbinding_$_51 (r @) (* X_$_46 Y_$_47)))
+  (F A B)
+  )

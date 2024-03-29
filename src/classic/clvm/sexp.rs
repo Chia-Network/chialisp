@@ -1,7 +1,6 @@
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::rc::Rc;
-use std::string::String;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::reduction::EvalErr;

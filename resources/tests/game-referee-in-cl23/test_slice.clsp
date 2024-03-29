@@ -1,0 +1,14 @@
+(mod ()
+  (include *standard-cl-23*)
+  (include print.clinc)
+  (include range.clinc)
+  (include deep_compare.clinc)
+  (include slice.clinc)
+  (include assert.clinc)
+
+  (assert
+   (deep= (range 3) (slice (range 5) 3))
+   (deep= (range 5) (slice (range 5) 5))
+   0
+   )
+  )

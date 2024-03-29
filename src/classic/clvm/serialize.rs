@@ -14,7 +14,6 @@ leading bits is the count of bytes to read of size
  */
 
 use std::rc::Rc;
-use std::vec::Vec;
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, Stream};
 use crate::classic::clvm::as_rust::{TToSexpF, TValStack};

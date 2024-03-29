@@ -1,6 +1,6 @@
 [package]
 name = "clvm_tools_wasm"
-version = "0.1.39"
+version = "0.1.41"
 edition = "2018"
 authors = ["Art Yerkes <art.yerkes@gmail.com>"]
 description = "tools for working with chialisp language; compiler, repl, python and wasm bindings"
