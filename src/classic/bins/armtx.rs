@@ -14,7 +14,9 @@ use std::thread;
 use std::rc::Rc;
 
 use argh::FromArgs;
+use armv4t_emu::{reg, Cpu, ExampleMem, Mode, Memory};
 use clvmr::Allocator;
+use elfloader::*;
 use elf_rs::{Elf, ProgramHeaderFlags, ProgramType};
 use faerie::{ArtifactBuilder, Decl, Link, SectionKind};
 use gimli::{Encoding, Format, LineEncoding, LittleEndian};
@@ -1608,7 +1610,69 @@ struct Args {
     pub env: String,
 }
 
+struct PagedMemory {
+    pages: HashMap<u64, Vec<u8>>
+}
+
+
+
+struct ElfLoadedInEmu<'a> {
+    elf_bin: &'a [u8],
+    vbase: u64,
+    memory: &'a mut PagedMemory,
+}
+
+impl<'a> ElfLoader for ElfLoadedInEmu<'a> {
+    fn allocate(&mut self, load_headers: LoadableHeaders) -> Result<(), ElfLoaderErr> {
+        for header in load_headers {
+            eprintln!(
+                "allocate base = {:#x} size = {:#x} flags = {}",
+                header.virtual_addr(),
+                header.mem_size(),
+                header.flags()
+            );
+        }
+        Ok(())
+    }
+
+    fn relocate(&mut self, entry: RelocationEntry) -> Result<(), ElfLoaderErr> {
+        let addr: *mut u64 = (self.vbase + entry.offset) as *mut u64;
+
+        todo!();
+    }
+
+    fn load(&mut self, flags: Flags, base: VAddr, region: &[u8]) -> Result<(), ElfLoaderErr> {
+        let start = self.vbase + base;
+        let end = self.vbase + base + region.len() as u64;
+        eprintln!("load region into = {:#x} -- {:#x}", start, end);
+        todo!();
+        Ok(())
+    }
+
+    fn tls(
+        &mut self,
+        tdata_start: VAddr,
+        _tdata_length: u64,
+        total_size: u64,
+        _align: u64
+    ) -> Result<(), ElfLoaderErr> {
+        let tls_end = tdata_start +  total_size;
+        eprintln!("Initial TLS region is at = {:#x} -- {:#x}", tdata_start, tls_end);
+        todo!();
+        Ok(())
+    }
+}
+
 fn spin_up_emulation(signal_emu_startup_complete: Sender<()>, elf_bin: &[u8]) {
+    let mut mem = ExampleMem::new_with_data(elf_bin);
+    let mut cpu = Cpu::new();
+
+    let base_addr: u32 = 0x100000;
+    cpu.reg_set(Mode::User, reg::PC, base_addr);
+    cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+
+    
+
     todo!();
 }
 

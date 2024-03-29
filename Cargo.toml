@@ -44,6 +44,7 @@ target-lexicon = "0.11.1"
 elf_rs = "0.3.1"
 elfloader = "0.16.0"
 subprocess = "0.2.9"
+armv4t_emu = "0.1.0"
 
 [dependencies.pyo3]
 version = "0.14.2"
