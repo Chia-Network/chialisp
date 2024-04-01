@@ -142,7 +142,12 @@ impl TargetMemory for PagedMemory {
         }
     }
     fn write_i32(&mut self, target_addr: u32, value: i32) {
-        todo!();
+        let stripped = (value & 0x7fffffff) as u32;
+        if value < 0 {
+            self.write_u32(target_addr, stripped | 0x80000000);
+        } else {
+            self.write_u32(target_addr, stripped);
+        }
     }
     fn write_u32(&mut self, target_addr: u32, value: u32) {
         self.w32(target_addr, value);

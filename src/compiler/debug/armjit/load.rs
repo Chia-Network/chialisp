@@ -157,16 +157,16 @@ impl<'a> ElfLoader<'a> {
         match r.kind() {
             Some(ElfRelaType::R_ARM_ABS32) => {
                 // R_ARM_ABS32 = S + A
-                let val_S = symbols[r.sym()].st_value;
+                let val_S = symbols[r.sym()].st_value as i32;
                 let val_A = r.addend;
                 eprintln!("S {val_S} A {val_A}");
                 let final_value =
                     if val_A < 0 {
-                        val_S - (-val_A as u32)
+                        val_S - -val_A
                     } else {
-                        val_S + val_A as u32
+                        val_S + val_A
                     };
-                memory.write_u32(reloc_at_addr, final_value);
+                memory.write_i32(reloc_at_addr, final_value);
             }
             Some(ElfRelaType::R_ARM_LDR_PC_G0) => {
                 // AKA R_ARM_PC13 = S - P + A
