@@ -32,7 +32,9 @@ use clvm_tools_rs::compiler::clvm::{sha256tree, truthy};
 use clvm_tools_rs::compiler::comptypes::CompilerOpts;
 use clvm_tools_rs::compiler::compiler::{DefaultCompilerOpts, compile_file};
 use clvm_tools_rs::compiler::debug::build_symbol_table_mut;
-use clvm_tools_rs::compiler::debug::armjit::code::Program;
+use clvm_tools_rs::compiler::debug::armjit::code::{Program, TARGET_ADDR};
+use clvm_tools_rs::compiler::debug::armjit::emu::Emu;
+use clvm_tools_rs::compiler::debug::armjit::emu_stub::{run_stub, start_stub};
 use clvm_tools_rs::compiler::debug::armjit::load::ElfLoader;
 use clvm_tools_rs::compiler::debug::armjit::memory::PagedMemory;
 use clvm_tools_rs::compiler::dialect::AcceptedDialect;
@@ -59,17 +61,11 @@ struct Args {
 }
 
 fn spin_up_emulation(signal_emu_startup_complete: Sender<()>, elf_bin: &[u8]) {
-    let mut cpu = Cpu::new();
-
-    let mut base_addr: u32 = 0x100000;
-    cpu.reg_set(Mode::User, reg::PC, base_addr);
-    cpu.reg_set(Mode::User, reg::CPSR, 0x10);
-
-    let mut memory = PagedMemory::default();
-    let loader = ElfLoader::new(elf_bin).expect("should load");
-    loader.load(&mut memory, base_addr);
-
-    todo!();
+    // Tiny start.
+    let mut emu = Emu::new(elf_bin, TARGET_ADDR).expect("should have elf");
+    let mut connection = start_stub().expect("should start service");
+    signal_emu_startup_complete.send(()).expect("should send");
+    run_stub(connection, &mut emu).expect("should run"); // Until exit.
 }
 
 fn main() {
@@ -127,10 +123,8 @@ fn main() {
     ).expect("should generate");
 
     let mut elf_out = program.to_elf(&args.output).expect("should be writable");
-
-    // Change ET_REL to ET_EXEC
-    elf_out[16] = 2;
-
+    // copy all in-memory sections from the ELF file into system RAM
+    let mut elf_loader = ElfLoader::new(&elf_out, TARGET_ADDR).expect("should load");
     fs::write(&args.output, &elf_out).expect("should be able to write file");
     let (signal_emu_startup_complete, emu_startup_complete) = mpsc::channel();
 
@@ -142,7 +136,7 @@ fn main() {
 
     let _ = emu_startup_complete.recv().expect("should be able to start emu");
     // Startup done, so we can spawn gdb.
-    let mut p = Popen::create(&["gdb-multiarch"], PopenConfig {
+    let mut p = Popen::create(&["sleep", "5000"], PopenConfig {
         .. Default::default()
     }).expect("should be able to start gdb");
     t.join().expect("thread should join successfully");

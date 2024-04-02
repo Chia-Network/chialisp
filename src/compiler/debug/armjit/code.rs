@@ -12,13 +12,15 @@ use std::str::FromStr;
 use faerie::{ArtifactBuilder, Decl, Link, SectionKind};
 use gimli;
 use gimli::{Encoding, Format, LineEncoding};
-use gimli::write::{Address, DirectoryId, Dwarf, FileId, LineProgram, LineString, Section, Sections, Unit, UnitId};
+use gimli::constants::DW_AT_low_pc;
+use gimli::write::{Address, Attribute, AttributeValue, DirectoryId, Dwarf, FileId, LineProgram, LineString, Location, LocationList, Range, RangeList, Section, Sections, Unit, UnitId};
 use target_lexicon::triple;
 use tempfile::NamedTempFile;
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
 use crate::classic::clvm::casts::bigint_to_bytes_clvm;
 use crate::compiler::clvm::{sha256tree, truthy};
+use crate::compiler::debug::armjit::load::{ElfLoader, write_u32};
 use crate::compiler::sexp::{Atom, NodeSel, SelectNode, SExp, ThisNode};
 use crate::compiler::srcloc::Srcloc;
 
@@ -29,6 +31,8 @@ const NEXT_ALLOC_OFFSET: i32 = 12;
 const SWI_THROW: usize = 0;
 const SWI_DISPATCH_NEW_CODE: usize = 1;
 const SWI_DISPATCH_INSTRUCTION: usize = 2;
+
+pub const TARGET_ADDR: u32 = 0x1000;
 
 //
 // Compile each program to clvm, then decompose into arm assembly.
@@ -559,7 +563,16 @@ impl DwarfBuilder {
         );
         file_to_id.insert(filename.clone(), (directory_id, file_id));
 
-        let unit = Unit::new(encoding, line_program);
+        let mut unit = Unit::new(encoding, line_program);
+
+        unit.ranges.add(RangeList(vec![
+            Range::BaseAddress { address: Address::Constant(TARGET_ADDR as u64) }
+        ]));
+        unit.locations.add(LocationList(vec![
+            Location::BaseAddress { address: Address::Constant(TARGET_ADDR as u64) }
+        ]));
+        let unit_ent = unit.get_mut(unit.root());
+        unit_ent.set(DW_AT_low_pc, AttributeValue::Address(Address::Constant(TARGET_ADDR as u64)));
 
         let unit_id = dwarf.units.add(unit);
 
@@ -637,7 +650,7 @@ impl DwarfBuilder {
     fn start(&mut self, addr: usize) {
         let unit = self.dwarf.units.get_mut(self.unit_id);
         self.seq_addr_start = addr;
-        unit.line_program.begin_sequence(Some(Address::Constant(addr as u64)));
+        unit.line_program.begin_sequence(Some(Address::Constant((addr + TARGET_ADDR as usize) as u64)));
     }
 
     fn end(&mut self, addr: usize) {
@@ -1516,6 +1529,19 @@ impl Program {
         reread_file.seek(SeekFrom::Start(0)).map_err(|e| format!("seek {e:?}"))?;
         let mut result_buf = Vec::new();
         reread_file.read_to_end(&mut result_buf).map_err(|e| format!("capture {e:?}"))?;
+
+        // Patch up
+        let create_patches = |result_buf: &mut [u8]| {
+            let elf_loader = ElfLoader::new(result_buf, TARGET_ADDR).expect("should load");
+            elf_loader.patch_sections()
+        };
+
+        let patches = create_patches(&mut result_buf);
+
+        for (target, value) in patches.into_iter() {
+            write_u32(&mut result_buf, target, value);
+        }
+
         Ok(result_buf)
     }
 

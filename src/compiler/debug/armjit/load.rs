@@ -3,6 +3,8 @@ use elf_rs::*;
 
 use crate::compiler::debug::armjit::memory::{NEG, TargetMemory};
 
+use crate::compiler::sexp::decode_string;
+
 const PC13_MASK: u32 = (1 << 13) - 1;
 
 #[derive(Debug, Clone)]
@@ -22,8 +24,10 @@ struct ElfRela {
     addend: i32,
 }
 
+#[derive(Debug, Clone)]
 enum ElfRelaType {
     R_ARM_ABS32,
+    R_ARM_JMP,
     R_ARM_LDR_PC_G0,
 }
 
@@ -73,7 +77,7 @@ fn read_i32(content: &[u8], offset: usize) -> i32 {
     }
 }
 
-fn write_u32(content: &mut [u8], offset: usize, value: u32) {
+pub fn write_u32(content: &mut [u8], offset: usize, value: u32) {
     content[offset] = (value & 0xff) as u8;
     content[offset + 1] = ((value >> 8) & 0xff) as u8;
     content[offset + 2] = ((value >> 16) & 0xff) as u8;
@@ -132,14 +136,72 @@ fn read_sym_content(content: &[u8], entry_size: usize) -> Vec<ElfSym> {
 }
 
 pub struct ElfLoader<'a> {
+    elf_bytes: &'a [u8],
     elf: Elf<'a>,
+    target_addr: u32,
+    sections: Vec<u32>,
+    relocs: ElfRelocations,
+    symbols: Vec<ElfSym>,
 }
 
 impl<'a> ElfLoader<'a> {
-    pub fn new(elf_bytes: &'a [u8]) -> Result<Self, Error> {
-        Ok(ElfLoader {
-            elf: Elf::from_bytes(&elf_bytes)?
-        })
+    pub fn new(elf_bytes: &'a [u8], target_addr: u32) -> Result<Self, Error> {
+        let mut loader = ElfLoader {
+            elf_bytes,
+            elf: Elf::from_bytes(&elf_bytes)?,
+            target_addr,
+            sections: Vec::new(),
+            relocs: ElfRelocations {
+                rela: BTreeMap::default()
+            },
+            symbols: Vec::new()
+        };
+
+        let mut section_addr = target_addr;
+        for (i, s) in loader.elf.section_header_iter().enumerate() {
+            if s.flags().contains(SectionHeaderFlags::SHF_ALLOC) {
+                loader.sections.push(section_addr);
+                eprintln!("{i} {s:?}");
+                eprintln!("load section {} at {section_addr:08x}", i);
+                section_addr += s.size() as u32;
+            } else {
+                loader.sections.push(0);
+            }
+
+            if matches!(s.sh_type(), SectionType::SHT_RELA) {
+                if let Some(content) = s.content() {
+                    let content = read_reloc_content(content, s.entsize() as usize);
+                    let target_usize = s.info() as usize;
+                    loader.relocs.rela.insert(target_usize, ElfRelaSection {
+                        content,
+                        target: target_usize
+                    });
+                }
+            } else if matches!(s.sh_type(), SectionType::SHT_SYMTAB) {
+                if let Some(content) = s.content() {
+                    if !loader.symbols.is_empty() {
+                        todo!();
+                    }
+                    loader.symbols = read_sym_content(content, s.entsize() as usize);
+                }
+            }
+        }
+
+        Ok(loader)
+    }
+
+    // Set all section addresses to those computed at load time and set the
+    // type to executable.
+    pub fn patch_sections(&self) -> Vec<(usize, u32)> {
+        // Get the location of the section headers
+        let shoff = self.elf.elf_header().section_header_offset() as usize;
+        let shent = self.elf.elf_header().section_header_entry_size() as usize;
+
+        // 12 bytes into each section header is the section address.
+        self.sections.iter().enumerate().map(|(i,s)| {
+            let sh_addr = shoff + i * shent + 12;
+            (sh_addr, *s)
+        }).collect()
     }
 
     fn apply_reloc<M>(
@@ -152,26 +214,49 @@ impl<'a> ElfLoader<'a> {
         r: &ElfRela
     ) where M: TargetMemory {
         let reloc_at_addr = (sections[in_section] as u32) + r.offset;
-        eprintln!("R {in_section} {reloc_at_addr:08x} reloc {r:?}");
+        let existing_data = memory.read_u32(reloc_at_addr);
+        let kind_adv = r.kind();
 
-        match r.kind() {
+        // Hack: determine how faerie decides on a relocation type.
+        let kind =
+            if existing_data == 0 {
+                Some(ElfRelaType::R_ARM_ABS32)
+            } else if existing_data == 0xea000000 || existing_data == 0xeb000000 {
+                Some(ElfRelaType::R_ARM_JMP)
+            } else {
+                Some(ElfRelaType::R_ARM_LDR_PC_G0)
+            };
+
+        let symbol = &symbols[r.sym()];
+        eprintln!("R {kind:?} {symbol:?} {in_section} {reloc_at_addr:08x} reloc {r:?} = {existing_data:08x}");
+
+        match kind {
             Some(ElfRelaType::R_ARM_ABS32) => {
                 // R_ARM_ABS32 = S + A
-                let val_S = symbols[r.sym()].st_value as i32;
+                let val_S = (symbol.st_value + sections[symbol.st_shndx as usize]) as i32;
                 let val_A = r.addend;
-                eprintln!("S {val_S} A {val_A}");
                 let final_value =
                     if val_A < 0 {
                         val_S - -val_A
                     } else {
                         val_S + val_A
                     };
+                eprintln!("S {val_S:08x} A {val_A:08x} => {final_value:08x}");
                 memory.write_i32(reloc_at_addr, final_value);
+            }
+            Some(ElfRelaType::R_ARM_JMP) => {
+                // Straight signed 24.
+                let val_S = (symbol.st_value + sections[symbol.st_shndx as usize]) as i32;
+                let val_P = (sections[in_section] + r.offset) as i32;
+                let val_A = r.addend;
+                let final_value = ((((val_S - val_P + val_A) >> 2) & 0xffffff) as u32) | existing_data;
+                eprintln!("S {val_S:08x} P {val_P:08x} A {val_A:08x} => {final_value:08x}");
+                memory.write_u32(reloc_at_addr, existing_data | final_value);
             }
             Some(ElfRelaType::R_ARM_LDR_PC_G0) => {
                 // AKA R_ARM_PC13 = S - P + A
-                let val_S = symbols[r.sym()].st_value as i32;
-                let val_P = r.offset as i32;
+                let val_S = (symbol.st_value + sections[symbol.st_shndx as usize]) as i32;
+                let val_P = (sections[in_section] + r.offset) as i32;
                 let val_A = r.addend;
                 if r.addend >= -128 && r.addend < 127 {
                     // In range for simple encoding.
@@ -189,50 +274,22 @@ impl<'a> ElfLoader<'a> {
         }
     }
 
-    pub fn load<M>(&self, memory: &mut M, target_addr: u32) where M: TargetMemory {
-        let mut sections = Vec::new();
-        let mut relocs = ElfRelocations {
-            rela: BTreeMap::default()
-        };
-        let mut symbols = Vec::new();
-        let mut section_addr = target_addr;
-
+    pub fn load<M>(&self, memory: &mut M) where M: TargetMemory {
         // Collect relocation sections and set loaded data.
         for (i, s) in self.elf.section_header_iter().enumerate() {
+            let section_addr = self.sections[i];
             if s.flags().contains(SectionHeaderFlags::SHF_ALLOC) {
                 if let Some(content) = s.content() {
                     memory.write_data(content, section_addr);
                 }
-                sections.push(section_addr);
                 eprintln!("{i} {s:?}");
                 eprintln!("load section {} at {section_addr:08x}", i);
-                section_addr += s.size() as u32;
-            } else {
-                sections.push(0);
-            }
-
-            if matches!(s.sh_type(), SectionType::SHT_RELA) {
-                if let Some(content) = s.content() {
-                    let content = read_reloc_content(content, s.entsize() as usize);
-                    let target_usize = s.info() as usize;
-                    relocs.rela.insert(target_usize, ElfRelaSection {
-                        content,
-                        target: target_usize
-                    });
-                }
-            } else if matches!(s.sh_type(), SectionType::SHT_SYMTAB) {
-                if let Some(content) = s.content() {
-                    if !symbols.is_empty() {
-                        todo!();
-                    }
-                    symbols = read_sym_content(content, s.entsize() as usize);
-                }
             }
         }
 
-        for (rs, rd) in relocs.rela.iter() {
+        for (rs, rd) in self.relocs.rela.iter() {
             for r in rd.content.iter() {
-                self.apply_reloc(memory, target_addr, &sections, &symbols, *rs, r);
+                self.apply_reloc(memory, self.target_addr, &self.sections, &self.symbols, *rs, r);
             }
         }
     }

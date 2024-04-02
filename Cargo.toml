@@ -45,6 +45,8 @@ elf_rs = "0.3.1"
 subprocess = "0.2.9"
 armv4t_emu = "0.1.0"
 regex = "1.8.4"
+gdbstub = "0.7.1"
+gdbstub_arch = "0.3.0"
 
 [dependencies.pyo3]
 version = "0.20.2"
