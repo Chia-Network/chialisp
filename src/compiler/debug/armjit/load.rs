@@ -247,7 +247,7 @@ impl<'a> ElfLoader<'a> {
             Some(ElfRelaType::R_ARM_JMP) => {
                 // Straight signed 24.
                 let val_S = (symbol.st_value + sections[symbol.st_shndx as usize]) as i32;
-                let val_P = (sections[in_section] + r.offset) as i32;
+                let val_P = (sections[in_section] + r.offset + 4) as i32;
                 let val_A = r.addend;
                 let final_value = ((((val_S - val_P + val_A) >> 2) & 0xffffff) as u32) | existing_data;
                 eprintln!("S {val_S:08x} P {val_P:08x} A {val_A:08x} => {final_value:08x}");
@@ -256,7 +256,7 @@ impl<'a> ElfLoader<'a> {
             Some(ElfRelaType::R_ARM_LDR_PC_G0) => {
                 // AKA R_ARM_PC13 = S - P + A
                 let val_S = (symbol.st_value + sections[symbol.st_shndx as usize]) as i32;
-                let val_P = (sections[in_section] + r.offset) as i32;
+                let val_P = (sections[in_section] + r.offset + 4) as i32;
                 let val_A = r.addend;
                 if r.addend >= -128 && r.addend < 127 {
                     // In range for simple encoding.

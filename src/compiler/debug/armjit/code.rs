@@ -25,7 +25,6 @@ use crate::compiler::sexp::{Atom, NodeSel, SelectNode, SExp, ThisNode};
 use crate::compiler::srcloc::Srcloc;
 
 const ENV_PTR: i32 = 4;
-const STACK_TOP: i32 = 8;
 const NEXT_ALLOC_OFFSET: i32 = 12;
 
 const SWI_THROW: usize = 0;
@@ -283,7 +282,7 @@ impl ToU32 for Vec<Register> {
     fn to_u32(&self) -> u32 {
         let mut out: u32 = 0;
         for r in self.iter() {
-            out |= r.to_u32();
+            out |= 1 << r.to_u32();
         }
         out
     }
@@ -1197,11 +1196,7 @@ impl Program {
 
         // Note: get_code_label issues a fresh label for this hash every time.
         let body_label = self.get_code_label(&hash);
-        if !self.done_programs.contains(&body_label) {
-            eprintln!("add {:?} {sexp}", sexp.loc());
-            self.done_programs.insert(body_label.clone());
-            self.waiting_programs.push((body_label.clone(), sexp.clone()));
-        }
+        self.waiting_programs.push((body_label.clone(), sexp.clone()));
         body_label
     }
 
@@ -1307,7 +1302,6 @@ impl Program {
             Instr::Globl("_start".to_string()),
             Instr::Label("_start".to_string()),
             Instr::Lea(Register::R(0), "_run".to_string()),
-            Instr::Ldr(Register::SP, Register::R(0), STACK_TOP),
             Instr::Bl(self.first_label.clone()),
             Instr::Label("_end".to_string()),
             Instr::B("_end".to_string())
