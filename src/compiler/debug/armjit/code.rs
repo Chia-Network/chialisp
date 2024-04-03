@@ -12,7 +12,7 @@ use std::str::FromStr;
 use faerie::{ArtifactBuilder, Decl, Link, SectionKind};
 use gimli;
 use gimli::{Encoding, Format, LineEncoding};
-use gimli::constants::DW_AT_low_pc;
+use gimli::constants::{DW_AT_low_pc, DW_AT_high_pc, DW_AT_name};
 use gimli::write::{Address, Attribute, AttributeValue, DirectoryId, Dwarf, FileId, LineProgram, LineString, Location, LocationList, Range, RangeList, Section, Sections, Unit, UnitId};
 use target_lexicon::triple;
 use tempfile::NamedTempFile;
@@ -94,6 +94,20 @@ pub const TARGET_ADDR: u32 = 0x1000;
 //
 // The entrypoint of the code contains a pointer to the actual environment, which
 // is copied into the heap and then the main object is constructed around it.
+
+// Aranges:
+// I'm unsure if gimli can write this by itself.
+// For now I'm going to generate it myself.
+//
+// Format:
+// Header --
+// WORD remaining section size
+// HALF dwarf version
+// WORD .debug_info offset
+// BYTE bytes per address (n)
+// Then a sequence of tuples after padding to n bytes --
+// n-addr Start Address
+// n-uint Length
 
 #[derive(Clone, Debug)]
 enum Register {
@@ -572,6 +586,9 @@ impl DwarfBuilder {
         ]));
         let unit_ent = unit.get_mut(unit.root());
         unit_ent.set(DW_AT_low_pc, AttributeValue::Address(Address::Constant(TARGET_ADDR as u64)));
+        // XXX Compute real upper bound.
+        unit_ent.set(DW_AT_high_pc, AttributeValue::Address(Address::Constant(TARGET_ADDR as u64 + 0x100000)));
+        unit_ent.set(DW_AT_name, AttributeValue::String(filename.clone()));
 
         let unit_id = dwarf.units.add(unit);
 
@@ -1438,7 +1455,7 @@ impl Program {
         let mut data = "".to_string();
         let mut data_objects = Vec::new();
 
-        let decls: Vec<(String, Decl)> = self.finished_insns.iter().filter_map(|i| {
+        let mut decls: Vec<(String, Decl)> = self.finished_insns.iter().filter_map(|i| {
             if let Instr::Section(name) = i {
                 if name.starts_with(".debug") || name.starts_with(".eh") {
                     waiting_for_debug_info = Some(name.clone());
@@ -1477,20 +1494,21 @@ impl Program {
             None
         }).collect();
 
-        obj.declarations(decls.into_iter()).map_err(|e| format!("{e:?}"))?;
+        // Declare .debug_aranges
+        decls.push((".debug_aranges".to_string(), Decl::section(SectionKind::Debug).into()));
 
-        for (name, bytes) in sections.iter() {
-            obj.define(name, bytes.clone()).map_err(|e| format!("{e:?}"))?;
-        }
+        obj.declarations(decls.into_iter()).map_err(|e| format!("{e:?}"))?;
 
         let mut relocations = Vec::new();
         let mut function_body = Vec::new();
         let mut in_function = None;
 
+        let mut produced_code = 0;
         let mut handle_def_end = |function_body: &mut Vec<u8>, in_function: &mut Option<String>| -> Result<(), String> {
             if let Some(defname) = in_function.as_ref() {
                 if !function_body.is_empty() {
                     eprintln!("obj define {defname}");
+                    produced_code += function_body.len();
                     obj.define(defname, function_body.clone()).map_err(|e| format!("{e:?}"))?;
                     *function_body = Vec::new();
                 }
@@ -1511,6 +1529,20 @@ impl Program {
         }
 
         handle_def_end(&mut function_body, &mut in_function)?;
+
+        // Create .debug_aranges
+        let mut debug_aranges: Vec<u8> = (0..0x20).map(|_| 0).collect();
+        write_u32(&mut debug_aranges, 0, 0x1c);
+        debug_aranges[4] = 2;
+        write_u32(&mut debug_aranges, 6, 0);
+        debug_aranges[10] = 4;
+        write_u32(&mut debug_aranges, 16, TARGET_ADDR);
+        write_u32(&mut debug_aranges, 20, TARGET_ADDR + produced_code as u32);
+        sections.push((".debug_aranges".to_string(), debug_aranges));
+
+        for (name, bytes) in sections.iter() {
+            obj.define(name, bytes.clone()).map_err(|e| format!("{e:?}"))?;
+        }
 
         for r in relocations.iter() {
             obj.link(Link { from: &r.function, to: &r.reloc_target, at: r.code_location as u64}).map_err(|e| format!("link {e:?}"))?;
