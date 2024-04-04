@@ -1335,9 +1335,8 @@ impl Program {
             Instr::Label("_run".to_string()),
             Instr::Long(2),
             Instr::Addr(self.env_label.clone()),
-            Instr::Long(0x7ff0),
-            Instr::Long(0x1000000),
             Instr::Addr("_funaddrs".to_string()),
+            Instr::Long(0x10000000),
 
             // Write the function table.
             Instr::Align4,

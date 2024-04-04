@@ -242,7 +242,7 @@ impl<'a> ElfLoader<'a> {
                         val_S + val_A
                     };
                 eprintln!("S {val_S:08x} A {val_A:08x} => {final_value:08x}");
-                memory.write_i32(reloc_at_addr, final_value);
+                memory.write_i32(reloc_at_addr, final_value + 4);
             }
             Some(ElfRelaType::R_ARM_JMP) => {
                 // Straight signed 24.
