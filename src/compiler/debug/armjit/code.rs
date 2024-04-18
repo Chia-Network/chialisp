@@ -27,9 +27,10 @@ use crate::compiler::srcloc::Srcloc;
 const ENV_PTR: i32 = 4;
 const NEXT_ALLOC_OFFSET: i32 = 12;
 
-const SWI_THROW: usize = 0;
-const SWI_DISPATCH_NEW_CODE: usize = 1;
-const SWI_DISPATCH_INSTRUCTION: usize = 2;
+const SWI_DONE: usize = 0;
+const SWI_THROW: usize = 1;
+const SWI_DISPATCH_NEW_CODE: usize = 2;
+const SWI_DISPATCH_INSTRUCTION: usize = 3;
 
 pub const TARGET_ADDR: u32 = 0x1000;
 
@@ -1320,6 +1321,7 @@ impl Program {
             Instr::Label("_start".to_string()),
             Instr::Lea(Register::R(0), "_run".to_string()),
             Instr::Bl(self.first_label.clone()),
+            Instr::Swi(SWI_DONE),
             Instr::Label("_end".to_string()),
             Instr::B("_end".to_string())
         ] {

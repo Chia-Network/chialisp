@@ -1,4 +1,8 @@
 // Based on https://github.com/daniel5151/gdbstub/blob/master/examples/armv4t/emu.rs
+
+use std::fs;
+use std::rc::Rc;
+
 use armv4t_emu::reg;
 use armv4t_emu::Cpu;
 use armv4t_emu::Memory;
@@ -11,7 +15,9 @@ use gdbstub::target::ext::breakpoints::{Breakpoints, BreakpointsOps, HwBreakpoin
 use gdbstub::target::ext::base::singlethread::{SingleThreadBase, SingleThreadResume, SingleThreadResumeOps};
 
 use crate::compiler::debug::armjit::load::ElfLoader;
-use crate::compiler::debug::armjit::memory::PagedMemory;
+use crate::compiler::debug::armjit::memory::{PagedMemory, TargetMemory};
+use crate::compiler::srcloc::Srcloc;
+use crate::compiler::sexp::SExp;
 
 pub type DynResult<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -218,8 +224,7 @@ impl Emu {
         elf_loader.load(&mut mem);
 
         // setup execution state
-        eprintln!("Setting PC to {:#010x?}", start_addr);
-        cpu.reg_set(Mode::User, reg::SP, 0x80000000);
+        cpu.reg_set(Mode::User, reg::SP, 0x10000000);
         cpu.reg_set(Mode::User, reg::LR, HLE_RETURN_ADDR);
         cpu.reg_set(Mode::User, reg::PC, start_addr);
         cpu.reg_set(Mode::User, reg::CPSR, 0x10); // user mode
@@ -251,8 +256,11 @@ impl Emu {
 
     fn do_trap(&mut self, pc: u32, value: u32) -> Option<Event> {
         match value {
+            SWI_DONE => {
+                Some(Event::Halted)
+            }
             SWI_THROW => {
-                return Some(Event::Trap);
+                Some(Event::Trap)
             }
             SWI_DISPATCH_NEW_CODE => {
                 self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
@@ -264,7 +272,7 @@ impl Emu {
             }
             _ => {
                 self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
-                return Some(Event::Break);
+                Some(Event::Break)
             }
         }
     }
@@ -358,6 +366,55 @@ impl Emu {
             }
         }
     }
+}
+
+impl Emu {
+    /// Get an SExp at a specific address.
+    #[cfg(test)]
+    fn get_sexp(&self, srcloc: &Srcloc, addr: u32) -> Rc<SExp> {
+        let first = self.mem.read_u32(addr);
+        if first == 0 || (first & 1) != 0 {
+            // Atom
+            let size = first >> 1;
+            let result: Vec<u8> = (0..size).map(|i| {
+                self.mem.read_u8(addr + 4 + i)
+            }).collect();
+            Rc::new(SExp::Atom(srcloc.clone(), result))
+        } else {
+            // Cons
+            let rest = self.mem.read_u32(addr + 4);
+            let f = self.get_sexp(srcloc, first);
+            let r = self.get_sexp(srcloc, rest);
+            Rc::new(SExp::Cons(srcloc.clone(), f, r))
+        }
+    }
+
+    /// Run to completion and return a value by address for tests.
+    #[cfg(test)]
+    fn run_to_exit(program: &[u8], start_addr: u32) -> DynResult<Option<Rc<SExp>>> {
+        let srcloc = Srcloc::start("*emu*");
+        let mut emu = Emu::new(program, start_addr)?;
+        loop {
+            let step_result = emu.step();
+            match step_result {
+                Some(Event::Halted) => {
+                    let r0 = emu.cpu.reg_get(Mode::User, 0);
+                    return Ok(Some(emu.get_sexp(&srcloc, r0)));
+                }
+                Some(Event::Trap) => {
+                    return Ok(None);
+                }
+                _ => { }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_run_to_exit_and_return_nil() {
+    let elf = fs::read("resources/tests/armjit/return_nil.elf").expect("should exist");
+    let result = Emu::run_to_exit(&elf, 0x1000).expect("should load").unwrap();
+    assert_eq!(result.to_string(), "()");
 }
 
 pub enum RunEvent {

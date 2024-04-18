@@ -12,6 +12,8 @@ pub trait TargetMemory {
 
     fn read_i32(&self, target_addr: u32) -> i32;
     fn read_u32(&self, target_addr: u32) -> u32;
+
+    fn read_u8(&self, target_addr: u32) -> u8;
 }
 
 pub struct PagedMemory {
@@ -172,5 +174,17 @@ impl TargetMemory for PagedMemory {
             };
 
         slice[selection]
+    }
+
+    fn read_u8(&self, target_addr: u32) -> u8 {
+        let (selection, slice) =
+            if let (sel, Some(s)) = self.get_slice(target_addr) {
+                (sel, s)
+            } else {
+                return 0;
+            };
+
+        let word = slice[selection];
+        (word >> (target_addr & 3)) as u8
     }
 }
