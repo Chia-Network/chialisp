@@ -495,6 +495,26 @@ fn test_compile_and_run_cons() {
     assert_eq!(result.to_string(), "(hi . there)");
 }
 
+#[test]
+fn test_compile_and_run_apply_simple_1() {
+    let result = Emu::compile_and_run(
+        "test.clsp",
+        "(mod () (a 1 (q . \"toot\")))",
+        "()"
+    ).expect("should run").unwrap();
+    assert_eq!(result.to_string(), "toot");
+}
+
+#[test]
+fn test_compile_and_run_apply_simple_2() {
+    let result = Emu::compile_and_run(
+        "test.clsp",
+        "(mod () (a 1 @))",
+        "37777"
+    ).expect("should run").unwrap();
+    assert_eq!(result.to_string(), "37777");
+}
+
 pub enum RunEvent {
     IncomingData,
     Event(Event),
