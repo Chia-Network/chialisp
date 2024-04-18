@@ -337,8 +337,8 @@ impl Encodable for Instr {
             Instr::Subi(r_d,r_s,imm) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | ArmDataOp::Sub.to_u32() | Rn(r_s.clone()).to_u32() | Rd(r_d.clone()).to_u32() | (1 << 25) | (*imm as u32)),
             Instr::Andi(r_d,r_s,imm) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | ArmDataOp::And.to_u32() | Rn(r_s.clone()).to_u32() | Rd(r_d.clone()).to_u32() | (1 << 25) | (*imm as u32)),
             Instr::Mov(r_d,imm) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | ArmDataOp::Mov.to_u32() | Rd(r_d.clone()).to_u32() | (1 << 25) | (*imm as u32)),
-            Instr::Push(rs) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 4 << 25 | Rn(Register::SP).to_u32() | 1 << 21 | rs.to_u32()),
-            Instr::Pop(rs) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 4 << 25 | Rn(Register::SP).to_u32() | 1 << 20 | 1 << 21 | 1 << 23 | 1 << 24 | rs.to_u32()),
+            Instr::Push(rs) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 4 << 25 | Rn(Register::SP).to_u32() | 1 << 21 | 1 << 24 | rs.to_u32()),
+            Instr::Pop(rs) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 4 << 25 | Rn(Register::SP).to_u32() | 1 << 20 | 1 << 21 | 1 << 23 | rs.to_u32()),
             Instr::Str(rd,rs,off) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 1 << 26 | 1 << 24 | 1 << 23 | Rn(rs.clone()).to_u32() | Rd(rd.clone()).to_u32() | (((65536 + off) & 0xfff) as u32)),
             Instr::Ldr(rd,rs,off) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 1 << 26 | 1 << 24 | 1 << 23 | 1 << 20 | Rn(rs.clone()).to_u32() | Rd(rd.clone()).to_u32() | (((65536 + off) & 0xfff) as u32)),
             Instr::B(target) => {
@@ -838,31 +838,17 @@ impl Program {
         }
 
         let subexp = self.add(Rc::new(lst[0].clone()));
-        self.push(
-            loc,
-            Instr::Addi(Register::R(0), Register::R(5), 0)
-        );
-        self.push(
-            loc,
-            Instr::Bl(subexp)
-        );
-        // Determine if the result is a cons.
-        self.push(
-            loc,
-            Instr::Andi(Register::R(1), Register::R(0), 1)
-        );
-        self.push(
-            loc,
-            Instr::Cmpi(Register::R(1), 1)
-        );
-        self.push(
-            loc,
-            Instr::SwiEq(SWI_THROW)
-        );
-        self.push(
-            loc,
+        for i in &[
+            Instr::Addi(Register::R(0), Register::R(5), 0),
+            // Determine if the result is a cons.
+            Instr::Bl(subexp),
+            Instr::Andi(Register::R(1), Register::R(0), 1),
+            Instr::Cmpi(Register::R(1), 1),
+            Instr::SwiEq(SWI_THROW),
             Instr::Ldr(Register::R(0), Register::R(0), offset)
-        );
+        ] {
+            self.push(loc, i.clone());
+        }
     }
 
     fn do_operator(&mut self, loc: &Srcloc, hash: &[u8], a: &[u8], b: Rc<SExp>, treat_as_quoted: bool) {
@@ -904,99 +890,52 @@ impl Program {
                 // Short circuit by reading out the quoted code and running it.
                 let code_comp = self.add(quoted_code.clone());
 
-                // Swap r0 (env) with r5[ENV_PTR]
-                self.push(
-                    loc,
+                for i in &[
+                    // Swap r0 (env) with r5[ENV_PTR]
                     Instr::Ldr(Register::R(4), Register::R(5), ENV_PTR),
-                );
-                self.push(
-                    loc,
                     Instr::Str(Register::R(0), Register::R(5), ENV_PTR),
-                );
-
-                // r0 = env ptr
-                self.push(
-                    loc,
+                    // r0 = env ptr
                     Instr::Addi(Register::R(0), Register::R(5), 0),
-                );
-                self.push(
-                    loc,
-                    Instr::Bl(code_comp)
-                );
-
-                // Reload the old env.
-                self.push(
-                    loc,
-                    Instr::Str(Register::R(4), Register::R(5), ENV_PTR),
-                );
+                    Instr::Bl(code_comp),
+                    // Reload the old env.
+                    Instr::Str(Register::R(4), Register::R(5), ENV_PTR)
+                ] {
+                    self.push(loc, i.clone());
+                }
                 return;
             }
 
             let code_comp = self.add(Rc::new(lst[0].clone()));
 
-            // Move env result to r4.
-            self.push(
-                loc,
-                Instr::Addi(Register::R(4), Register::R(0), 0)
-            );
-            self.push(
-                loc,
-                Instr::Bl(code_comp)
-            );
-
-            // New code is in r0, new env in r4.  Swap r5[ENV_PTR] and r4.
-            self.push(
-                loc,
+            for i in &[
+                // Move env result to r4.
+                Instr::Addi(Register::R(4), Register::R(0), 0),
+                Instr::Bl(code_comp),
+                // New code is in r0, new env in r4.  Swap r5[ENV_PTR] and r4.
                 Instr::Ldr(Register::R(1), Register::R(5), ENV_PTR),
-            );
-            self.push(
-                loc,
                 Instr::Str(Register::R(4), Register::R(5), ENV_PTR),
-            );
-            self.push(
-                loc,
                 Instr::Addi(Register::R(4), Register::R(1), 0),
-            );
 
-            // General case: don't know what code we have yet.
-            //
-            // Now r4 is the old env ptr (and will be preserved when executing
-            // called code).  We'll restore it before leaving this apply.
+                // General case: don't know what code we have yet.
+                //
+                // Now r4 is the old env ptr (and will be preserved when executing
+                // called code).  We'll restore it before leaving this apply.
 
-            // r0 was code, move it to r6 (callee save).
-            self.push(
-                loc,
+                // r0 was code, move it to r6 (callee save).
                 Instr::Addi(Register::R(6), Register::R(0), 0),
-            );
-            // Load the env into arg0.
-            self.push(
-                loc,
+                // Load the env into arg0.
                 Instr::Addi(Register::R(0), Register::R(5), 0),
-            );
-            // Load the code into arg1.
-            self.push(
-                loc,
+                // Load the code into arg1.
                 Instr::Addi(Register::R(1), Register::R(6), 0),
-            );
-            // Dispatch the code.
-            self.push(
-                loc,
-                Instr::Swi(SWI_DISPATCH_NEW_CODE)
-            );
-            self.push(
-                loc,
+                // Dispatch the code.
+                Instr::Swi(SWI_DISPATCH_NEW_CODE),
                 Instr::Ldr(Register::LR, Register::LR, 0),
-            );
-            self.push(
-                loc,
-                Instr::Bx(Register::LR)
-            );
-
-            // Reload the old env.
-            self.push(
-                loc,
+                Instr::Bx(Register::LR),
+                // Reload the old env.
                 Instr::Str(Register::R(4), Register::R(5), ENV_PTR),
-            );
+            ] {
+                self.push(loc, i.clone());
+            }
             return;
         } else if a == &[3] {
             // If operator
@@ -1010,39 +949,19 @@ impl Program {
 
             let else_label = self.get_code_label(hash);
 
-            self.push(
-                loc,
-                Instr::Bl(cond_clause)
-            );
-            self.push(
-                loc,
-                Instr::Ldr(Register::R(1), Register::R(0), 0)
-            );
-            self.push(
-                loc,
-                Instr::Cmpi(Register::R(1), 1)
-            );
-            self.push(
-                loc,
-                Instr::BEq(else_label.clone())
-            );
-            self.push(
-                loc,
+            for i in &[
+                Instr::Bl(cond_clause),
+                Instr::Ldr(Register::R(1), Register::R(0), 0),
+                Instr::Cmpi(Register::R(1), 1),
+                Instr::BEq(else_label.clone()),
                 Instr::Bl(then_clause),
-            );
-            // Else clause acts as a function for relocation purposes.
-            self.push(
-                loc,
-                Instr::Globl(else_label.clone())
-            );
-            self.push(
-                loc,
-                Instr::Label(else_label)
-            );
-            self.push(
-                loc,
-                Instr::B(else_clause),
-            );
+                // Else clause acts as a function for relocation purposes.
+                Instr::Globl(else_label.clone()),
+                Instr::Label(else_label),
+                Instr::B(else_clause)
+            ] {
+                self.push(loc, i.clone());
+            }
             return;
         } else if a == &[4] {
             // Cons operator
@@ -1052,54 +971,26 @@ impl Program {
 
             let rest_label = self.add(Rc::new(lst[1].clone()));
             let first_label = self.add(Rc::new(lst[0].clone()));
-            self.push(
-                loc,
+
+            for i in &[
                 Instr::Addi(Register::R(0), Register::R(5), 0),
-            );
-            self.push(
-                loc,
                 Instr::Bl(rest_label),
-            );
-            self.push(
-                loc,
                 Instr::Addi(Register::R(4), Register::R(0), 0),
-            );
-            self.push(
-                loc,
                 Instr::Addi(Register::R(0), Register::R(5), 0),
-            );
-            self.push(
-                loc,
                 Instr::Bl(first_label),
-            );
-            // R1 = next allocated address.
-            self.push(
-                loc,
-                Instr::Ldr(Register::R(1), Register::R(5), NEXT_ALLOC_OFFSET)
-            );
-            // R2 = R1 + 8 (size of cons)
-            self.push(
-                loc,
-                Instr::Addi(Register::R(2), Register::R(1), 8)
-            );
-            self.push(
-                loc,
-                Instr::Str(Register::R(2), Register::R(5), 0)
-            );
-            // Build cons
-            self.push(
-                loc,
-                Instr::Str(Register::R(0), Register::R(1), 0)
-            );
-            self.push(
-                loc,
-                Instr::Str(Register::R(4), Register::R(1), 4)
-            );
-            // Move the result to r0
-            self.push(
-                loc,
+                // R1 = next allocated address.
+                Instr::Ldr(Register::R(1), Register::R(5), NEXT_ALLOC_OFFSET),
+                // R2 = R1 + 8 (size of cons)
+                Instr::Addi(Register::R(2), Register::R(1), 8),
+                Instr::Str(Register::R(2), Register::R(5), NEXT_ALLOC_OFFSET),
+                // Build cons
+                Instr::Str(Register::R(0), Register::R(1), 0),
+                Instr::Str(Register::R(4), Register::R(1), 4),
+                // Move the result to r0
                 Instr::Addi(Register::R(0), Register::R(1), 0)
-            );
+            ] {
+                self.push(loc, i.clone());
+            }
             return;
         } else if a == &[5] {
             return self.first_rest(loc, hash, &lst, 0);
@@ -1119,24 +1010,16 @@ impl Program {
             let atom_hash = sha256tree(Rc::new(SExp::Atom(loc.clone(), a.to_vec())));
             let label = self.add_atom(&atom_hash, a);
             eprintln!("load {label} for general operator\n");
-            self.push(
-                loc,
-                Instr::Lea(Register::R(1), label)
-            );
-            // Push number of objects on the stack.
-            self.push(
-                loc,
-                Instr::Andi(Register::R(0), Register::R(0), 0)
-            );
-            self.push(
-                loc,
-                Instr::Addi(Register::R(0), Register::R(0), lst.len() as i32)
-            );
-            // Push an instruction dispatch.
-            self.push(
-                loc,
+            for i in &[
+                Instr::Lea(Register::R(1), label),
+                // Push number of objects on the stack.
+                Instr::Andi(Register::R(0), Register::R(0), 0),
+                Instr::Addi(Register::R(0), Register::R(0), lst.len() as i32),
+                // Push an instruction dispatch.
                 Instr::Swi(SWI_DISPATCH_INSTRUCTION)
-            );
+            ] {
+                self.push(loc, i.clone());
+            }
         }
     }
 
@@ -1167,25 +1050,17 @@ impl Program {
                 } else {
                     let offset = ((remaining & 1) * 4) as i32;
 
-                    // Check for a cons.
-                    self.push(
-                        loc,
-                        Instr::Andi(Register::R(1), Register::R(0), 1)
-                    );
-                    self.push(
-                        loc,
-                        Instr::Cmpi(Register::R(1), 1)
-                    );
-                    // Break if it was an atom.
-                    self.push(
-                        loc,
-                        Instr::SwiEq(SWI_THROW)
-                    );
-                    // Load if it was a cons.
-                    self.push(
-                        loc,
+                    for i in &[
+                        // Check for a cons.
+                        Instr::Andi(Register::R(1), Register::R(0), 1),
+                        Instr::Cmpi(Register::R(1), 1),
+                        // Break if it was an atom.
+                        Instr::SwiEq(SWI_THROW),
+                        // Load if it was a cons.
                         Instr::Ldr(Register::R(0), Register::R(0), offset)
-                    );
+                    ] {
+                        self.push(loc, i.clone());
+                    }
                 }
             }
         }
@@ -1344,59 +1219,41 @@ impl Program {
         // Write the constant data.
         let mut constants = HashMap::new();
         swap(&mut constants, &mut self.constants);
-        for (_, c) in constants.iter() {
-            if let Constant::Cons(label, a_label, b_label) = c {
-                eprintln!("constant pair {label}");
-                self.push(
-                    &srcloc,
-                    Instr::Align4
-                );
-                self.push(
-                    &srcloc,
-                    Instr::Globl(label.clone())
-                );
-                self.push(
-                    &srcloc,
-                    Instr::Label(label.clone())
-                );
-                self.push(
-                    &srcloc,
-                    Instr::Addr(a_label.clone())
-                );
-                self.push(
-                    &srcloc,
-                    Instr::Addr(b_label.clone())
-                );
-            }
-
-        }
-
+        self.push(
+            &srcloc,
+            Instr::Align4
+        );
         self.push(
             &srcloc,
             Instr::Section(".data".to_string())
         );
         for (_, c) in constants.iter() {
+            if let Constant::Cons(label, a_label, b_label) = c {
+                eprintln!("constant pair {label}");
+                for i in &[
+                    Instr::Align4,
+                    Instr::Globl(label.clone()),
+                    Instr::Label(label.clone()),
+                    Instr::Addr(a_label.clone()),
+                    Instr::Addr(b_label.clone())
+                ] {
+                    self.push(&srcloc, i.clone());
+                }
+            }
+
+        }
+
+        for (_, c) in constants.iter() {
             if let Constant::Atom(label, bytes) = c {
-                self.push(
-                    &srcloc,
-                    Instr::Align4
-                );
-                self.push(
-                    &srcloc,
-                    Instr::Globl(label.clone())
-                );
-                self.push(
-                    &srcloc,
-                    Instr::Label(label.clone())
-                );
-                self.push(
-                    &srcloc,
-                    Instr::Long(bytes.len() * 2 + 1)
-                );
-                self.push(
-                    &srcloc,
+                for i in &[
+                    Instr::Align4,
+                    Instr::Globl(label.clone()),
+                    Instr::Label(label.clone()),
+                    Instr::Long(bytes.len() * 2 + 1),
                     Instr::Bytes(bytes.clone())
-                );
+                ] {
+                    self.push(&srcloc, i.clone());
+                }
             }
         }
         swap(&mut constants, &mut self.constants);
@@ -1405,6 +1262,10 @@ impl Program {
         self.push(
             &srcloc,
             Instr::Align4
+        );
+        self.push(
+            &srcloc,
+            Instr::Section(".text".to_string())
         );
         self.push(
             &srcloc,
@@ -1428,7 +1289,6 @@ impl Program {
         let mut waiting_for_debug_info = None;
         let mut data_section = false;
         let mut data = "".to_string();
-        let mut data_objects = Vec::new();
 
         let mut decls: Vec<(String, Decl)> = self.finished_insns.iter().filter_map(|i| {
             if let Instr::Section(name) = i {
@@ -1460,9 +1320,6 @@ impl Program {
                 if let Some(waiting) = waiting_for_debug_info.clone() {
                     waiting_for_debug_info = None;
                     sections.push((waiting, b.clone()));
-                } else if data_section {
-                    eprintln!("data bytes named {data} = {b:?}");
-                    data_objects.push((data.clone(), b.to_vec()));
                 }
             }
 

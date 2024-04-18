@@ -89,7 +89,7 @@ fn main() {
             stepping: Some(23),
             strict: true,
         })
-        .set_optimize(false)
+        .set_optimize(true)
         .set_search_paths(&search_paths)
         .set_frontend_opt(false);
     let compiled =

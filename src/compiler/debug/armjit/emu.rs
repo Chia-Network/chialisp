@@ -235,7 +235,7 @@ impl Emu {
         elf_loader.load(&mut mem);
 
         // setup execution state
-        cpu.reg_set(Mode::User, reg::SP, 0x10000000);
+        cpu.reg_set(Mode::User, reg::SP, 0xffffff00);
         cpu.reg_set(Mode::User, reg::LR, HLE_RETURN_ADDR);
         cpu.reg_set(Mode::User, reg::PC, start_addr);
         cpu.reg_set(Mode::User, reg::CPSR, 0x10); // user mode
@@ -259,7 +259,7 @@ impl Emu {
     }
 
     pub(crate) fn reset(&mut self) {
-        self.cpu.reg_set(Mode::User, reg::SP, 0x10000000);
+        self.cpu.reg_set(Mode::User, reg::SP, 0xffffff00);
         self.cpu.reg_set(Mode::User, reg::LR, HLE_RETURN_ADDR);
         self.cpu.reg_set(Mode::User, reg::PC, self.start_addr);
         self.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
@@ -483,6 +483,16 @@ fn test_compile_and_run_simple_quoted_atom() {
         "()"
     ).expect("should run").unwrap();
     assert_eq!(result, Rc::new(SExp::Atom(Srcloc::start("*test*"), b"hi there".to_vec())));
+}
+
+#[test]
+fn test_compile_and_run_cons() {
+    let result = Emu::compile_and_run(
+        "test.clsp",
+        "(mod () (c \"hi\" \"there\"))",
+        "()"
+    ).expect("should run").unwrap();
+    assert_eq!(result.to_string(), "(hi . there)");
 }
 
 pub enum RunEvent {
