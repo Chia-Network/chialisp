@@ -185,6 +185,6 @@ impl TargetMemory for PagedMemory {
             };
 
         let word = slice[selection];
-        (word >> (target_addr & 3)) as u8
+        (word >> (8 * (target_addr & 3))) as u8
     }
 }

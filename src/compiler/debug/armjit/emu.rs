@@ -417,6 +417,13 @@ fn test_run_to_exit_and_return_nil() {
     assert_eq!(result.to_string(), "()");
 }
 
+#[test]
+fn test_run_to_exit_and_return_pair() {
+    let elf = fs::read("resources/tests/armjit/return_cons.elf").expect("should exist");
+    let result = Emu::run_to_exit(&elf, 0x1000).expect("should load").unwrap();
+    assert_eq!(result.to_string(), "(hi . there)");
+}
+
 pub enum RunEvent {
     IncomingData,
     Event(Event),
