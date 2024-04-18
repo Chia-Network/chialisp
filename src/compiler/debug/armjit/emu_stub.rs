@@ -135,8 +135,8 @@ pub fn run_stub(connection: Box<dyn ConnectionExt<Error = std::io::Error>>, emu:
     match gdb.run_blocking::<EmuGdbEventLoop>(emu) {
         Ok(disconnect_reason) => match disconnect_reason {
             DisconnectReason::Disconnect => {
-                println!("GDB client has disconnected. Running to completion...");
-                while emu.step() != Some(Event::Halted) {}
+                println!("GDB client has disconnected.");
+                return Ok(());
             }
             DisconnectReason::TargetExited(code) => {
                 println!("Target exited with code {}!", code)
@@ -161,7 +161,7 @@ pub fn run_stub(connection: Box<dyn ConnectionExt<Error = std::io::Error>>, emu:
         }
     }
 
-    let ret = emu.cpu.reg_get(armv4t_emu::Mode::User, 0);
+    emu.cpu.reg_get(armv4t_emu::Mode::User, 0);
 
     Ok(())
 }

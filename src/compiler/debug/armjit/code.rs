@@ -24,8 +24,8 @@ use crate::compiler::debug::armjit::load::{ElfLoader, write_u32};
 use crate::compiler::sexp::{Atom, NodeSel, SelectNode, SExp, ThisNode};
 use crate::compiler::srcloc::Srcloc;
 
-const ENV_PTR: i32 = 4;
-const NEXT_ALLOC_OFFSET: i32 = 12;
+const ENV_PTR: i32 = 0;
+const NEXT_ALLOC_OFFSET: i32 = 4;
 
 const SWI_DONE: usize = 0;
 const SWI_THROW: usize = 1;
@@ -339,8 +339,8 @@ impl Encodable for Instr {
             Instr::Mov(r_d,imm) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | ArmDataOp::Mov.to_u32() | Rd(r_d.clone()).to_u32() | (1 << 25) | (*imm as u32)),
             Instr::Push(rs) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 4 << 25 | Rn(Register::SP).to_u32() | 1 << 21 | rs.to_u32()),
             Instr::Pop(rs) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 4 << 25 | Rn(Register::SP).to_u32() | 1 << 20 | 1 << 21 | 1 << 23 | 1 << 24 | rs.to_u32()),
-            Instr::Str(rd,rs,off) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 1 << 26 | 1 << 25 | 1 << 24 | 1 << 23 | Rn(rs.clone()).to_u32() | Rd(rd.clone()).to_u32() | (((65536 + off) & 0xffff) as u32)),
-            Instr::Ldr(rd,rs,off) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 1 << 26 | 1 << 25 | 1 << 24 | 1 << 23 | 1 << 20 | Rn(rs.clone()).to_u32() | Rd(rd.clone()).to_u32() | (((65536 + off) & 0xffff) as u32)),
+            Instr::Str(rd,rs,off) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 1 << 26 | 1 << 24 | 1 << 23 | Rn(rs.clone()).to_u32() | Rd(rd.clone()).to_u32() | (((65536 + off) & 0xfff) as u32)),
+            Instr::Ldr(rd,rs,off) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 1 << 26 | 1 << 24 | 1 << 23 | 1 << 20 | Rn(rs.clone()).to_u32() | Rd(rd.clone()).to_u32() | (((65536 + off) & 0xfff) as u32)),
             Instr::B(target) => {
                 r.push(Relocation {
                     kind: RelocationKind::Branch,
@@ -373,7 +373,7 @@ impl Encodable for Instr {
             }
             Instr::Lea(rd,target) => {
                 // Emit a load from +8 (0 as encoded).
-                vec_from_u32(v, ArmCond::Unconditional.to_u32() | 1 << 26 | 1 << 25 | 1 << 24 | 1 << 23 | 1 << 20 | Rn(Register::PC).to_u32() | Rd(rd.clone()).to_u32());
+                vec_from_u32(v, ArmCond::Unconditional.to_u32() | 1 << 26 | 1 << 24 | 1 << 23 | 1 << 20 | Rn(Register::PC).to_u32() | Rd(rd.clone()).to_u32());
                 // Emit a jump to +8
                 vec_from_u32(v, ArmCond::Unconditional.to_u32() | 5 << 25 | 0);
                 r.push(Relocation {
@@ -1335,37 +1335,11 @@ impl Program {
             Instr::Align4,
             Instr::Globl("_run".to_string()),
             Instr::Label("_run".to_string()),
-            Instr::Long(2),
             Instr::Addr(self.env_label.clone()),
-            Instr::Addr("_funaddrs".to_string()),
             Instr::Long(0x10000000),
-
-            // Write the function table.
-            Instr::Align4,
-            Instr::Globl("_funaddrs".to_string()),
-            Instr::Label("_funaddrs".to_string())
         ].iter() {
             self.push(&srcloc, i.clone());
         }
-
-        let mut labels_by_hash = HashMap::new();
-        swap(&mut labels_by_hash, &mut self.labels_by_hash);
-        for (k, v) in labels_by_hash.iter() {
-            self.push(
-                &srcloc,
-                Instr::Addr(v.clone())
-            );
-            self.push(
-                &srcloc,
-                Instr::Bytes(k.to_vec())
-            );
-        }
-        swap(&mut labels_by_hash, &mut self.labels_by_hash);
-
-        self.push(
-            &srcloc,
-            Instr::Long(0)
-        );
 
         // Write the constant data.
         let mut constants = HashMap::new();

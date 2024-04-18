@@ -86,7 +86,7 @@ fn main() {
     let mut symbol_table = HashMap::new();
     let opts = Rc::new(DefaultCompilerOpts::new(&args.filename))
         .set_dialect(AcceptedDialect {
-            stepping: Some(21),
+            stepping: Some(23),
             strict: true,
         })
         .set_optimize(false)
@@ -124,7 +124,7 @@ fn main() {
 
     let mut elf_out = program.to_elf(&args.output).expect("should be writable");
     // copy all in-memory sections from the ELF file into system RAM
-    let mut elf_loader = ElfLoader::new(&elf_out, TARGET_ADDR).expect("should load");
+
     fs::write(&args.output, &elf_out).expect("should be able to write file");
     let (signal_emu_startup_complete, emu_startup_complete) = mpsc::channel();
 

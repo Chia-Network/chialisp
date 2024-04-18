@@ -1,7 +1,11 @@
 // Based on https://github.com/daniel5151/gdbstub/blob/master/examples/armv4t/emu.rs
 
 use std::fs;
+use std::collections::HashMap;
 use std::rc::Rc;
+
+use clvmr::Allocator;
+use tempfile::NamedTempFile;
 
 use armv4t_emu::reg;
 use armv4t_emu::Cpu;
@@ -14,10 +18,17 @@ use gdbstub::target::ext::base::{BaseOps, single_register_access};
 use gdbstub::target::ext::breakpoints::{Breakpoints, BreakpointsOps, HwBreakpointOps, HwWatchpointOps, SwBreakpoint, SwBreakpointOps};
 use gdbstub::target::ext::base::singlethread::{SingleThreadBase, SingleThreadResume, SingleThreadResumeOps};
 
+use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
+use crate::compiler::TRunProgram;
+use crate::compiler::compiler::{compile_file, DefaultCompilerOpts};
+use crate::compiler::comptypes::CompilerOpts;
+use crate::compiler::debug::armjit::code::{Program, TARGET_ADDR};
 use crate::compiler::debug::armjit::load::ElfLoader;
 use crate::compiler::debug::armjit::memory::{PagedMemory, TargetMemory};
+use crate::compiler::debug::build_symbol_table_mut;
+use crate::compiler::dialect::AcceptedDialect;
 use crate::compiler::srcloc::Srcloc;
-use crate::compiler::sexp::SExp;
+use crate::compiler::sexp::{decode_string, parse_sexp, SExp};
 
 pub type DynResult<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -394,6 +405,9 @@ impl Emu {
     fn run_to_exit(program: &[u8], start_addr: u32) -> DynResult<Option<Rc<SExp>>> {
         let srcloc = Srcloc::start("*emu*");
         let mut emu = Emu::new(program, start_addr)?;
+        let mut elf_loader = ElfLoader::new(program, start_addr).expect("should load");
+        elf_loader.load(&mut emu.mem);
+
         loop {
             let step_result = emu.step();
             match step_result {
@@ -408,20 +422,67 @@ impl Emu {
             }
         }
     }
+
+    #[cfg(test)]
+    fn compile_and_run(filename: &str, program: &str, env: &str) -> DynResult<Option<Rc<SExp>>> {
+        let srcloc = Srcloc::start(filename);
+        let env_parsed = parse_sexp(srcloc.clone(), env.bytes()).expect("should parse");
+        let mut allocator = Allocator::new();
+        let mut symbol_table = HashMap::new();
+        let runner: Rc<dyn TRunProgram> = Rc::new(DefaultProgramRunner::new());
+        let search_paths = vec![];
+        let opts = Rc::new(DefaultCompilerOpts::new(filename))
+            .set_dialect(AcceptedDialect {
+                stepping: Some(23),
+                strict: true,
+            })
+            .set_optimize(true)
+            .set_search_paths(&search_paths)
+            .set_frontend_opt(false);
+        let compiled =
+            compile_file(
+                &mut allocator,
+                runner,
+                opts,
+                program,
+                &mut symbol_table,
+            ).expect("should compile");
+        build_symbol_table_mut(&mut symbol_table, &compiled);
+        let generator = Program::new(
+            filename,
+            Rc::new(compiled),
+            env_parsed[0].clone(),
+            symbol_table
+        ).expect("should be generatable");
+        let tmpfile = NamedTempFile::new().expect("should be able to make a temp file");
+        let tmpname = tmpfile.path().to_str().unwrap().to_string();
+        let elf_data = generator.to_elf(&tmpname).expect("should generate");
+        Emu::run_to_exit(&elf_data, TARGET_ADDR)
+    }
 }
 
 #[test]
 fn test_run_to_exit_and_return_nil() {
     let elf = fs::read("resources/tests/armjit/return_nil.elf").expect("should exist");
-    let result = Emu::run_to_exit(&elf, 0x1000).expect("should load").unwrap();
+    let result = Emu::run_to_exit(&elf, TARGET_ADDR).expect("should load").unwrap();
     assert_eq!(result.to_string(), "()");
 }
 
 #[test]
 fn test_run_to_exit_and_return_pair() {
     let elf = fs::read("resources/tests/armjit/return_cons.elf").expect("should exist");
-    let result = Emu::run_to_exit(&elf, 0x1000).expect("should load").unwrap();
+    let result = Emu::run_to_exit(&elf, TARGET_ADDR).expect("should load").unwrap();
     assert_eq!(result.to_string(), "(hi . there)");
+}
+
+#[test]
+fn test_compile_and_run_simple_quoted_atom() {
+    let result = Emu::compile_and_run(
+        "test.clsp",
+        "(mod () \"hi there\")",
+        "()"
+    ).expect("should run").unwrap();
+    assert_eq!(result, Rc::new(SExp::Atom(Srcloc::start("*test*"), b"hi there".to_vec())));
 }
 
 pub enum RunEvent {
