@@ -566,6 +566,16 @@ fn test_compile_and_run_apply_simple_6() {
     assert!(result.is_none());
 }
 
+#[test]
+fn test_compile_and_run_apply_simple_op() {
+    let result = Emu::compile_and_run(
+        "test.clsp",
+        "(mod (A B) (include *standard-cl-23*) (+ A B))",
+        "(99 103)"
+    ).expect("should run").unwrap();
+    assert_eq!(result.to_string(), "202");
+}
+
 pub enum RunEvent {
     IncomingData,
     Event(Event),
