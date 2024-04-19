@@ -22,7 +22,7 @@ use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 use crate::compiler::TRunProgram;
 use crate::compiler::compiler::{compile_file, DefaultCompilerOpts};
 use crate::compiler::comptypes::CompilerOpts;
-use crate::compiler::debug::armjit::code::{Program, TARGET_ADDR};
+use crate::compiler::debug::armjit::code::{Program, SWI_DONE, SWI_THROW, SWI_DISPATCH_NEW_CODE, SWI_DISPATCH_INSTRUCTION, TARGET_ADDR};
 use crate::compiler::debug::armjit::load::ElfLoader;
 use crate::compiler::debug::armjit::memory::{PagedMemory, TargetMemory};
 use crate::compiler::debug::build_symbol_table_mut;
@@ -265,26 +265,21 @@ impl Emu {
         self.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
     }
 
-    fn do_trap(&mut self, pc: u32, value: u32) -> Option<Event> {
-        match value {
-            SWI_DONE => {
-                Some(Event::Halted)
-            }
-            SWI_THROW => {
-                Some(Event::Trap)
-            }
-            SWI_DISPATCH_NEW_CODE => {
-                self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
-                todo!();
-            }
-            SWI_DISPATCH_INSTRUCTION => {
-                self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
-                todo!();
-            }
-            _ => {
-                self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
-                Some(Event::Break)
-            }
+    fn do_trap(&mut self, pc: u32, value: usize) -> Option<Event> {
+        eprintln!("trap {value:x}");
+        if value == SWI_DONE {
+            Some(Event::Halted)
+        } else if value == SWI_THROW {
+            Some(Event::Trap)
+        } else if value == SWI_DISPATCH_NEW_CODE {
+            self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
+            todo!();
+        } else if value == SWI_DISPATCH_INSTRUCTION {
+            self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
+            todo!();
+        } else {
+            self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
+            Some(Event::Break)
         }
     }
 
@@ -292,14 +287,15 @@ impl Emu {
     pub fn step(&mut self) -> Option<Event> {
         // let mut hit_watchpoint = None;
 
-        self.cpu.step(&mut self.mem);
         let pc = self.cpu.reg_get(Mode::User, reg::PC);
-
         let snoop_instruction = self.mem.r32(pc);
+
+        eprintln!("pc {pc:x} snoop {snoop_instruction:x}");
         if (snoop_instruction & 0x0f000000) == 0x0f000000 {
             // This is a trap instruction, interpret it.
             let cpsr = self.cpu.reg_get(Mode::User, reg::CPSR);
             let match_expression = snoop_instruction >> 28;
+            eprintln!("cpsr {cpsr:x} match {match_expression:x}");
             let perform_action =
                 match match_expression {
                     0 => ((cpsr >> 29) & 1) != 0,
@@ -307,11 +303,19 @@ impl Emu {
                     _ => todo!()
                 };
             if perform_action {
-                return self.do_trap(pc, snoop_instruction & 0xffffff);
+                return self.do_trap(pc, (snoop_instruction & 0xffffff) as usize);
             } else {
                 self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
             }
+        } else {
+            self.cpu.step(&mut self.mem);
+            let pc = self.cpu.reg_get(Mode::User, reg::PC);
+
+            if self.breakpoints.contains(&pc) {
+                return Some(Event::Break);
+            }
         }
+
 
         // if let Some(access) = hit_watchpoint {
         //     let fixup = if self.cpu.thumb_mode() { 2 } else { 4 };
@@ -322,10 +326,6 @@ impl Emu {
         //         AccessKind::Write => Event::WatchWrite(access.addr),
         //     });
         // }
-
-        if self.breakpoints.contains(&pc) {
-            return Some(Event::Break);
-        }
 
         None
     }
@@ -410,6 +410,7 @@ impl Emu {
 
         loop {
             let step_result = emu.step();
+            eprintln!("step_result {step_result:?}");
             match step_result {
                 Some(Event::Halted) => {
                     let r0 = emu.cpu.reg_get(Mode::User, 0);
@@ -489,7 +490,7 @@ fn test_compile_and_run_simple_quoted_atom() {
 fn test_compile_and_run_cons() {
     let result = Emu::compile_and_run(
         "test.clsp",
-        "(mod () (c \"hi\" \"there\"))",
+        "(mod () (include *standard-cl-23*) (c \"hi\" \"there\"))",
         "()"
     ).expect("should run").unwrap();
     assert_eq!(result.to_string(), "(hi . there)");
@@ -499,7 +500,7 @@ fn test_compile_and_run_cons() {
 fn test_compile_and_run_apply_simple_1() {
     let result = Emu::compile_and_run(
         "test.clsp",
-        "(mod () (a 1 (q . \"toot\")))",
+        "(mod () (include *standard-cl-23*) (a 1 (q . \"toot\")))",
         "()"
     ).expect("should run").unwrap();
     assert_eq!(result.to_string(), "toot");
@@ -509,10 +510,60 @@ fn test_compile_and_run_apply_simple_1() {
 fn test_compile_and_run_apply_simple_2() {
     let result = Emu::compile_and_run(
         "test.clsp",
-        "(mod () (a 1 @))",
+        "(mod () (include *standard-cl-23*) (a 1 @))",
         "37777"
     ).expect("should run").unwrap();
     assert_eq!(result.to_string(), "37777");
+}
+
+#[test]
+fn test_compile_and_run_apply_simple_3() {
+    let result = Emu::compile_and_run(
+        "test.clsp",
+        "(mod () (include *standard-cl-23*) (a (q 4 (1 . 1) (1 . 2)) @))",
+        "()"
+    ).expect("should run").unwrap();
+    assert_eq!(result.to_string(), "(1 . 2)");
+}
+
+#[test]
+fn test_compile_and_run_apply_simple_4() {
+    let result = Emu::compile_and_run(
+        "test.clsp",
+        "(mod () (include *standard-cl-23*) (f (q 1 2)))",
+        "()"
+    ).expect("should run").unwrap();
+    assert_eq!(result.to_string(), "1");
+}
+
+#[test]
+fn test_compile_and_run_apply_simple_4_fail() {
+    let result = Emu::compile_and_run(
+        "test.clsp",
+        "(mod () (include *standard-cl-23*) (f 99))",
+        "()"
+    ).expect("should run");
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_compile_and_run_apply_simple_5() {
+    let result = Emu::compile_and_run(
+        "test.clsp",
+        "(mod () (include *standard-cl-23*) (r (q 1 2)))",
+        "()"
+    ).expect("should run").unwrap();
+    assert_eq!(result.to_string(), "(2)");
+}
+
+#[test]
+fn test_compile_and_run_apply_simple_6() {
+    let result = Emu::compile_and_run(
+        "test.clsp",
+        "(mod () (include *standard-cl-23*) (r 99))",
+        "()"
+    ).expect("should run");
+    assert!(result.is_none());
 }
 
 pub enum RunEvent {

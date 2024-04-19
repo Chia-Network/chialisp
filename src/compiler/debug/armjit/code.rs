@@ -27,10 +27,10 @@ use crate::compiler::srcloc::Srcloc;
 const ENV_PTR: i32 = 0;
 const NEXT_ALLOC_OFFSET: i32 = 4;
 
-const SWI_DONE: usize = 0;
-const SWI_THROW: usize = 1;
-const SWI_DISPATCH_NEW_CODE: usize = 2;
-const SWI_DISPATCH_INSTRUCTION: usize = 3;
+pub const SWI_DONE: usize = 0;
+pub const SWI_THROW: usize = 1;
+pub const SWI_DISPATCH_NEW_CODE: usize = 2;
+pub const SWI_DISPATCH_INSTRUCTION: usize = 3;
 
 pub const TARGET_ADDR: u32 = 0x1000;
 
@@ -842,7 +842,8 @@ impl Program {
             Instr::Addi(Register::R(0), Register::R(5), 0),
             // Determine if the result is a cons.
             Instr::Bl(subexp),
-            Instr::Andi(Register::R(1), Register::R(0), 1),
+            Instr::Ldr(Register::R(4), Register::R(0), 0),
+            Instr::Andi(Register::R(1), Register::R(4), 1),
             Instr::Cmpi(Register::R(1), 1),
             Instr::SwiEq(SWI_THROW),
             Instr::Ldr(Register::R(0), Register::R(0), offset)
@@ -1052,7 +1053,8 @@ impl Program {
 
                     for i in &[
                         // Check for a cons.
-                        Instr::Andi(Register::R(1), Register::R(0), 1),
+                        Instr::Ldr(Register::R(4), Register::R(0), 0),
+                        Instr::Andi(Register::R(1), Register::R(4), 1),
                         Instr::Cmpi(Register::R(1), 1),
                         // Break if it was an atom.
                         Instr::SwiEq(SWI_THROW),
