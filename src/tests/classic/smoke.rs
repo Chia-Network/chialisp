@@ -789,7 +789,7 @@ fn test_io_err_from_syntax_err() {
 fn test_bytes_to_pybytes_repr_0() {
     let b = b"\x11\x01abc\r\ntest\ttest\r\n";
     assert_eq!(
-        pybytes_repr(b, false),
+        pybytes_repr(b, false, true),
         "b'\\x11\\x01abc\\r\\ntest\\ttest\\r\\n'"
     );
 }

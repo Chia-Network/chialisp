@@ -47,6 +47,9 @@ armv4t_emu = "0.1.0"
 regex = "1.8.4"
 gdbstub = "0.7.1"
 gdbstub_arch = "0.3.0"
+rand = { version = "0.8.5", optional = true }
+rand_chacha = { version = "0.3.1", optional = true }
+lfsr = { version = "0.3.0", optional = true }
 
 [dependencies.pyo3]
 version = "0.20.2"
@@ -64,6 +67,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 extension-module = ["dep:pyo3"]
+fuzz = ["dep:rand", "dep:rand_chacha", "dep:lfsr"]
 default = []
 
 [target.'cfg(target_family="wasm")'.dependencies]

@@ -5,8 +5,6 @@ use rand::distributions::Standard;
 #[cfg(test)]
 use rand::prelude::*;
 #[cfg(test)]
-use rand::Rng;
-#[cfg(test)]
 use rand_chacha::ChaChaRng;
 
 use std::borrow::Borrow;

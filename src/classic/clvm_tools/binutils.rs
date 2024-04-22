@@ -50,12 +50,14 @@ pub fn assemble_from_ir(
 }
 
 fn has_oversized_sign_extension(atom: &Bytes) -> bool {
+    let data = atom.data();
+
     // Can't have an extra sign extension if the number is too short.
+    // With the exception of 0.
     if atom.length() < 2 {
-        return false;
+        return data.len() == 1 && data[0] == 0;
     }
 
-    let data = atom.data();
     if data[0] == 0 {
         // This is a canonical value.  The opposite is non-canonical.
         // 0x0080 -> 128

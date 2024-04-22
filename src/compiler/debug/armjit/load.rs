@@ -160,6 +160,8 @@ impl<'a> ElfLoader<'a> {
         let mut section_addr = target_addr;
         for (i, s) in loader.elf.section_header_iter().enumerate() {
             if s.flags().contains(SectionHeaderFlags::SHF_ALLOC) {
+                let align_mask = (s.addralign() - 1) as u32;
+                section_addr = (section_addr + align_mask) & !align_mask;
                 loader.sections.push(section_addr);
                 eprintln!("{i} {s:?}");
                 eprintln!("load section {} at {section_addr:08x}", i);
@@ -231,7 +233,16 @@ impl<'a> ElfLoader<'a> {
         eprintln!("R {kind:?} {symbol:?} {in_section} {reloc_at_addr:08x} reloc {r:?} = {existing_data:08x}");
 
         match kind {
-            Some(ElfRelaType::R_ARM_ABS32) => {
+            Some(ElfRelaType::R_ARM_JMP) => {
+                // Straight signed 24.
+                let val_S = (symbol.st_value + sections[symbol.st_shndx as usize]) as i32;
+                let val_P = (sections[in_section] + r.offset + 4) as i32;
+                let val_A = r.addend;
+                let final_value = ((((val_S - val_P + val_A) >> 2) & 0xffffff) as u32) | existing_data;
+                eprintln!("S {val_S:08x} P {val_P:08x} A {val_A:08x} => {final_value:08x}");
+                memory.write_u32(reloc_at_addr, existing_data | final_value);
+            }
+            Some(_) => {
                 // R_ARM_ABS32 = S + A
                 let val_S = (symbol.st_value + sections[symbol.st_shndx as usize]) as i32;
                 let val_A = r.addend;
@@ -242,33 +253,7 @@ impl<'a> ElfLoader<'a> {
                         val_S + val_A
                     };
                 eprintln!("S {val_S:08x} A {val_A:08x} => {final_value:08x}");
-                memory.write_i32(reloc_at_addr, final_value + 4);
-            }
-            Some(ElfRelaType::R_ARM_JMP) => {
-                // Straight signed 24.
-                let val_S = (symbol.st_value + sections[symbol.st_shndx as usize]) as i32;
-                let val_P = (sections[in_section] + r.offset + 4) as i32;
-                let val_A = r.addend;
-                let final_value = ((((val_S - val_P + val_A) >> 2) & 0xffffff) as u32) | existing_data;
-                eprintln!("S {val_S:08x} P {val_P:08x} A {val_A:08x} => {final_value:08x}");
-                memory.write_u32(reloc_at_addr, existing_data | final_value);
-            }
-            Some(ElfRelaType::R_ARM_LDR_PC_G0) => {
-                // AKA R_ARM_PC13 = S - P + A
-                let val_S = (symbol.st_value + sections[symbol.st_shndx as usize]) as i32;
-                let val_P = (sections[in_section] + r.offset + 4) as i32;
-                let val_A = r.addend;
-                if r.addend >= -128 && r.addend < 127 {
-                    // In range for simple encoding.
-                    let mut existing = memory.read_u32(reloc_at_addr);
-                    let mut low_8 = ((val_S - val_P + val_A) & 0xff) as u8;
-                    let replace = (existing & !PC13_MASK) | low_8 as u32;
-                    eprintln!("{:08x}: {:08x} => {:08x}", reloc_at_addr, existing, replace);
-                    memory.write_u32(reloc_at_addr, replace);
-                } else {
-                    // Sparse encoding.
-                    todo!();
-                }
+                memory.write_i32(reloc_at_addr, final_value + existing_data as i32);
             }
             _ => todo!()
         }

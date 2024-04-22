@@ -173,7 +173,7 @@ enum Instr {
     SwiEq(usize),
     Cmpi(Register,usize),
     Long(usize),
-    Addr(String),
+    Addr(String,bool),
     Bytes(Vec<u8>),
 }
 
@@ -322,14 +322,20 @@ impl Encodable for Instr {
             Instr::Long(l) => {
                 vec_from_u32(v, *l as u32);
             }
-            Instr::Addr(target) => {
+            Instr::Addr(target, text) => {
                 r.push(Relocation {
                     kind: RelocationKind::Long,
                     function: function.to_string(),
                     code_location: v.len(),
                     reloc_target: target.clone(),
                 });
-                vec_from_u32(v, 0);
+                let offset =
+                    if *text {
+                        4
+                    } else {
+                        0
+                    };
+                vec_from_u32(v, offset);
             }
             Instr::Add(r_d,r_s,r_a) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | ArmDataOp::Add.to_u32() | Rn(r_s.clone()).to_u32() | Rd(r_d.clone()).to_u32() | Rm(0,r_a.clone()).to_u32()),
             Instr::Addi(r_d,r_s,imm) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | ArmDataOp::Add.to_u32() | Rn(r_s.clone()).to_u32() | Rd(r_d.clone()).to_u32() | (1 << 25) | (*imm as u32)),
@@ -383,7 +389,7 @@ impl Encodable for Instr {
                     reloc_target: target.clone()
                 });
                 // Relocatable space.
-                vec_from_u32(v, 0);
+                vec_from_u32(v, 4);
             }
             Instr::Swi(n) => {
                 vec_from_u32(v, ArmCond::Unconditional.to_u32() | ArmOp::Swi.to_u32() | (*n as u32));
@@ -458,7 +464,7 @@ impl fmt::Display for Instr {
             Instr::Swi(n) => write!(f, "  swi {n}"),
             Instr::SwiEq(n) => write!(f, "  swieq {n}"),
             Instr::Long(n) => write!(f, "  .long {n}"),
-            Instr::Addr(lbl) => write!(f, "  .long {lbl}"),
+            Instr::Addr(lbl, _) => write!(f, "  .long {lbl}"),
             Instr::Bytes(v) => {
                 let mut sep = " ";
                 write!(f, "  .byte")?;
@@ -998,25 +1004,52 @@ impl Program {
         } else if a == &[6] {
             return self.first_rest(loc, hash, &lst, 4);
         } else {
-            // Dispatch instruction, push everything.
-            for item in lst.iter().rev() {
-                let clause_label = self.add(Rc::new(item.clone()));
-                self.push(
-                    loc,
-                    Instr::Bl(clause_label)
-                );
-            }
-
             // Ensure we have this sexp loadable as data.
             let atom_hash = sha256tree(Rc::new(SExp::Atom(loc.clone(), a.to_vec())));
             let label = self.add_atom(&atom_hash, a);
             eprintln!("load {label} for general operator\n");
+
+            // Load a nil into R4.
             for i in &[
-                Instr::Lea(Register::R(1), label),
-                // Push number of objects on the stack.
-                Instr::Andi(Register::R(0), Register::R(0), 0),
-                Instr::Addi(Register::R(0), Register::R(0), lst.len() as i32),
-                // Push an instruction dispatch.
+                Instr::Andi(Register::R(4), Register::R(4), 0),
+                Instr::Addi(Register::R(4), Register::R(4), 1)
+            ] {
+                self.push(loc, i.clone());
+            }
+
+            // For each subexpression, call it and replace R4 with (cons R0 R4)
+            for item in lst.iter().rev() {
+                let clause_label = self.add(Rc::new(item.clone()));
+                for i in &[
+                    // Load the allocator ptr into R0.
+                    Instr::Ldr(Register::R(0), Register::R(5), NEXT_ALLOC_OFFSET),
+                    // Allocate a cons (new addr in R6)
+                    Instr::Addi(Register::R(6), Register::R(0), 8),
+                    // Store back the pointer.
+                    Instr::Str(Register::R(6), Register::R(5), NEXT_ALLOC_OFFSET),
+                    // R6 = alloc ptr
+                    Instr::Addi(Register::R(6), Register::R(0), 0),
+                    // Reload R0 with the env ptr.
+                    Instr::Addi(Register::R(0), Register::R(5), 0),
+                    // Call the arg code
+                    Instr::Bl(clause_label),
+                    // Store R0 into the cons.
+                    Instr::Str(Register::R(0), Register::R(6), 0),
+                    // Store R4 into the cons.
+                    Instr::Str(Register::R(4), Register::R(6), 4),
+                    // Replace R4 with R6 (the new cons)
+                    Instr::Addi(Register::R(4), Register::R(6), 0),
+                ] {
+                    self.push(loc, i.clone());
+                }
+            }
+
+            for i in &[
+                // Load the sexp for the operator into R0
+                Instr::Lea(Register::R(0), label),
+                // Set R1 to the tail exp.
+                Instr::Addi(Register::R(1), Register::R(4), 0),
+                // Call to do the operator.
                 Instr::Swi(SWI_DISPATCH_INSTRUCTION)
             ] {
                 self.push(loc, i.clone());
@@ -1208,75 +1241,61 @@ impl Program {
 
     fn finish_insns(&mut self) -> Result<(), String> {
         let srcloc = Srcloc::start("*epilog*");
+        let mut constants = HashMap::new();
+        swap(&mut constants, &mut self.constants);
+
         for i in [
             Instr::Align4,
             Instr::Globl("_run".to_string()),
             Instr::Label("_run".to_string()),
-            Instr::Addr(self.env_label.clone()),
+            Instr::Addr(self.env_label.clone(), true),
             Instr::Long(0x10000000),
+            // Write the constant data.
+            Instr::Align4,
+            Instr::Section(".data".to_string())
         ].iter() {
             self.push(&srcloc, i.clone());
         }
 
-        // Write the constant data.
-        let mut constants = HashMap::new();
-        swap(&mut constants, &mut self.constants);
-        self.push(
-            &srcloc,
-            Instr::Align4
-        );
-        self.push(
-            &srcloc,
-            Instr::Section(".data".to_string())
-        );
         for (_, c) in constants.iter() {
-            if let Constant::Cons(label, a_label, b_label) = c {
-                eprintln!("constant pair {label}");
-                for i in &[
-                    Instr::Align4,
-                    Instr::Globl(label.clone()),
-                    Instr::Label(label.clone()),
-                    Instr::Addr(a_label.clone()),
-                    Instr::Addr(b_label.clone())
-                ] {
-                    self.push(&srcloc, i.clone());
+            match c {
+                Constant::Cons(label, a_label, b_label) => {
+                    eprintln!("constant pair {label}");
+                    for i in &[
+                        Instr::Align4,
+                        Instr::Globl(label.clone()),
+                        Instr::Label(label.clone()),
+                        Instr::Addr(a_label.clone(), false),
+                        Instr::Addr(b_label.clone(), false)
+                    ] {
+                        self.push(&srcloc, i.clone());
+                    }
                 }
-            }
-
-        }
-
-        for (_, c) in constants.iter() {
-            if let Constant::Atom(label, bytes) = c {
-                for i in &[
-                    Instr::Align4,
-                    Instr::Globl(label.clone()),
-                    Instr::Label(label.clone()),
-                    Instr::Long(bytes.len() * 2 + 1),
-                    Instr::Bytes(bytes.clone())
-                ] {
-                    self.push(&srcloc, i.clone());
+                Constant::Atom(label, bytes) => {
+                    for i in &[
+                        Instr::Align4,
+                        Instr::Globl(label.clone()),
+                        Instr::Label(label.clone()),
+                        Instr::Long(bytes.len() * 2 + 1),
+                        Instr::Bytes(bytes.clone())
+                    ] {
+                        self.push(&srcloc, i.clone());
+                    }
                 }
             }
         }
         swap(&mut constants, &mut self.constants);
 
         // Write the function table.
-        self.push(
-            &srcloc,
-            Instr::Align4
-        );
-        self.push(
-            &srcloc,
-            Instr::Section(".text".to_string())
-        );
-        self.push(
-            &srcloc,
-            Instr::Globl("_end".to_string())
-        );
-        self.push(
-            &srcloc,
+        for i in &[
+            Instr::Align4,
+            Instr::Section(".text".to_string()),
+            Instr::Globl("_end".to_string()),
             Instr::Label("_end".to_string())
-        );
+        ] {
+            self.push(&srcloc, i.clone());
+        }
+
         self.dwarf_builder.write(&mut self.finished_insns).unwrap();
 
         Ok(())

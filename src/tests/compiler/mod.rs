@@ -9,6 +9,7 @@ mod cldb;
 mod clvm;
 mod compiler;
 mod evaluate;
+mod fuzz;
 mod optimizer;
 mod preprocessor;
 mod repl;

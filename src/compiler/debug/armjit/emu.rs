@@ -20,6 +20,7 @@ use gdbstub::target::ext::base::singlethread::{SingleThreadBase, SingleThreadRes
 
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 use crate::compiler::TRunProgram;
+use crate::compiler::clvm::apply_op;
 use crate::compiler::compiler::{compile_file, DefaultCompilerOpts};
 use crate::compiler::comptypes::CompilerOpts;
 use crate::compiler::debug::armjit::code::{Program, SWI_DONE, SWI_THROW, SWI_DISPATCH_NEW_CODE, SWI_DISPATCH_INSTRUCTION, TARGET_ADDR};
@@ -67,6 +68,8 @@ pub struct Emu {
     pub files: Vec<Option<std::fs::File>>,
 
     pub reported_pid: Pid,
+
+    pub prim_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>,
 }
 
 impl SingleThreadBase for Emu {
@@ -255,6 +258,8 @@ impl Emu {
             files: Vec::new(),
 
             reported_pid: Pid::new(1).unwrap(),
+
+            prim_map: DefaultCompilerOpts::new("*emu*").prim_map()
         })
     }
 
@@ -265,6 +270,30 @@ impl Emu {
         self.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
     }
 
+    fn allocate_and_write(&mut self, alloc_ptr: u32, sexp: Rc<SExp>) -> u32 {
+        let current_addr = self.mem.read_u32(alloc_ptr);
+        match &sexp.atomize() {
+            SExp::Cons(_, a, b) => {
+                self.mem.write_u32(alloc_ptr, current_addr + 8);
+                let a_res = self.allocate_and_write(alloc_ptr, a.clone());
+                let b_res = self.allocate_and_write(alloc_ptr, b.clone());
+                self.mem.write_u32(current_addr, a_res);
+                self.mem.write_u32(current_addr + 4, b_res);
+                current_addr
+            }
+            SExp::Atom(_, v) => {
+                let length_to_write = ((v.len() + 3) & !3) as u32;
+                eprintln!("atom length {length_to_write}");
+                eprintln!("current_addr {current_addr:x}");
+                self.mem.write_u32(alloc_ptr, current_addr + length_to_write + 4);
+                self.mem.write_u32(current_addr, v.len() as u32 * 2 + 1);
+                self.mem.write_data(v, current_addr + 4);
+                current_addr
+            }
+            _ => { todo!(); }
+        }
+    }
+
     fn do_trap(&mut self, pc: u32, value: usize) -> Option<Event> {
         eprintln!("trap {value:x}");
         if value == SWI_DONE {
@@ -272,11 +301,37 @@ impl Emu {
         } else if value == SWI_THROW {
             Some(Event::Trap)
         } else if value == SWI_DISPATCH_NEW_CODE {
-            self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
             todo!();
+            self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
         } else if value == SWI_DISPATCH_INSTRUCTION {
-            self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
-            todo!();
+            // Grab the sexp for this operation.
+            let srcloc = Srcloc::start("*emu*");
+            let r0_value = self.cpu.reg_get(Mode::User, 0);
+            let operator = self.get_sexp(&srcloc, r0_value);
+            let r1_value = self.cpu.reg_get(Mode::User, 1);
+            let args = self.get_sexp(&srcloc, r1_value);
+            let alloc_ptr = self.cpu.reg_get(Mode::User, 5) + 4;
+            let mut allocator = Allocator::new();
+            let runner = Rc::new(DefaultProgramRunner::new());
+            match apply_op(
+                &mut allocator,
+                runner,
+                srcloc,
+                operator,
+                args
+            ) {
+                Ok(res) => {
+                    // Allocate and write back result.
+                    let write_result = self.allocate_and_write(alloc_ptr, res);
+                    self.cpu.reg_set(Mode::User, 0, write_result);
+                    // Increment pc, we handled the operation.
+                    self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
+                    None
+                }
+                Err(_) => {
+                    Some(Event::Trap)
+                }
+            }
         } else {
             self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
             Some(Event::Break)
@@ -303,19 +358,23 @@ impl Emu {
                     _ => todo!()
                 };
             if perform_action {
-                return self.do_trap(pc, (snoop_instruction & 0xffffff) as usize);
+                let trap_result = self.do_trap(pc, (snoop_instruction & 0xffffff) as usize);
+                if trap_result.is_some() {
+                    return trap_result;
+                }
             } else {
                 self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
             }
+
         } else {
             self.cpu.step(&mut self.mem);
-            let pc = self.cpu.reg_get(Mode::User, reg::PC);
-
-            if self.breakpoints.contains(&pc) {
-                return Some(Event::Break);
-            }
         }
 
+        let pc = self.cpu.reg_get(Mode::User, reg::PC);
+
+        if self.breakpoints.contains(&pc) {
+            return Some(Event::Break);
+        }
 
         // if let Some(access) = hit_watchpoint {
         //     let fixup = if self.cpu.thumb_mode() { 2 } else { 4 };
@@ -381,7 +440,6 @@ impl Emu {
 
 impl Emu {
     /// Get an SExp at a specific address.
-    #[cfg(test)]
     fn get_sexp(&self, srcloc: &Srcloc, addr: u32) -> Rc<SExp> {
         let first = self.mem.read_u32(addr);
         if first == 0 || (first & 1) != 0 {
@@ -564,6 +622,26 @@ fn test_compile_and_run_apply_simple_6() {
         "()"
     ).expect("should run");
     assert!(result.is_none());
+}
+
+#[test]
+fn test_compile_and_run_apply_at() {
+    let result = Emu::compile_and_run(
+        "test.clsp",
+        "(mod (A) (include *standard-cl-23*) @)",
+        "(19)"
+    ).expect("should run").unwrap();
+    assert_eq!(result.to_string(), "(19)");
+}
+
+#[test]
+fn test_compile_and_run_apply_path() {
+    let result = Emu::compile_and_run(
+        "test.clsp",
+        "(mod (A) (include *standard-cl-23*) A)",
+        "(19)"
+    ).expect("should run").unwrap();
+    assert_eq!(result.to_string(), "19");
 }
 
 #[test]

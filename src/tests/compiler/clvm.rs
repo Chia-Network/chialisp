@@ -1,8 +1,6 @@
 #[cfg(test)]
 use rand::prelude::*;
 #[cfg(test)]
-use rand::Rng;
-#[cfg(test)]
 use rand_chacha::ChaChaRng;
 
 use num_bigint::ToBigInt;

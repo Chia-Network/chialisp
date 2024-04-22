@@ -302,7 +302,7 @@ fn generate_argument_refs(start: Number, sexp: Rc<SExp>) -> Rc<SExp> {
     }
 }
 
-fn apply_op(
+pub fn apply_op(
     allocator: &mut Allocator,
     runner: Rc<dyn TRunProgram>,
     l: Srcloc,

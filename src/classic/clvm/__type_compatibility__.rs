@@ -33,7 +33,7 @@ pub fn vec_to_string(r: &[u8]) -> String {
  * @see https://github.com/python/cpython/blob/main/Objects/bytesobject.c#L1337
  * @param {Uint8Array} r - byteArray to stringify
  */
-pub fn pybytes_repr(r: &[u8], dquoted: bool) -> String {
+pub fn pybytes_repr(r: &[u8], dquoted: bool, full_repr: bool) -> String {
     let mut squotes = 0;
     let mut dquotes = 0;
     for b in r.iter() {
@@ -59,7 +59,7 @@ pub fn pybytes_repr(r: &[u8], dquoted: bool) -> String {
 
     for b in r.iter() {
         let c = *b as char;
-        if c == quote || c == '\\' {
+        if c == quote || (c == '\\' && full_repr) {
             s = (s + "\\") + char_to_string(c).as_str();
         } else if c == '\t' {
             s += "\\t";
@@ -172,11 +172,11 @@ impl Bytes {
     }
 
     pub fn to_formal_string(&self) -> String {
-        pybytes_repr(&self._b, true)
+        pybytes_repr(&self._b, true, false)
     }
 
     pub fn pybytes(&self) -> String {
-        pybytes_repr(&self._b, false)
+        pybytes_repr(&self._b, false, true)
     }
 
     pub fn hex(&self) -> String {
@@ -209,7 +209,7 @@ impl Bytes {
 
 impl Display for Bytes {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        fmt.write_str(&pybytes_repr(&self._b, false))?;
+        fmt.write_str(&pybytes_repr(&self._b, false, true))?;
         Ok(())
     }
 }
