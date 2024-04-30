@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use elf_rs::*;
 
 use crate::compiler::debug::armjit::memory::{NEG, TargetMemory};
@@ -144,6 +144,15 @@ pub struct ElfLoader<'a> {
     symbols: Vec<ElfSym>,
 }
 
+/// Information that can be used to associate a symbol as emitted by the jit with
+/// a symbol in the clvm code.
+#[derive(Debug, Clone)]
+pub struct EmuSymbolInfo {
+    pub stripped: String,
+    pub raw: String,
+    pub address: u32,
+}
+
 impl<'a> ElfLoader<'a> {
     pub fn new(elf_bytes: &'a [u8], target_addr: u32) -> Result<Self, Error> {
         let mut loader = ElfLoader {
@@ -161,6 +170,7 @@ impl<'a> ElfLoader<'a> {
         for (i, s) in loader.elf.section_header_iter().enumerate() {
             if s.flags().contains(SectionHeaderFlags::SHF_ALLOC) {
                 let align_mask = (s.addralign() - 1) as u32;
+                eprintln!("align mask for {s:?}: {align_mask:x} {:x}", s.size());
                 section_addr = (section_addr + align_mask) & !align_mask;
                 loader.sections.push(section_addr);
                 eprintln!("{i} {s:?}");
@@ -236,9 +246,10 @@ impl<'a> ElfLoader<'a> {
             Some(ElfRelaType::R_ARM_JMP) => {
                 // Straight signed 24.
                 let val_S = (symbol.st_value + sections[symbol.st_shndx as usize]) as i32;
-                let val_P = (sections[in_section] + r.offset + 4) as i32;
+                eprintln!("relocate jmp targeting section at {:x}", sections[symbol.st_shndx as usize]);
+                let val_P = (sections[in_section] + r.offset) as i32;
                 let val_A = r.addend;
-                let final_value = ((((val_S - val_P + val_A) >> 2) & 0xffffff) as u32) | existing_data;
+                let final_value = (((((val_S - val_P + val_A) - 4) >> 2) & 0xffffff) as u32) | existing_data;
                 eprintln!("S {val_S:08x} P {val_P:08x} A {val_A:08x} => {final_value:08x}");
                 memory.write_u32(reloc_at_addr, existing_data | final_value);
             }
@@ -257,6 +268,36 @@ impl<'a> ElfLoader<'a> {
             }
             _ => todo!()
         }
+    }
+
+    // Return the symbol list from the elf executable.
+    pub fn get_symbols(&self) -> HashMap<String, EmuSymbolInfo> {
+        if let Some(string_section) = self.elf.shstr_section() {
+            if let Some(string_content) = string_section.content() {
+                let get_string = |idx: u32| -> Vec<u8> {
+                    let bytes: Vec<u8> = string_content.iter().skip(idx as usize).take_while(|b| *b != &b'\0').copied().collect();
+                    bytes
+                };
+                return self.symbols.iter().filter_map(|es| {
+                    let sym_string = get_string(es.st_name);
+                    if let Some(target_section) = self.elf.section_header_nth(es.st_shndx as usize) {
+                        if target_section.flags().contains(SectionHeaderFlags::SHF_EXECINSTR) {
+                            let stripped: Vec<u8> = sym_string.iter().skip(1).take_while(|b| *b != &b'_').copied().collect();
+                            let sym_info = EmuSymbolInfo {
+                                stripped: decode_string(&stripped),
+                                raw: decode_string(&sym_string),
+                                address: self.sections[es.st_shndx as usize] + es.st_value
+                            };
+                            return Some((sym_info.stripped.clone(), sym_info));
+                        }
+                    }
+
+                    None
+                }).collect();
+            }
+        }
+
+        HashMap::default()
     }
 
     pub fn load<M>(&self, memory: &mut M) where M: TargetMemory {

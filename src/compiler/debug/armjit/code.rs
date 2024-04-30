@@ -21,16 +21,18 @@ use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
 use crate::classic::clvm::casts::bigint_to_bytes_clvm;
 use crate::compiler::clvm::{sha256tree, truthy};
 use crate::compiler::debug::armjit::load::{ElfLoader, write_u32};
-use crate::compiler::sexp::{Atom, NodeSel, SelectNode, SExp, ThisNode};
+use crate::compiler::sexp::{Atom, NodeSel, SelectNode, SExp, ThisNode, decode_string};
 use crate::compiler::srcloc::Srcloc;
 
 const ENV_PTR: i32 = 0;
 const NEXT_ALLOC_OFFSET: i32 = 4;
+const PRINTME: i32 = 8;
 
 pub const SWI_DONE: usize = 0;
 pub const SWI_THROW: usize = 1;
 pub const SWI_DISPATCH_NEW_CODE: usize = 2;
 pub const SWI_DISPATCH_INSTRUCTION: usize = 3;
+pub const SWI_PRINT_EXPR: usize = 4;
 
 pub const TARGET_ADDR: u32 = 0x1000;
 
@@ -346,8 +348,8 @@ impl Encodable for Instr {
             Instr::Mov(r_d,imm) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | ArmDataOp::Mov.to_u32() | Rd(r_d.clone()).to_u32() | (1 << 25) | (*imm as u32)),
             Instr::Push(rs) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 4 << 25 | Rn(Register::SP).to_u32() | 1 << 21 | 1 << 24 | rs.to_u32()),
             Instr::Pop(rs) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 4 << 25 | Rn(Register::SP).to_u32() | 1 << 20 | 1 << 21 | 1 << 23 | rs.to_u32()),
-            Instr::Str(rd,rs,off) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 1 << 26 | 1 << 24 | 1 << 23 | Rn(rs.clone()).to_u32() | Rd(rd.clone()).to_u32() | (((65536 + off) & 0xfff) as u32)),
-            Instr::Ldr(rd,rs,off) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 1 << 26 | 1 << 24 | 1 << 23 | 1 << 20 | Rn(rs.clone()).to_u32() | Rd(rd.clone()).to_u32() | (((65536 + off) & 0xfff) as u32)),
+            Instr::Str(rd,rs,off) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 1 << 26 | 1 << 24 | 1 << 23 | Rn(rs.clone()).to_u32() | Rd(rd.clone()).to_u32() | (((65536 + off) & 0xff) as u32)),
+            Instr::Ldr(rd,rs,off) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 1 << 26 | 1 << 24 | 1 << 23 | 1 << 20 | Rn(rs.clone()).to_u32() | Rd(rd.clone()).to_u32() | (((65536 + off) & 0xff) as u32)),
             Instr::B(target) => {
                 r.push(Relocation {
                     kind: RelocationKind::Branch,
@@ -486,6 +488,9 @@ struct DwarfBuilder {
     pointer_type: UnitEntryId,
 
     seq_addr_start: usize,
+    target_addr: u32,
+
+    symbol_table: Rc<HashMap<String, String>>,
 
     dwarf: Dwarf
 }
@@ -536,7 +541,7 @@ impl gimli::write::Writer for DwarfSectionWriter {
 }
 
 impl DwarfBuilder {
-    fn new(filename: &str) -> Self {
+    fn new(filename: &str, target_addr: u32, symbol_table: Rc<HashMap<String, String>>) -> Self {
         let mut path = PathBuf::new();
         path.push(filename);
         path.pop();
@@ -588,13 +593,13 @@ impl DwarfBuilder {
         let mut unit = Unit::new(encoding, line_program);
 
         unit.ranges.add(RangeList(vec![
-            Range::BaseAddress { address: Address::Constant(TARGET_ADDR as u64) }
+            Range::BaseAddress { address: Address::Constant(target_addr as u64) }
         ]));
         unit.locations.add(LocationList(vec![
-            Location::BaseAddress { address: Address::Constant(TARGET_ADDR as u64) }
+            Location::BaseAddress { address: Address::Constant(target_addr as u64) }
         ]));
         let unit_ent = unit.get_mut(unit.root());
-        unit_ent.set(DW_AT_low_pc, AttributeValue::Address(Address::Constant(TARGET_ADDR as u64)));
+        unit_ent.set(DW_AT_low_pc, AttributeValue::Address(Address::Constant(target_addr as u64)));
         unit_ent.set(DW_AT_name, AttributeValue::String(filename.clone()));
         unit_ent.set(DW_AT_language, AttributeValue::Language(DW_LANG_C99));
 
@@ -614,10 +619,12 @@ impl DwarfBuilder {
 
         let obj = DwarfBuilder {
             seq_addr_start: 0,
+            target_addr,
             unit_id,
             file_to_id,
             directory_to_id,
             pointer_type: type_id,
+            symbol_table,
             dwarf,
         };
 
@@ -687,7 +694,7 @@ impl DwarfBuilder {
     fn start(&mut self, addr: usize) {
         let unit = self.dwarf.units.get_mut(self.unit_id);
         self.seq_addr_start = addr;
-        unit.line_program.begin_sequence(Some(Address::Constant((addr + TARGET_ADDR as usize) as u64)));
+        unit.line_program.begin_sequence(Some(Address::Constant((addr + self.target_addr as usize) as u64)));
     }
 
     fn end(&mut self, addr: usize) {
@@ -695,27 +702,36 @@ impl DwarfBuilder {
         unit.line_program.end_sequence((addr - self.seq_addr_start) as u64);
     }
 
+    fn match_function(&self, label: &str) -> Option<String> {
+        let stripped: Vec<u8> = label.bytes().skip(1).take_while(|b| *b != b'_').collect();
+        self.symbol_table.get(&decode_string(&stripped)).cloned()
+    }
+
     // Create dwarf traffic needed to ensure that gdb can find the locals.
     fn decorate_function(&mut self, label: &str, addr: usize, size: usize) {
+        let name = self.match_function(&label).map(|c| c.clone()).unwrap_or_else(|| {
+            label.to_string()
+        });
         let unit = self.dwarf.units.get_mut(self.unit_id);
         let subprogram_id = unit.add(unit.root(), DW_TAG_subprogram);
         let mut fbexpr_mid = Expression::new();
-        fbexpr_mid.op_breg(gimli::Register(13), 0);
+        fbexpr_mid.op_breg(gimli::Register(11), 0);
         let mut loclist = Vec::new();
         loclist.push(Location::StartEnd {
-            begin: Address::Constant((addr + 8) as u64),
-            end: Address::Constant((addr + size - 8) as u64),
+            begin: Address::Constant(addr as u64),
+            end: Address::Constant((addr + size) as u64),
             data: fbexpr_mid
         });
         let loc_list_id = unit.locations.add(LocationList(loclist));
         let mut sub_ent = unit.get_mut(subprogram_id);
-        sub_ent.set(DW_AT_name, AttributeValue::String(label.as_bytes().to_vec()));
+        sub_ent.set(DW_AT_name, AttributeValue::String(name.as_bytes().to_vec()));
         sub_ent.set(DW_AT_type,AttributeValue::UnitRef(self.pointer_type));
-        sub_ent.set(DW_AT_low_pc, AttributeValue::Address(Address::Constant((TARGET_ADDR as usize + addr) as u64)));
-        sub_ent.set(DW_AT_high_pc, AttributeValue::Address(Address::Constant((TARGET_ADDR as usize + addr + size) as u64)));
+        sub_ent.set(DW_AT_low_pc, AttributeValue::Address(Address::Constant((self.target_addr as usize + addr) as u64)));
+        sub_ent.set(DW_AT_high_pc, AttributeValue::Address(Address::Constant((self.target_addr as usize + addr + size) as u64)));
         sub_ent.set(DW_AT_frame_base, AttributeValue::LocationListRef(loc_list_id));
         let mut expr = Expression::new();
-        expr.op_fbreg(4);
+        expr.op_fbreg(-0x18);
+        expr.op_deref();
         let at_id = unit.add(subprogram_id, DW_TAG_formal_parameter);
         let at_ent = unit.get_mut(at_id);
         at_ent.set(DW_AT_name, AttributeValue::String(b"env".to_vec()));
@@ -737,7 +753,7 @@ impl DwarfBuilder {
     fn write(&mut self, current_addr: usize, instrs: &mut Vec<Instr>) -> gimli::write::Result<()> {
         let mut unit = self.dwarf.units.get_mut(self.unit_id);
         let unit_ent = unit.get_mut(unit.root());
-        unit_ent.set(DW_AT_high_pc, AttributeValue::Address(Address::Constant(TARGET_ADDR as u64 + current_addr as u64)));
+        unit_ent.set(DW_AT_high_pc, AttributeValue::Address(Address::Constant(self.target_addr as u64 + current_addr as u64)));
 
         let mut sections = Sections::<DwarfSectionWriter>::default();
         self.dwarf.write(&mut sections)?;
@@ -773,6 +789,7 @@ impl Constant {
 }
 
 pub struct Program {
+    target_addr: u32,
     finished_insns: Vec<Instr>,
     first_label: String,
     env_label: String,
@@ -781,7 +798,7 @@ pub struct Program {
     done_programs: HashSet<String>,
     waiting_programs: Vec<(String, Rc<SExp>)>,
     constants: HashMap<Vec<u8>, Constant>,
-    symbol_table: HashMap<String, String>,
+    symbol_table: Rc<HashMap<String, String>>,
     current_symbol: Option<String>,
     start_addr: usize,
     current_addr: usize,
@@ -840,6 +857,12 @@ fn dequote(a: Rc<SExp>) -> Option<Rc<SExp>> {
     }
 
     None
+}
+
+struct Function {
+    left_env: bool,
+    args: Rc<SExp>,
+    name: String,
 }
 
 impl Program {
@@ -922,8 +945,10 @@ impl Program {
 
         // Quote is special.
         if a == &[1] {
+            eprintln!("do_operator, quoted {b}");
             self.add(b.clone());
-            return self.load_sexp(loc, hash, b);
+            let b_hash = sha256tree(b.clone());
+            return self.load_sexp(loc, &b_hash, b);
         }
 
         // Every other operator must have a proper list following it.
@@ -944,9 +969,10 @@ impl Program {
             // r0 = env ptr
             // Swap r0 (env) with r5[ENV_PTR]
             for i in &[
+                Instr::Bl(env_comp),
                 Instr::Ldr(Register::R(4), Register::R(5), ENV_PTR),
                 Instr::Str(Register::R(0), Register::R(5), ENV_PTR),
-                Instr::Bl(env_comp)
+                Instr::Addi(Register::R(0), Register::R(5), 0),
             ] {
                 self.push(loc, i.clone());
             }
@@ -965,7 +991,12 @@ impl Program {
 
                 for i in &[
                     Instr::Bl(code_comp),
-                    Instr::Swi(SWI_DISPATCH_NEW_CODE)
+                    Instr::Swi(SWI_DISPATCH_NEW_CODE),
+                    Instr::Addi(Register::R(0), Register::R(5), 0),
+                    Instr::Addi(Register::R(7), Register::LR, 0),
+                    Instr::Addi(Register::LR, Register::PC, 0),
+                    Instr::Addi(Register::PC, Register::R(2), 0),
+                    Instr::Addi(Register::LR, Register::R(7), 0),
                 ] {
                     self.push(loc, i.clone());
                 }
@@ -974,7 +1005,6 @@ impl Program {
             for i in &[
                 // Reload the old env.
                 Instr::Str(Register::R(4), Register::R(5), ENV_PTR),
-                Instr::Bx(Register::LR),
             ] {
                 self.push(loc, i.clone());
             }
@@ -1040,9 +1070,10 @@ impl Program {
             return self.first_rest(loc, hash, &lst, 4);
         } else {
             // Ensure we have this sexp loadable as data.
-            let atom_hash = sha256tree(Rc::new(SExp::Atom(loc.clone(), a.to_vec())));
+            let operator_sexp = Rc::new(SExp::Atom(loc.clone(), a.to_vec()));
+            let atom_hash = sha256tree(operator_sexp.clone());
             let label = self.add_atom(&atom_hash, a);
-            eprintln!("load {label} for general operator\n");
+            eprintln!("load {label} for general operator {operator_sexp}\n");
 
             // Load a nil into R4.
             for i in &[
@@ -1054,6 +1085,7 @@ impl Program {
 
             // For each subexpression, call it and replace R4 with (cons R0 R4)
             for item in lst.iter().rev() {
+                eprintln!("load clause {item} for operator {operator_sexp}");
                 let clause_label = self.add(Rc::new(item.clone()));
                 for i in &[
                     // Load the allocator ptr into R0.
@@ -1068,6 +1100,8 @@ impl Program {
                     Instr::Addi(Register::R(0), Register::R(5), 0),
                     // Call the arg code
                     Instr::Bl(clause_label),
+                    Instr::Str(Register::R(0), Register::R(5), PRINTME),
+                    Instr::Swi(SWI_PRINT_EXPR),
                     // Store R0 into the cons.
                     Instr::Str(Register::R(0), Register::R(6), 0),
                     // Store R4 into the cons.
@@ -1159,6 +1193,7 @@ impl Program {
 
         // Note: get_code_label issues a fresh label for this hash every time.
         let body_label = self.get_code_label(&hash);
+        eprintln!("label {body_label} for {sexp}");
         self.waiting_programs.push((body_label.clone(), sexp.clone()));
         body_label
     }
@@ -1191,7 +1226,7 @@ impl Program {
         if end_block {
             self.current_addr = (self.current_addr + 15) & !15;
             if let Some(label) = self.current_symbol.as_ref() {
-                eprintln!("end block for label {label}");
+                eprintln!("end block for label {label} {:x}-{:x}", self.start_addr, self.current_addr);
                 self.dwarf_builder.decorate_function(label, self.start_addr, self.current_addr - self.start_addr);
                 self.current_symbol = None;
             }
@@ -1226,19 +1261,21 @@ impl Program {
             );
             self.push_be(
                 &sexp.loc(),
-                Instr::Addi(Register::R(5), Register::R(0), 0),
+                Instr::Push(vec![Register::FP, Register::LR]),
                 Some(BeginEndBlock::BeginBlock)
             );
-            self.push(
-                &sexp.loc(),
-                Instr::Push(vec![Register::R(4), Register::R(5), Register::R(6), Register::LR]),
-            );
-
-            // Grab the env pointer.
-            self.push(
-                &sexp.loc(),
+            for i in &[
+                // Grab the env pointer.
                 Instr::Addi(Register::R(5), Register::R(0), 0),
-            );
+                Instr::Addi(Register::FP, Register::SP, 4),
+                Instr::Subi(Register::SP, Register::SP, 0x18),
+                Instr::Str(Register::R(4), Register::SP, 0),
+                Instr::Str(Register::R(5), Register::SP, 4),
+                Instr::Str(Register::R(6), Register::SP, 8),
+                Instr::Str(Register::R(7), Register::SP, 12),
+            ] {
+                self.push(&sexp.loc(), i.clone());
+            }
 
             // Translate body.
             match sexp.borrow() {
@@ -1279,10 +1316,17 @@ impl Program {
                 }
             }
 
-            self.push(
-                &sexp.loc(),
-                Instr::Pop(vec![Register::R(4), Register::R(5), Register::R(6), Register::LR]),
-            );
+            for i in &[
+                Instr::Ldr(Register::R(4), Register::SP, 0),
+                Instr::Ldr(Register::R(5), Register::SP, 4),
+                Instr::Ldr(Register::R(6), Register::SP, 8),
+                Instr::Ldr(Register::R(7), Register::SP, 12),
+                Instr::Subi(Register::SP, Register::FP, 4),
+                Instr::Pop(vec![Register::FP, Register::LR]),
+            ] {
+                self.push(&sexp.loc(), i.clone());
+            }
+
             self.push_be(
                 &sexp.loc(),
                 Instr::Bx(Register::LR),
@@ -1319,6 +1363,7 @@ impl Program {
             Instr::Label("_run".to_string()),
             Instr::Addr(self.env_label.clone(), true),
             Instr::Long(0x10000000),
+            Instr::Long(1),
             // Write the constant data.
             Instr::Align4,
             Instr::Section(".data".to_string())
@@ -1416,7 +1461,7 @@ impl Program {
         let mut in_function = None;
 
         let mut produced_code = 0;
-        let mut handle_def_end = |function_body: &mut Vec<u8>, in_function: &mut Option<String>| -> Result<(), String> {
+        let mut handle_def_end = |target_addr: u32, function_body: &mut Vec<u8>, in_function: &mut Option<String>| -> Result<(), String> {
             if let Some(defname) = in_function.as_ref() {
                 if !function_body.is_empty() {
                     eprintln!("obj define {defname}");
@@ -1431,7 +1476,7 @@ impl Program {
 
         for i in self.finished_insns.iter() {
             if let Instr::Globl(name) = i {
-                handle_def_end(&mut function_body, &mut in_function)?;
+                handle_def_end(self.target_addr, &mut function_body, &mut in_function)?;
                 in_function = Some(name.to_string());
             }
 
@@ -1440,7 +1485,7 @@ impl Program {
             }
         }
 
-        handle_def_end(&mut function_body, &mut in_function)?;
+        handle_def_end(self.target_addr, &mut function_body, &mut in_function)?;
 
         // Create .debug_aranges
         let mut debug_aranges: Vec<u8> = (0..0x20).map(|_| 0).collect();
@@ -1448,8 +1493,8 @@ impl Program {
         debug_aranges[4] = 2;
         write_u32(&mut debug_aranges, 6, 0);
         debug_aranges[10] = 4;
-        write_u32(&mut debug_aranges, 16, TARGET_ADDR);
-        write_u32(&mut debug_aranges, 20, TARGET_ADDR + produced_code as u32);
+        write_u32(&mut debug_aranges, 16, self.target_addr);
+        write_u32(&mut debug_aranges, 20, self.target_addr + produced_code as u32);
         sections.push((".debug_aranges".to_string(), debug_aranges));
 
         for (name, bytes) in sections.iter() {
@@ -1470,13 +1515,14 @@ impl Program {
 
         // Patch up
         let create_patches = |result_buf: &mut [u8]| {
-            let elf_loader = ElfLoader::new(result_buf, TARGET_ADDR).expect("should load");
+            let elf_loader = ElfLoader::new(result_buf, self.target_addr).expect("should load");
             elf_loader.patch_sections()
         };
 
         let patches = create_patches(&mut result_buf);
 
-        for (target, value) in patches.into_iter() {
+        for (i, (target, value)) in patches.into_iter().enumerate() {
+            eprintln!("section {i} target {target:x} value {value:x}");
             write_u32(&mut result_buf, target, value);
         }
 
@@ -1487,9 +1533,10 @@ impl Program {
         filename: &str,
         sexp: Rc<SExp>,
         env: Rc<SExp>,
-        symbol_table: HashMap<String, String>
+        target_addr: u32,
+        symbol_table: Rc<HashMap<String, String>>
     ) -> Result<Self, String> {
-        let dwarf_builder = DwarfBuilder::new(filename);
+        let dwarf_builder = DwarfBuilder::new(filename, target_addr, symbol_table.clone());
         let mut p: Program = Program {
             finished_insns: Vec::new(),
             first_label: Default::default(),
@@ -1502,6 +1549,7 @@ impl Program {
             symbol_table: Default::default(),
             current_addr: 0,
             start_addr: 0,
+            target_addr,
             current_symbol: None,
             dwarf_builder
         };

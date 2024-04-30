@@ -1,7 +1,8 @@
 // Based on https://github.com/daniel5151/gdbstub/blob/master/examples/armv4t/emu.rs
 
-use std::fs;
+use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::fs;
 use std::rc::Rc;
 
 use clvmr::Allocator;
@@ -18,13 +19,15 @@ use gdbstub::target::ext::base::{BaseOps, single_register_access};
 use gdbstub::target::ext::breakpoints::{Breakpoints, BreakpointsOps, HwBreakpointOps, HwWatchpointOps, SwBreakpoint, SwBreakpointOps};
 use gdbstub::target::ext::base::singlethread::{SingleThreadBase, SingleThreadResume, SingleThreadResumeOps};
 
+use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
+
 use crate::compiler::TRunProgram;
-use crate::compiler::clvm::apply_op;
+use crate::compiler::clvm::{apply_op, sha256tree};
 use crate::compiler::compiler::{compile_file, DefaultCompilerOpts};
 use crate::compiler::comptypes::CompilerOpts;
-use crate::compiler::debug::armjit::code::{Program, SWI_DONE, SWI_THROW, SWI_DISPATCH_NEW_CODE, SWI_DISPATCH_INSTRUCTION, TARGET_ADDR};
-use crate::compiler::debug::armjit::load::ElfLoader;
+use crate::compiler::debug::armjit::code::{Program, SWI_DONE, SWI_THROW, SWI_DISPATCH_NEW_CODE, SWI_DISPATCH_INSTRUCTION, SWI_PRINT_EXPR, TARGET_ADDR};
+use crate::compiler::debug::armjit::load::{ElfLoader, EmuSymbolInfo};
 use crate::compiler::debug::armjit::memory::{PagedMemory, TargetMemory};
 use crate::compiler::debug::build_symbol_table_mut;
 use crate::compiler::dialect::AcceptedDialect;
@@ -65,9 +68,11 @@ pub struct Emu {
 
     pub watchpoints: Vec<u32>,
     pub breakpoints: Vec<u32>,
-    pub files: Vec<Option<std::fs::File>>,
 
     pub reported_pid: Pid,
+
+    pub clvm_symbols: Rc<HashMap<String, String>>,
+    pub jit_symbols: Rc<HashMap<String, EmuSymbolInfo>>,
 
     pub prim_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>,
 }
@@ -228,7 +233,7 @@ impl SingleThreadResume for Emu {
 }
 
 impl Emu {
-    pub fn new(program_elf: &[u8], start_addr: u32) -> DynResult<Emu> {
+    pub fn new(program_elf: &[u8], start_addr: u32, clvm_symbols: Rc<HashMap<String, String>>) -> DynResult<Emu> {
         // set up emulated system
         let mut cpu = Cpu::new();
         let mut mem = PagedMemory::default();
@@ -236,6 +241,8 @@ impl Emu {
         // copy all in-memory sections from the ELF file into system RAM
         let mut elf_loader = ElfLoader::new(program_elf, start_addr).expect("should load");
         elf_loader.load(&mut mem);
+
+        let jit_symbols = Rc::new(elf_loader.get_symbols());
 
         // setup execution state
         cpu.reg_set(Mode::User, reg::SP, 0xffffff00);
@@ -255,9 +262,11 @@ impl Emu {
 
             watchpoints: Vec::new(),
             breakpoints: Vec::new(),
-            files: Vec::new(),
 
             reported_pid: Pid::new(1).unwrap(),
+
+            jit_symbols,
+            clvm_symbols,
 
             prim_map: DefaultCompilerOpts::new("*emu*").prim_map()
         })
@@ -295,17 +304,72 @@ impl Emu {
     }
 
     fn do_trap(&mut self, pc: u32, value: usize) -> Option<Event> {
+        let srcloc = Srcloc::start("*emu*");
         eprintln!("trap {value:x}");
         if value == SWI_DONE {
             Some(Event::Halted)
         } else if value == SWI_THROW {
             Some(Event::Trap)
         } else if value == SWI_DISPATCH_NEW_CODE {
+            let r0_value = self.cpu.reg_get(Mode::User, 0);
+            let to_run = self.get_sexp(&srcloc, r0_value);
+
+            let r5_value = self.cpu.reg_get(Mode::User, 5);
+            let env_value = self.mem.r32(r5_value);
+            let env = self.get_sexp(&srcloc, env_value);
+
+            let hash = sha256tree(to_run.clone());
+            let string_of_hash = Bytes::new(Some(BytesFromType::Raw(hash))).hex();
+
+            // We have unknown code in to_run.
+            //
+            // There are two cases:
+            //
+            // 1) jit_symbols contains a match for the hash of to_run.
+            //    In that case, we can transfer control to that function as though
+            //    it was a function call.
+            //
+            // 2) jit_symbols does not contain a symbol for this.  In this case,
+            //    we allocate space using the allocation ptr in r5 and generate
+            //    code for the first operator in the given clvm with each argument
+            //    computed via an SWI_DISPATCH_NEW_CODE instruction.
+            //
+            //    We will keep reentering the emulator this way until we find
+            //    a match or emit a primitive instruction that is freestanding.
+
+            // Setup stack frame in code buffer.
+
+            if let Some(lookup) = self.jit_symbols.get(&string_of_hash) {
+                // We found it, transfer control.
+                eprintln!("found code, dispatch to {lookup:?}");
+                eprintln!("running code {to_run} with env {env}");
+                let current_pc = self.cpu.reg_get(Mode::User, reg::PC);
+                self.cpu.reg_set(Mode::User, 2, lookup.address);
+                self.cpu.reg_set(Mode::User, reg::PC, current_pc + 4);
+                return None;
+            };
+
+            eprintln!("not found: running code {to_run} with env {env}");
             todo!();
-            self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
+
+            // Not found, organize code.
+            let mut output_code: Vec<u8> = Vec::new();
+
+            // Copy in the sexp.
+            let alloc_ptr = self.cpu.reg_get(Mode::User, 5) + 4;
+            let write_result = self.allocate_and_write(alloc_ptr, to_run);
+
+            // Emit epilog in code buffer.
+
+            // Grab allocation ptr.
+
+            // Copy in code.
+
+            // Set allocation ptr.
+
+            // Set PC to new code.
         } else if value == SWI_DISPATCH_INSTRUCTION {
             // Grab the sexp for this operation.
-            let srcloc = Srcloc::start("*emu*");
             let r0_value = self.cpu.reg_get(Mode::User, 0);
             let operator = self.get_sexp(&srcloc, r0_value);
             let r1_value = self.cpu.reg_get(Mode::User, 1);
@@ -313,25 +377,34 @@ impl Emu {
             let alloc_ptr = self.cpu.reg_get(Mode::User, 5) + 4;
             let mut allocator = Allocator::new();
             let runner = Rc::new(DefaultProgramRunner::new());
+            eprintln!("run operator {operator} args {args}");
             match apply_op(
                 &mut allocator,
                 runner,
                 srcloc,
-                operator,
-                args
+                operator.clone(),
+                args.clone()
             ) {
                 Ok(res) => {
                     // Allocate and write back result.
-                    let write_result = self.allocate_and_write(alloc_ptr, res);
+                    let write_result = self.allocate_and_write(alloc_ptr, res.clone());
+                    eprintln!("run operator {operator} args {args} => {res}");
                     self.cpu.reg_set(Mode::User, 0, write_result);
                     // Increment pc, we handled the operation.
                     self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
                     None
                 }
-                Err(_) => {
+                Err(e) => {
+                    eprintln!("error simulating instruction: {e:?}");
                     Some(Event::Trap)
                 }
             }
+        } else if value == SWI_PRINT_EXPR {
+            let r5_value = self.cpu.reg_get(Mode::User, 5) + 8;
+            let to_print = self.mem.r32(r5_value);
+            eprintln!("PRINT: {}", self.get_sexp(&srcloc, to_print));
+            self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
+            None
         } else {
             self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
             Some(Event::Break)
@@ -346,6 +419,11 @@ impl Emu {
         let snoop_instruction = self.mem.r32(pc);
 
         eprintln!("pc {pc:x} snoop {snoop_instruction:x}");
+        if pc > 0x1010 {
+            let r5_value = self.cpu.reg_get(Mode::User, 5);
+            let env_value = self.mem.r32(r5_value);
+            eprintln!("env {}", self.get_sexp(&Srcloc::start("*env*"), env_value));
+        }
         if (snoop_instruction & 0x0f000000) == 0x0f000000 {
             // This is a trap instruction, interpret it.
             let cpsr = self.cpu.reg_get(Mode::User, reg::CPSR);
@@ -460,9 +538,9 @@ impl Emu {
 
     /// Run to completion and return a value by address for tests.
     #[cfg(test)]
-    fn run_to_exit(program: &[u8], start_addr: u32) -> DynResult<Option<Rc<SExp>>> {
+    fn run_to_exit(program: &[u8], start_addr: u32, clvm_symbols: Rc<HashMap<String, String>>) -> DynResult<Option<Rc<SExp>>> {
         let srcloc = Srcloc::start("*emu*");
-        let mut emu = Emu::new(program, start_addr)?;
+        let mut emu = Emu::new(program, start_addr, clvm_symbols)?;
         let mut elf_loader = ElfLoader::new(program, start_addr).expect("should load");
         elf_loader.load(&mut emu.mem);
 
@@ -507,30 +585,32 @@ impl Emu {
                 &mut symbol_table,
             ).expect("should compile");
         build_symbol_table_mut(&mut symbol_table, &compiled);
+        let symbols = Rc::new(symbol_table);
         let generator = Program::new(
             filename,
             Rc::new(compiled),
             env_parsed[0].clone(),
-            symbol_table
+            TARGET_ADDR,
+            symbols.clone()
         ).expect("should be generatable");
         let tmpfile = NamedTempFile::new().expect("should be able to make a temp file");
         let tmpname = tmpfile.path().to_str().unwrap().to_string();
         let elf_data = generator.to_elf(&tmpname).expect("should generate");
-        Emu::run_to_exit(&elf_data, TARGET_ADDR)
+        Emu::run_to_exit(&elf_data, TARGET_ADDR, symbols)
     }
 }
 
 #[test]
 fn test_run_to_exit_and_return_nil() {
     let elf = fs::read("resources/tests/armjit/return_nil.elf").expect("should exist");
-    let result = Emu::run_to_exit(&elf, TARGET_ADDR).expect("should load").unwrap();
+    let result = Emu::run_to_exit(&elf, TARGET_ADDR, Rc::new(HashMap::default())).expect("should load").unwrap();
     assert_eq!(result.to_string(), "()");
 }
 
 #[test]
 fn test_run_to_exit_and_return_pair() {
     let elf = fs::read("resources/tests/armjit/return_cons.elf").expect("should exist");
-    let result = Emu::run_to_exit(&elf, TARGET_ADDR).expect("should load").unwrap();
+    let result = Emu::run_to_exit(&elf, TARGET_ADDR, Rc::new(HashMap::default())).expect("should load").unwrap();
     assert_eq!(result.to_string(), "(hi . there)");
 }
 
@@ -652,6 +732,36 @@ fn test_compile_and_run_apply_simple_op() {
         "(99 103)"
     ).expect("should run").unwrap();
     assert_eq!(result.to_string(), "202");
+}
+
+#[test]
+fn test_compile_and_run_apply_simple_op1() {
+    let result = Emu::compile_and_run(
+        "test.clsp",
+        "(mod (A B) (include *standard-cl-23*) (+ 1 A B))",
+        "(99 103)"
+    ).expect("should run").unwrap();
+    assert_eq!(result.to_string(), "203");
+}
+
+#[test]
+fn test_compile_and_run_apply_simple_function_0() {
+    let result = Emu::compile_and_run(
+        "test.clsp",
+        "(mod (A B) (include *standard-cl-23*) (defun F (A B) (+ 1 A B)) (F A B))",
+        "(99 103)"
+    ).expect("should run").unwrap();
+    assert_eq!(result.to_string(), "203");
+}
+
+#[test]
+fn test_compile_and_run_apply_function_1() {
+    let result = Emu::compile_and_run(
+        "test.clsp",
+        "(mod (A) (include *standard-cl-23*) (defun F (A) (+ 1 A)) (F A))",
+        "(17)"
+    ).expect("should run").unwrap();
+    assert_eq!(result.to_string(), "18");
 }
 
 pub enum RunEvent {

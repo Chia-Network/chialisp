@@ -60,9 +60,9 @@ struct Args {
     pub env: String,
 }
 
-fn spin_up_emulation(signal_emu_startup_complete: Sender<()>, elf_bin: &[u8]) {
+fn spin_up_emulation(signal_emu_startup_complete: Sender<()>, elf_bin: &[u8], symbols: Rc<HashMap<String, String>>) {
     // Tiny start.
-    let mut emu = Emu::new(elf_bin, TARGET_ADDR).expect("should have elf");
+    let mut emu = Emu::new(elf_bin, TARGET_ADDR, symbols).expect("should have elf");
     let mut connection = start_stub().expect("should start service");
     signal_emu_startup_complete.send(()).expect("should send");
     run_stub(connection, &mut emu).expect("should run"); // Until exit.
@@ -114,12 +114,14 @@ fn main() {
     if env.is_empty() {
         env.push(Rc::new(SExp::Nil(srcloc.clone())));
     }
+    let symbols = Rc::new(symbol_table.clone());
 
     let program = Program::new(
         &args.filename,
         Rc::new(compiled),
         env[0].clone(),
-        symbol_table
+        TARGET_ADDR,
+        symbols.clone(),
     ).expect("should generate");
 
     let mut elf_out = program.to_elf(&args.output).expect("should be writable");
@@ -131,7 +133,7 @@ fn main() {
     // Spin up our emulation.
     let t = thread::spawn(move || {
         let elf_out = elf_out;
-        spin_up_emulation(signal_emu_startup_complete, &elf_out)
+        spin_up_emulation(signal_emu_startup_complete, &elf_out, Rc::new(symbol_table)) // Thread boundary.
     });
 
     let _ = emu_startup_complete.recv().expect("should be able to start emu");
