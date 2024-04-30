@@ -13,7 +13,7 @@ use faerie::{ArtifactBuilder, Decl, Link, SectionKind};
 use gimli;
 use gimli::{Encoding, Format, LineEncoding, DwAte, DW_ATE_unsigned};
 use gimli::constants::{DW_AT_byte_size, DW_AT_low_pc, DW_AT_high_pc, DW_AT_name, DW_TAG_subprogram, DW_TAG_base_type, DW_TAG_pointer_type, DW_TAG_formal_parameter, DW_AT_location, DW_AT_type, DW_AT_encoding, DW_AT_frame_base, DW_TAG_variable, DW_AT_language, DW_LANG_C99};
-use gimli::write::{Address, Attribute, AttributeValue, DirectoryId, Dwarf, FileId, LineProgram, LineString, Location, LocationList, Range, RangeList, Section, Sections, Unit, UnitId, UnitEntryId, Expression};
+use gimli::write::{Address, Attribute, AttributeValue, DirectoryId, Dwarf, FileId, LineProgram, LineString, Location, LocationList, Range, RangeList, Section, Sections, Unit, UnitId, UnitEntryId, Expression, DwarfUnit};
 use target_lexicon::triple;
 use tempfile::NamedTempFile;
 
@@ -21,7 +21,7 @@ use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
 use crate::classic::clvm::casts::bigint_to_bytes_clvm;
 use crate::compiler::clvm::{sha256tree, truthy};
 use crate::compiler::debug::armjit::load::{ElfLoader, write_u32};
-use crate::compiler::sexp::{Atom, NodeSel, SelectNode, SExp, ThisNode, decode_string};
+use crate::compiler::sexp::{Atom, NodeSel, SelectNode, SExp, ThisNode, decode_string, parse_sexp};
 use crate::compiler::srcloc::Srcloc;
 
 const ENV_PTR: i32 = 0;
@@ -702,46 +702,85 @@ impl DwarfBuilder {
         unit.line_program.end_sequence((addr - self.seq_addr_start) as u64);
     }
 
-    fn match_function(&self, label: &str) -> Option<String> {
-        let stripped: Vec<u8> = label.bytes().skip(1).take_while(|b| *b != b'_').collect();
-        self.symbol_table.get(&decode_string(&stripped)).cloned()
+    fn match_function(&self, label: &str) -> Option<(String, String)> {
+        let mut stripped: Vec<u8> = label.bytes().skip(1).take_while(|b| *b != b'_').collect();
+        if let Some(name) = self.symbol_table.get(&decode_string(&stripped)).cloned() {
+            stripped.append(&mut b"_arguments".to_vec());
+            let args = self.symbol_table.get(&decode_string(&stripped)).cloned().unwrap_or_else(|| "ENV".to_string());
+            return Some((name, args));
+        }
+
+        None
+    }
+
+    fn add_arguments(&mut self, subprogram_id: UnitEntryId, here: u64, path: u64, args: Rc<SExp>) {
+        eprintln!("add_arguments {here} {path} {args}");
+        if let SExp::Cons(_, a, b) = args.borrow() {
+            self.add_arguments(subprogram_id, here << 1, path, a.clone());
+            self.add_arguments(subprogram_id, here << 1, path | here, b.clone());
+        } else if let SExp::Atom(_, a) = args.borrow() {
+            let argname = decode_string(a);
+            let unit = self.dwarf.units.get_mut(self.unit_id);
+            let mut expr = Expression::new();
+
+            // Deref the environment.
+            expr.op_fbreg(-0x18);
+            expr.op_deref();
+
+            let mut i = 1;
+            while i < here {
+                expr.op_deref();
+                if (path & i) != 0 {
+                    expr.op_plus_uconst(4);
+                }
+                i <<= 1;
+            }
+
+            let at_id = unit.add(subprogram_id, DW_TAG_formal_parameter);
+            let at_ent = unit.get_mut(at_id);
+            at_ent.set(DW_AT_name, AttributeValue::String(argname.as_bytes().to_vec()));
+            at_ent.set(DW_AT_type,AttributeValue::UnitRef(self.pointer_type));
+            at_ent.set(DW_AT_location, AttributeValue::Exprloc(expr.clone()));
+            let at_id2 = unit.add(subprogram_id, DW_TAG_variable);
+            let at_ent = unit.get_mut(at_id2);
+            at_ent.set(DW_AT_name, AttributeValue::String(argname.as_bytes().to_vec()));
+            at_ent.set(DW_AT_type,AttributeValue::UnitRef(self.pointer_type));
+            at_ent.set(DW_AT_location, AttributeValue::Exprloc(expr));
+        }
     }
 
     // Create dwarf traffic needed to ensure that gdb can find the locals.
     fn decorate_function(&mut self, label: &str, addr: usize, size: usize) {
-        let name = self.match_function(&label).map(|c| c.clone()).unwrap_or_else(|| {
-            label.to_string()
+        let (name, args) = self.match_function(&label).map(|c| c.clone()).unwrap_or_else(|| {
+            (label.to_string(), "(() . ENV)".to_string())
         });
-        let unit = self.dwarf.units.get_mut(self.unit_id);
-        let subprogram_id = unit.add(unit.root(), DW_TAG_subprogram);
-        let mut fbexpr_mid = Expression::new();
-        fbexpr_mid.op_breg(gimli::Register(11), 0);
-        let mut loclist = Vec::new();
-        loclist.push(Location::StartEnd {
-            begin: Address::Constant(addr as u64),
-            end: Address::Constant((addr + size) as u64),
-            data: fbexpr_mid
-        });
-        let loc_list_id = unit.locations.add(LocationList(loclist));
-        let mut sub_ent = unit.get_mut(subprogram_id);
-        sub_ent.set(DW_AT_name, AttributeValue::String(name.as_bytes().to_vec()));
-        sub_ent.set(DW_AT_type,AttributeValue::UnitRef(self.pointer_type));
-        sub_ent.set(DW_AT_low_pc, AttributeValue::Address(Address::Constant((self.target_addr as usize + addr) as u64)));
-        sub_ent.set(DW_AT_high_pc, AttributeValue::Address(Address::Constant((self.target_addr as usize + addr + size) as u64)));
-        sub_ent.set(DW_AT_frame_base, AttributeValue::LocationListRef(loc_list_id));
-        let mut expr = Expression::new();
-        expr.op_fbreg(-0x18);
-        expr.op_deref();
-        let at_id = unit.add(subprogram_id, DW_TAG_formal_parameter);
-        let at_ent = unit.get_mut(at_id);
-        at_ent.set(DW_AT_name, AttributeValue::String(b"env".to_vec()));
-        at_ent.set(DW_AT_type,AttributeValue::UnitRef(self.pointer_type));
-        at_ent.set(DW_AT_location, AttributeValue::Exprloc(expr.clone()));
-        let at_id2 = unit.add(subprogram_id, DW_TAG_variable);
-        let at_ent = unit.get_mut(at_id2);
-        at_ent.set(DW_AT_name, AttributeValue::String(b"env".to_vec()));
-        at_ent.set(DW_AT_type,AttributeValue::UnitRef(self.pointer_type));
-        at_ent.set(DW_AT_location, AttributeValue::Exprloc(expr));
+        let subprogram_id =
+        {
+            let unit = self.dwarf.units.get_mut(self.unit_id);
+            let subprogram_id = unit.add(unit.root(), DW_TAG_subprogram);
+            let mut fbexpr_mid = Expression::new();
+            fbexpr_mid.op_breg(gimli::Register(11), 0);
+            let mut loclist = Vec::new();
+            loclist.push(Location::StartEnd {
+                begin: Address::Constant(addr as u64),
+                end: Address::Constant((addr + size) as u64),
+                data: fbexpr_mid
+            });
+            let loc_list_id = unit.locations.add(LocationList(loclist));
+            let mut sub_ent = unit.get_mut(subprogram_id);
+            sub_ent.set(DW_AT_name, AttributeValue::String(name.as_bytes().to_vec()));
+            sub_ent.set(DW_AT_type,AttributeValue::UnitRef(self.pointer_type));
+            sub_ent.set(DW_AT_low_pc, AttributeValue::Address(Address::Constant((self.target_addr as usize + addr) as u64)));
+            sub_ent.set(DW_AT_high_pc, AttributeValue::Address(Address::Constant((self.target_addr as usize + addr + size) as u64)));
+            sub_ent.set(DW_AT_frame_base, AttributeValue::LocationListRef(loc_list_id));
+            subprogram_id
+        };
+        let srcloc = Srcloc::start("*args*");
+        if let Ok(parsed) = parse_sexp(srcloc.clone(), args.bytes()) {
+            if !parsed.is_empty() {
+                self.add_arguments(subprogram_id, 1, 0, Rc::new(SExp::Cons(srcloc.clone(), Rc::new(SExp::Nil(srcloc.clone())), parsed[0].clone())));
+            }
+        }
     }
 
     fn write_section(&self, name: &str, section: &dyn Section<DwarfSectionWriter>, instrs: &mut Vec<Instr>) {
@@ -1346,6 +1385,8 @@ impl Program {
             Instr::Lea(Register::R(0), "_run".to_string()),
             Instr::Addi(Register::R(5), Register::R(0), 0),
             Instr::Bl(self.first_label.clone()),
+            // Print the last value.
+            Instr::Swi(SWI_PRINT_EXPR),
             Instr::Swi(SWI_DONE),
         ] {
             self.push(&srcloc, i.clone());
