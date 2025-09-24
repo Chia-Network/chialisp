@@ -1,7 +1,0 @@
-(mod (A B)
-  (defun G (X) (- X 3))
-  (defun ARG1 (X) (+ X 1))
-  (defun ARG2 (Y) (* Y 3))
-  (defun F (A B) (r (divmod (G (ARG1 A)) (ARG2 B))))
-  (F A B)
-  )

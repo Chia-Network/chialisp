@@ -1,2 +1,0 @@
-run '(mod (X) (/ X 10))'
-(f (divmod 2 (q . 10)))

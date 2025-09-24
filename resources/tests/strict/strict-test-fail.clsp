@@ -1,9 +1,0 @@
-(mod (X)
-  (include *strict-cl-21*)
-  ;; This wouldn't be able to be rejected because X1 is coming from a macro
-  ;; expansion.  This should fail in strict but succeed wrong non-strict.
-  (if X
-    (+ X1 2)
-    5
-    )
-  )

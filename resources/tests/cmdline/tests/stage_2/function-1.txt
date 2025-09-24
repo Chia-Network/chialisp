@@ -1,2 +1,0 @@
-brun -s2 '(opt (com (q . (function (+ 20 30 @)))))))'
-(q 16 (q . 20) (q . 30) 1)

@@ -3,15 +3,12 @@ name = "clvm_tools_rs"
 version = "0.4.0"
 edition = "2018"
 authors = ["Art Yerkes <art.yerkes@gmail.com>"]
-description = "tools for working with chialisp language; compiler, repl, python and wasm bindings"
+description = "tools for working with chialisp language; compiler, repl, wasm bindings"
 readme = "README.md"
 repository = "https://github.com/Chia-Network/clvm_tools_rs"
 license = "Apache-2.0"
 keywords = ["chia", "chialisp", "clvm"]
 categories = ["command-line-utilities"]
-
-[package.metadata.maturin]
-python-source = "python"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -38,11 +35,6 @@ rand_chacha = { version = "0.9.0", optional = true }
 lfsr = { version = "0.3.0", optional = true }
 chia-bls = "0.28.2"
 
-[dependencies.pyo3]
-version = "0.24.1"
-features = ["abi3-py39", "extension-module"]
-optional = true
-
 [dev-dependencies]
 rand = "0.9.2"
 rand_chacha = "0.9.0"
@@ -53,7 +45,6 @@ name = "clvm_tools_rs"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-extension-module = ["dep:pyo3"]
 fuzz = ["dep:rand", "dep:rand_chacha", "dep:lfsr"]
 default = []
 
@@ -65,17 +56,6 @@ getrandom = { version = "0.2", features = ["js"] }
 [target.'cfg(not(target_family="wasm"))'.dependencies]
 getrandom = { version = "0.2" }
 
-[build-dependencies]
-pyo3-build-config = "0.24.0"
-
-[[bin]]
-name = "opd"
-path = "src/classic/bins/opd.rs"
-
-[[bin]]
-name = "opc"
-path = "src/classic/bins/opc.rs"
-
 [[bin]]
 name = "run"
 path = "src/classic/bins/run.rs"
@@ -83,19 +63,3 @@ path = "src/classic/bins/run.rs"
 [[bin]]
 name = "brun"
 path = "src/classic/bins/brun.rs"
-
-[[bin]]
-name = "cldb"
-path = "src/classic/bins/cldb.rs"
-
-[[bin]]
-name = "shrink"
-path = "src/classic/bins/shrink.rs"
-
-[[bin]]
-name = "clisp_to_json"
-path = "src/classic/bins/clisp_to_json.rs"
-
-[[bin]]
-name = "repl"
-path = "src/classic/bins/repl.rs"

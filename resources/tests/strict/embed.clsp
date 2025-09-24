@@ -1,8 +1,0 @@
-(mod (Z)
-
-  (include *standard-cl-23*)
-
-  (embed-file hello-data bin "hello.txt")
-
-  (sha256 hello-data Z)
-  )

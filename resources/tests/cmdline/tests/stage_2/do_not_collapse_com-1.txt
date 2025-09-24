@@ -1,2 +1,0 @@
-brun -s2 '(opt (com (q . (opt (com (c (q . list) (q . ())))))))'
-()

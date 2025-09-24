@@ -1,8 +1,0 @@
-(mod (message)
-     (defconstant pk_bytes 0x86243290bbcbfd9ae75bdece7981965350208eb5e99b04d5cd24e955ada961f8c0a162dee740be7bdc6c3c0613ba2eb1)
-     (defconstant signature_bytes 0xb00ab9a8af54804b43067531d96c176710c05980fccf8eee1ae12a4fd543df929cce860273af931fe4fdbc407d495f73114ab7d17ef08922e56625daada0497582340ecde841a9e997f2f557653c21c070119662dd2efa47e2d6c5e2de00eefa)
-
-     ;; Seems like bls_verify should do it
-     ;; G2 G1 msg
-     (bls_verify signature_bytes pk_bytes message)
-     )

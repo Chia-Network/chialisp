@@ -1,6 +1,0 @@
-(mod (INDEX)
-     (include *standard-cl-21*)
-     (defun fact-base (VALUE) VALUE)
-     (defun factorial (VALUE) (if (= VALUE 1) (fact-base VALUE) (* VALUE (factorial (- VALUE 1)))))
-     (factorial INDEX)
-     )

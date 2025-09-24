@@ -1,2 +1,0 @@
-run -i clvm_runtime '(mod (A B) (include "macros.clvm") (or))'
-()

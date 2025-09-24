@@ -1,2 +1,0 @@
-run '(a (mod (AA BB) (defconstant FOO 1000) (+ AA BB FOO)) @)' '(500 600)'
-2100

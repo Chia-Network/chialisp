@@ -1,5 +1,0 @@
-(mod (Q)
-  (include *strict-cl-21*)
-  (defun F (X) (f (f (f (f (f (f (r X))))))))
-  (F Q)
-  )

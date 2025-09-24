@@ -5,7 +5,6 @@ clvm_tools_rs
 ![Build Crate](https://github.com/Chia-Network/clvm_tools_rs/actions/workflows/build-crate.yml/badge.svg)
 ![Build Wheels](https://github.com/Chia-Network/clvm_tools_rs/actions/workflows/build-test.yml/badge.svg)
 
-![PyPI](https://img.shields.io/pypi/v/clvm_tools_rs?logo=pypi)
 [![Crates.io](https://img.shields.io/crates/v/clvm_tools_rs.svg)](https://crates.io/crates/clvm_tools_rs)
 
 Theory of operation of the modern compiler: ./HOW_CHIALISP_IS_COMPILED.md
@@ -13,13 +12,6 @@ Theory of operation of the modern compiler: ./HOW_CHIALISP_IS_COMPILED.md
 This repo can be installed via cargo
 
     cargo install clvm_tools_rs
-
-or via pip
-
-    pip install clvm_tools_rs@git+https://github.com/Chia-Network/clvm_tools_rs.git@e17412032aa7d3b8b1d1f931893fb5802eee626a
-
-Note: `pip` installs a subset of the tools installed by `cargo`, including `brun`, `run`, `opc` and `opd`.
-
 
 The most current version of the language is in the nightly branch:
 
@@ -29,34 +21,6 @@ To install from a specific branch:
 
     cargo install --no-default-features --git 'https://github.com/Chia-Network/clvm_tools_rs' --branch nightly
     
-To install a git checkout into your current python environment (must be in some kind of venv or conda environment):
-
-    git clone https://github.com/Chia-Network/clvm_tools_rs
-    cd clvm_tools_rs
-    maturin develop
-
-Install from PYPI:
-
-    pip install -i https://pypi.chia.net/nightlies/ clvm_tools_rs
-    
-Most people still compile chialisp via python.  One way to set up compilation
-in that way is like this:
-
-    import json
-    from clvm_tools_rs import compile_clvm
-
-    def compile_module_with_symbols(include_paths,source):
-        path_obj = Path(source)
-        file_path = path_obj.parent
-        file_stem = path_obj.stem
-        target_file = file_path / (file_stem + ".clvm.hex")
-        sym_file = file_path / (file_stem + ".sym")
-        compile_result = compile_clvm(source, str(target_file.absolute()), include_paths, True)
-        symbols = compile_result['symbols']
-        if len(symbols) != 0:
-            with open(str(sym_file.absolute()),'w') as symfile:
-                symfile.write(json.dumps(symbols))
-
 The command line tools provided:
 
     - run -- Compiles CLVM code from chialisp
@@ -115,8 +79,6 @@ The command line tools provided:
     - brun -- Runs a "binary" program.  Instead of serving as a chialisp
       compiler, instead runs clvm programs.
     
-    As 'brun' from the python code:
-    
     $ ./target/debug/run '(mod (X) (defun fact (N X) (if (> 2 X) N (fact (* X N) (- X 1)))) (fact 1 X))'
     (a (q 2 2 (c 2 (c (q . 1) (c 5 ())))) (c (q 2 (i (> (q . 2) 11) (q . 5) (q 2 2 (c 2 (c (* 11 5) (c (- 11 (q . 1)) ()))))) 1) 1))
     $ ./target/debug/brun '(a (q 2 2 (c 2 (c (q . 1) (c 5 ())))) (c (q 2 (i (> (q . 2) 11) (q . 5) (q 2 2 (c 2 (c (* 11 5) (c (- 11 (q . 1)) ()))))) 1) 1))' '(5)'
@@ -124,14 +86,10 @@ The command line tools provided:
     
     - opc -- crush clvm s-expression form to hex.
     
-    As 'opc' from the python code.
-    
     opc '(a (q 2 2 (c 2 (c (q . 1) (c 5 ())))) (c (q 2 (i (> (q . 2) 11) (q . 5) (q 2 2 (c 2 (c (* 11 5) (c (- 11 (q . 1)) ()))))) 1) 1))'
     ff02ffff01ff02ff02ffff04ff02ffff04ffff0101ffff04ff05ff8080808080ffff04ffff01ff02ffff03ffff15ffff0102ff0b80ffff0105ffff01ff02ff02ffff04ff02ffff04ffff12ff0bff0580ffff04ffff11ff0bffff010180ff808080808080ff0180ff018080
     
     - opd -- disassemble hex to s-expression form.
-    
-    As 'opd' from the python code.
     
     opd 'ff02ffff01ff02ff02ffff04ff02ffff04ffff0101ffff04ff05ff8080808080ffff04ffff01ff02ffff03ffff15ffff0102ff0b80ffff0105ffff01ff02ff02ffff04ff02ffff04ffff12ff0bff0580ffff04ffff11ff0bffff010180ff808080808080ff0180ff018080'
     (a (q 2 2 (c 2 (c (q . 1) (c 5 ())))) (c (q 2 (i (> (q . 2) 11) (q . 5) (q 2 2 (c 2 (c (* 11 5) (c (- 11 (q . 1)) ()))))) 1) 1))

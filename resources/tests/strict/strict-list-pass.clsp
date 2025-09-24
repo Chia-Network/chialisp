@@ -1,4 +1,0 @@
-(mod (X)
-  (include *strict-cl-21*)
-  (list X (+ X 1) (+ X 2))
-  )

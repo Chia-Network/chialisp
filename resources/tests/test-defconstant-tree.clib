@@ -1,9 +1,0 @@
-(
-  (defconstant constant-tree (
-     (0x4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a .   ;  = `(sha256 1)`
-      0x9dcf97a184f32623d11a73124ceb99a5709b083721e878a16d78f596718ba7b2) .  ;  = `(sha256 1 1)` = `(sha256 1 #q)`
-     (0x02a12871fee210fb8619291eaea194581cbd2531e4b23759d225f6806923f63222 . ;  = `(concat 2 (sha256 1 #a))`
-      0x02a8d5dd63fba471ebcb1f3e8f7c1e1879b7152a6e7298a91ce119a63400ade7c5)  ;  = `(concat 2 (sha256 1 #c))`
-    )
-  )
-)

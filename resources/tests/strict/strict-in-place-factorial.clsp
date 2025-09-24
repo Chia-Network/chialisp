@@ -1,6 +1,0 @@
-(mod (X)
-  (include *strict-cl-21*)
-  (defmac factorial (N)
-    (if (> 2 N) 1 (qq (* (unquote N) (factorial (- N 1))))))
-  (factorial 5)
-  )

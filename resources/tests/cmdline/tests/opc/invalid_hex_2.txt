@@ -1,2 +1,0 @@
-opc "(= x0 0x1abefg)"
-Invalid character 'g' at position 5 in '1abefg'

@@ -1,5 +1,0 @@
-(mod ()
-   (defconstant msg 0x9790635de8740e9a6a6b15fb6b72f3a16afa0973d971979b6ba54761d6e2502c50db76f4d26143f05459a42cfd520d44)
-
-   (g1_map msg)
-   )

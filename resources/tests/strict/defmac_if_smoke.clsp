@@ -1,8 +1,0 @@
-(mod ()
-  (include *strict-cl-21*)
-
-  (include defmac_simple_if.clib)
-
-  (if_ t1 t2 t3)
-  )
-  

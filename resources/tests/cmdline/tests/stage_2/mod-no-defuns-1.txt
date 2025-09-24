@@ -1,3 +1,0 @@
-# this test defines no functions and so failed when we didn't look for this case
-run -s2 '(function (mod (VAL) (+ VAL 1))))'
-(q 16 2 (q . 1))

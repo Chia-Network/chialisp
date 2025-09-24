@@ -1,6 +1,0 @@
-(mod (list n)
-  (include *standard-cl-23*)
-  (include slice.clinc)
-
-  (slice list n)
-  )

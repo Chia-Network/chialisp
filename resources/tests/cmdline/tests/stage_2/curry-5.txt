@@ -1,2 +1,0 @@
-run -i clvm_runtime '(mod (ARG) (include curry.clvm) (curry (lambda (A B C) (+ A B C)) 40 50))'
-(q 2 (q 16 2 5 11) (c (q . 40) (c (q . 50) 1)))

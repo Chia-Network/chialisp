@@ -1,7 +1,0 @@
-(mod (X)
-  (include *strict-cl-21*)
-
-  (include test-inner-include.clinc)
-
-  (if_ X (* X 2) (+ X 1))
-  )
