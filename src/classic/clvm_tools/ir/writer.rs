@@ -1,4 +1,4 @@
-use std::borrow::Borrow;
+use core::borrow::Borrow;
 use alloc::rc::Rc;
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, Stream};

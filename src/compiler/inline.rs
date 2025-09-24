@@ -1,5 +1,5 @@
 use num_bigint::ToBigInt;
-use std::borrow::Borrow;
+use core::borrow::Borrow;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::rc::Rc;

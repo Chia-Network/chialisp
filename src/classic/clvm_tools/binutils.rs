@@ -1,6 +1,6 @@
 use alloc::collections::BTreeSet;
 use alloc::rc::Rc;
-use std::borrow::Borrow;
+use core::borrow::Borrow;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::error::EvalErr;

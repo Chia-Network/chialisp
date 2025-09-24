@@ -1,4 +1,4 @@
-use std::borrow::Borrow;
+use core::borrow::Borrow;
 use std::fmt::Debug;
 use alloc::rc::Rc;
 

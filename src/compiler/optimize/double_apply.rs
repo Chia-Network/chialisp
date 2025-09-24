@@ -1,7 +1,7 @@
 use crate::compiler::clvm::truthy;
 use crate::compiler::prims::primquote;
 use crate::compiler::sexp::{AtomValue, NodeSel, SExp, SelectNode, ThisNode};
-use std::borrow::Borrow;
+use core::borrow::Borrow;
 use alloc::rc::Rc;
 
 // Turn:

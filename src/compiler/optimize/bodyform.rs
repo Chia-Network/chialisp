@@ -1,4 +1,4 @@
-use std::borrow::Borrow;
+use core::borrow::Borrow;
 use std::cmp::{min, Ordering};
 use alloc::rc::Rc;
 

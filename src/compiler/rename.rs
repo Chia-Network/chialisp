@@ -1,4 +1,4 @@
-use std::borrow::Borrow;
+use core::borrow::Borrow;
 use alloc::collections::BTreeMap;
 use alloc::rc::Rc;
 

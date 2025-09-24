@@ -1,6 +1,6 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::rc::Rc;
-use std::borrow::Borrow;
+use core::borrow::Borrow;
 use std::cmp::min;
 use std::fmt::{Debug, Error, Formatter};
 
