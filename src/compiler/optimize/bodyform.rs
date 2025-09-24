@@ -1,5 +1,5 @@
 use core::borrow::Borrow;
-use std::cmp::{min, Ordering};
+use core::cmp::{min, Ordering};
 use alloc::rc::Rc;
 
 use crate::compiler::comptypes::{Binding, BodyForm, CompileForm, LambdaData, LetData};

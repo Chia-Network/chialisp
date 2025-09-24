@@ -67,7 +67,7 @@ pub fn toposort<K, T, E, Needs, Has>(
 where
     Needs: Fn(&BTreeSet<K>, &T) -> Result<BTreeSet<K>, E>,
     Has: Fn(&T) -> BTreeSet<K>,
-    K: std::cmp::Ord,
+    K: core::cmp::Ord,
     K: Clone,
 {
     let mut possible = BTreeSet::new();
