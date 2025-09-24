@@ -4,7 +4,7 @@ use std::borrow::Borrow;
 use alloc::collections::BTreeSet;
 // use std::fs; // TODO: filesystem - commented out for no_std compatibility
 // use std::path::PathBuf; // TODO: filesystem - commented out for no_std compatibility
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use clvm_rs::allocator::Allocator;
 

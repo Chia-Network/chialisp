@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 use std::fmt::Debug;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 // use chia_bls::PublicKey; // TODO(BLS): restore when BLS support returns
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};

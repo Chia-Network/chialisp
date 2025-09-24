@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 use alloc::collections::BTreeMap;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use clvmr::allocator::Allocator;
 

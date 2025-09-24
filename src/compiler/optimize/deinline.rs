@@ -1,5 +1,5 @@
 use alloc::collections::{BTreeSet, BTreeMap};
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use crate::compiler::codegen::codegen;
 use crate::compiler::optimize::depgraph::{DepgraphKind, FunctionDependencyGraph};

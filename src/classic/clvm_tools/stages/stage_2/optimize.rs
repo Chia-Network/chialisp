@@ -1,7 +1,7 @@
 use alloc::collections::BTreeMap;
 use core::cell::{Ref, RefCell};
 use core::mem::swap;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use clvm_rs::error::EvalErr;
 use num_bigint::ToBigInt;

@@ -2,7 +2,7 @@ use core::borrow::Borrow;
 use core::cell::RefCell;
 use alloc::collections::BTreeMap;
 use core::mem::swap;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use clvm_rs::allocator;
 use clvm_rs::allocator::{Allocator, NodePtr};

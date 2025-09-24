@@ -1,6 +1,6 @@
 use num_bigint::ToBigInt;
 use std::borrow::Borrow;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use crate::classic::clvm::__type_compatibility__::bi_one;
 use crate::classic::clvm_tools::node_path::compose_paths;

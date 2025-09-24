@@ -13,7 +13,7 @@ use num_bigint::ToBigInt;
 
 use std::borrow::Borrow;
 use alloc::collections::BTreeMap;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use clvm_rs::allocator::Allocator;
 

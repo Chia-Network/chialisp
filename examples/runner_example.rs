@@ -1,6 +1,6 @@
 extern crate alloc;
 use alloc::collections::BTreeMap;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use clvm_tools_rs::classic::clvm::__type_compatibility__::Stream;
 use clvm_tools_rs::classic::clvm::serialize::sexp_to_stream;

@@ -1,5 +1,5 @@
 use core::borrow::Borrow;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use crate::compiler::clvm::truthy;
 use crate::compiler::comptypes::{BodyForm, CompileErr, CompilerOpts, LambdaData};

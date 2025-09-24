@@ -30,7 +30,7 @@ pub mod usecheck;
 use clvmr::allocator::Allocator;
 use alloc::collections::BTreeMap;
 use core::mem::swap;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 use crate::compiler::comptypes::{

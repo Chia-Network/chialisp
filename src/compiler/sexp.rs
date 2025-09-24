@@ -8,7 +8,7 @@ use rand::Rng;
 use core::borrow::Borrow;
 use core::fmt::Display;
 use core::hash::{Hash, Hasher};
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use binascii::{bin2hex, hex2bin};
 use num_traits::{zero, Num};

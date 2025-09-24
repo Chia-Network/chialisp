@@ -13,7 +13,7 @@ leading bits is the count of bytes to read of size
 0xf7-0xfb is 5 bytes ((perform logical and of first byte with 0x3))
  */
 
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, Stream};
 use crate::classic::clvm::as_rust::{TToSexpF, TValStack};

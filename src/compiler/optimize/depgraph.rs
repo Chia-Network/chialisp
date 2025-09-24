@@ -1,7 +1,7 @@
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use std::borrow::Borrow;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use crate::compiler::optimize::SyntheticType;
 use crate::compiler::sexp::enlist;

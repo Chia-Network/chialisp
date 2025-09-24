@@ -2,7 +2,7 @@ mod macros;
 
 use alloc::collections::BTreeMap;
 use core::borrow::Borrow;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use clvm_rs::error::EvalErr;
 use clvmr::allocator::Allocator;

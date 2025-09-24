@@ -2,7 +2,7 @@ use alloc::collections::BTreeMap;
 use core::cell::{Ref, RefCell};
 // use std::fs; // TODO: filesystem - commented out for no_std compatibility
 // use std::path::PathBuf; // TODO: filesystem - commented out for no_std compatibility
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::chia_dialect::{ChiaDialect, NO_UNKNOWN_OPS};

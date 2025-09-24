@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 use std::cmp::{min, Ordering};
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use crate::compiler::comptypes::{Binding, BodyForm, CompileForm, LambdaData, LetData};
 

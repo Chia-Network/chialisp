@@ -1,7 +1,7 @@
 use core::borrow::Borrow;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use num_bigint::ToBigInt;
 

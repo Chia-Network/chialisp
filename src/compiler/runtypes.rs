@@ -1,5 +1,5 @@
 use core::fmt::Display;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use crate::compiler::comptypes::CompileErr;
 use crate::compiler::sexp::SExp;

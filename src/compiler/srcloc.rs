@@ -1,6 +1,6 @@
 use core::borrow::Borrow;
 use core::fmt::Display;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use serde::Serialize;
 

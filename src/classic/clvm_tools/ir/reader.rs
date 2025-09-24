@@ -1,5 +1,5 @@
 use core::mem::swap;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use crate::classic::clvm::__type_compatibility__::{
     Bytes, BytesFromType, Stream, UnvalidatedBytesFromType,

@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr};
 

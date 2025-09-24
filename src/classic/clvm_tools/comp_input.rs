@@ -1,5 +1,5 @@
 use alloc::collections::BTreeMap;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use clvmr::{Allocator, NodePtr};
 

@@ -3,7 +3,7 @@ extern crate clvmr as clvm_rs;
 use core::borrow::Borrow;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use clvm_rs::allocator::Allocator;
 

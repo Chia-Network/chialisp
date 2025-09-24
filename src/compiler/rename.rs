@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 use alloc::collections::BTreeMap;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use crate::compiler::codegen::toposort_assign_bindings;
 use crate::compiler::comptypes::{

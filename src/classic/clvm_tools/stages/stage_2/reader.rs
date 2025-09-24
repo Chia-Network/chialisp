@@ -1,5 +1,5 @@
 use std::fs;
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use clvm_rs::error::EvalErr;
 use clvmr::allocator::{Allocator, NodePtr, SExp};
