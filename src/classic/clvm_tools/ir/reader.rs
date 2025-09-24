@@ -1,4 +1,4 @@
-use std::mem::swap;
+use core::mem::swap;
 use std::rc::Rc;
 
 use crate::classic::clvm::__type_compatibility__::{

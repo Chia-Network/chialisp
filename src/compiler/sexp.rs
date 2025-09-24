@@ -5,9 +5,9 @@ use rand::prelude::Distribution;
 #[cfg(test)]
 use rand::Rng;
 
-use std::borrow::Borrow;
-use std::fmt::Display;
-use std::hash::{Hash, Hasher};
+use core::borrow::Borrow;
+use core::fmt::Display;
+use core::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use binascii::{bin2hex, hex2bin};

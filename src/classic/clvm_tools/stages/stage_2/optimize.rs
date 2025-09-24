@@ -1,6 +1,6 @@
-use std::cell::{Ref, RefCell};
+use core::cell::{Ref, RefCell};
 use std::collections::HashMap;
-use std::mem::swap;
+use core::mem::swap;
 use std::rc::Rc;
 
 use clvm_rs::error::EvalErr;

@@ -14,7 +14,8 @@ use clvmr::allocator::Allocator;
 
 fn main() {
     // Example Chialisp program: factorial function
-    let clsp = "(mod (n) (defun factorial (x) (if (= x 0) 1 (* x (factorial (- x 1))))) (factorial n))";
+    let clsp =
+        "(mod (n) (defun factorial (x) (if (= x 0) 1 (* x (factorial (- x 1))))) (factorial n))";
     let filename = "*inline*";
     let search_paths: Vec<String> = vec![];
 

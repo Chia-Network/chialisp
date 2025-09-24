@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use core::fmt::Display;
 use std::rc::Rc;
 
 use crate::compiler::comptypes::CompileErr;

@@ -1,4 +1,4 @@
-use std::mem::swap;
+use core::mem::swap;
 
 pub trait HasDepthLimit<L, E> {
     fn depth_limit(&self) -> Option<usize>;

@@ -1,7 +1,7 @@
-use std::borrow::Borrow;
+use core::borrow::Borrow;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::mem::swap;
+use core::mem::swap;
 use std::rc::Rc;
 
 use num_bigint::ToBigInt;

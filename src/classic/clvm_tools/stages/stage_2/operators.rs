@@ -1,7 +1,7 @@
-use std::cell::{Ref, RefCell};
+use core::cell::{Ref, RefCell};
 use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
+// use std::fs; // TODO: filesystem - commented out for no_std compatibility
+// use std::path::PathBuf; // TODO: filesystem - commented out for no_std compatibility
 use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
@@ -70,6 +70,8 @@ pub fn full_path_for_filename(
     filename: &str,
     search_paths: &[String],
 ) -> Result<String, EvalErr> {
+    // TODO: filesystem - operations commented out for no_std compatibility
+    /* TODO: filesystem - restore filesystem search when needed
     for path in search_paths.iter() {
         let mut path_buf = PathBuf::new();
         path_buf.push(path);
@@ -88,10 +90,11 @@ pub fn full_path_for_filename(
                 });
         }
     }
+    */
 
     Err(EvalErr::InternalError(
         parent_sexp,
-        "can't open file".to_string(),
+        "filesystem operations not supported in no_std mode".to_string(),
     ))
 }
 
@@ -219,7 +222,8 @@ impl CompilerOperatorsInternal {
 
                     // Use the filesystem like normal if the opts couldn't find
                     // the file.
-                    fs::read_to_string(&filename)
+                    // fs::read_to_string(&filename) // TODO: filesystem - commented for no_std
+                    Err("filesystem not supported in no_std".to_string())
                         .map_err(|_| {
                             EvalErr::InternalError(
                                 NodePtr::NIL,
@@ -255,14 +259,11 @@ impl CompilerOperatorsInternal {
                     );
                     let mut stream = Stream::new(None);
                     write_ir_to_stream(Rc::new(ir), &mut stream);
-                    return fs::write(filename_bytes.decode(), stream.get_value().decode())
-                        .map_err(|_| {
-                            EvalErr::InternalError(
-                                sexp,
-                                format!("failed to write {}", filename_bytes.decode()),
-                            )
-                        })
-                        .map(|_| Reduction(1, NodePtr::NIL));
+                    // return fs::write(filename_bytes.decode(), stream.get_value().decode()) // TODO: filesystem - commented for no_std
+                    return Err(EvalErr::InternalError(
+                        sexp,
+                        "filesystem write not supported in no_std mode".to_string(),
+                    ));
                 }
             }
         }

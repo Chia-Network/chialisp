@@ -29,7 +29,7 @@ pub mod usecheck;
 
 use clvmr::allocator::Allocator;
 use std::collections::HashMap;
-use std::mem::swap;
+use core::mem::swap;
 use std::rc::Rc;
 
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;

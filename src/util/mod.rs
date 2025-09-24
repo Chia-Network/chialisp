@@ -1,9 +1,9 @@
 use num_bigint::BigInt;
 use std::collections::HashSet;
-use std::fs;
-use std::io::Write;
-use std::mem::swap;
-use std::path::Path;
+// use std::fs; // Removed for no_std
+// use std::io::Write; // Removed for no_std
+use core::mem::swap;
+// use std::path::Path; // Removed for no_std
 // use tempfile::NamedTempFile; // Removed for no_std
 use unicode_segmentation::UnicodeSegmentation;
 

@@ -1,4 +1,4 @@
-use std::borrow::Borrow;
+use core::borrow::Borrow;
 use std::rc::Rc;
 
 use crate::compiler::clvm::truthy;

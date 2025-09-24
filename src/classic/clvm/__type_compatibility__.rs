@@ -1,10 +1,10 @@
 // use chia_bls::PublicKey; // TODO(BLS): restore when BLS support returns
 use num_traits::{One, Zero};
-use std::clone::Clone;
-use std::cmp::Ordering;
-use std::cmp::{max, min};
+use core::clone::Clone;
+use core::cmp::Ordering;
+use core::cmp::{max, min};
 use std::collections::HashMap;
-use std::fmt::{Debug, Display};
+use core::fmt::{Debug, Display};
 
 use sha2::Digest;
 use sha2::Sha256;

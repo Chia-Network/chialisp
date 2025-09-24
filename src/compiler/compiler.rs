@@ -1,8 +1,8 @@
 use num_bigint::ToBigInt;
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::path::PathBuf;
+// use std::fs; // TODO: filesystem - commented out for no_std compatibility
+// use std::path::PathBuf; // TODO: filesystem - commented out for no_std compatibility
 use std::rc::Rc;
 
 use clvm_rs::allocator::Allocator;
@@ -292,6 +292,8 @@ impl CompilerOpts for DefaultCompilerOpts {
             return Ok((filename, dialect.content.bytes().collect()));
         }
 
+        // TODO: filesystem - operations commented out for no_std compatibility
+        /* TODO: filesystem - restore filesystem includes when needed
         for dir in self.include_dirs.iter() {
             let mut p = PathBuf::from(dir);
             p.push(filename.clone());
@@ -307,9 +309,10 @@ impl CompilerOpts for DefaultCompilerOpts {
                 }
             }
         }
+        */
         Err(CompileErr(
             Srcloc::start(&inc_from),
-            format!("could not find {filename} to include"),
+            format!("filesystem includes not supported in no_std mode: {filename}"),
         ))
     }
     fn compile_program(

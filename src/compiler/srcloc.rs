@@ -1,5 +1,5 @@
-use std::borrow::Borrow;
-use std::fmt::Display;
+use core::borrow::Borrow;
+use core::fmt::Display;
 use std::rc::Rc;
 
 use serde::Serialize;

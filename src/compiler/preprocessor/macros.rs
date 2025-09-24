@@ -1,4 +1,4 @@
-use std::borrow::Borrow;
+use core::borrow::Borrow;
 use std::collections::HashMap;
 use std::rc::Rc;
 

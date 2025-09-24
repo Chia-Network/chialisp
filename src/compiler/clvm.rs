@@ -1,7 +1,7 @@
-use std::borrow::Borrow;
-use std::cell::RefCell;
+use core::borrow::Borrow;
+use core::cell::RefCell;
 use std::collections::HashMap;
-use std::mem::swap;
+use core::mem::swap;
 use std::rc::Rc;
 
 use clvm_rs::allocator;
