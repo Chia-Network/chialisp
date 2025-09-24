@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::fs;
 use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr};
@@ -13,7 +12,7 @@ use crate::classic::clvm_tools::stages::run;
 use crate::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
 use crate::classic::clvm_tools::stages::stage_2::operators::run_program_for_search_paths;
 
-use crate::classic::platform::distutils::dep_util::newer;
+// use crate::classic::platform::distutils::dep_util::newer; // TODO(no_std): remove fs/time deps
 
 use crate::compiler::clvm::convert_to_clvm_rs;
 use crate::compiler::compiler::compile_file;
@@ -23,7 +22,7 @@ use crate::compiler::dialect::detect_modern;
 use crate::compiler::optimize::maybe_finalize_program_via_classic_optimizer;
 use crate::compiler::runtypes::RunFailure;
 use crate::compiler::srcloc::Srcloc;
-use crate::util::gentle_overwrite;
+// use crate::util::gentle_overwrite; // TODO(no_std): remove fs deps
 
 #[derive(Debug, Clone)]
 pub enum CompileError {
@@ -75,17 +74,18 @@ impl CompileError {
     }
 }
 
-pub fn write_sym_output(
-    compiled_lookup: &HashMap<String, String>,
-    path: &str,
-) -> Result<(), String> {
-    let output = serde_json::to_string(compiled_lookup)
-        .map_err(|_| "failed to serialize to json".to_string())?;
-
-    fs::write(path, output)
-        .map_err(|_| format!("failed to write {path}"))
-        .map(|_| ())
-}
+// TODO(no_std): symbol output to JSON requires std fs and serde_json. Disabled for no_std prep.
+// pub fn write_sym_output(
+//     compiled_lookup: &HashMap<String, String>,
+//     path: &str,
+// ) -> Result<(), String> {
+//     let output = serde_json::to_string(compiled_lookup)
+//         .map_err(|_| "failed to serialize to json".to_string())?;
+//
+//     fs::write(path, output)
+//         .map_err(|_| format!("failed to write {path}"))
+//         .map(|_| ())
+// }
 
 pub fn compile_clvm_text_maybe_opt(
     allocator: &mut Allocator,
@@ -176,42 +176,43 @@ pub fn compile_clvm_inner(
     Ok(())
 }
 
-pub fn compile_clvm(
-    input_path: &str,
-    output_path: &str,
-    search_paths: &[String],
-    symbol_table: &mut HashMap<String, String>,
-) -> Result<String, String> {
-    let mut allocator = Allocator::new();
-
-    let compile = newer(input_path, output_path).unwrap_or(true);
-    let mut result_stream = Stream::new(None);
-
-    if compile {
-        let text = fs::read_to_string(input_path)
-            .map_err(|x| format!("error reading {input_path}: {x:?}"))?;
-        let opts = Rc::new(DefaultCompilerOpts::new(input_path)).set_search_paths(search_paths);
-
-        compile_clvm_inner(
-            &mut allocator,
-            opts,
-            symbol_table,
-            input_path,
-            &text,
-            &mut result_stream,
-            false,
-        )?;
-
-        let mut target_data = result_stream.get_value().hex();
-        target_data += "\n";
-
-        // Try to detect whether we'd put the same output in the output file.
-        // Don't proceed if true.
-        gentle_overwrite(input_path, output_path, &target_data)?;
-    }
-
-    Ok(output_path.to_string())
-}
+// TODO(no_std): compile_clvm does fs reads/writes and mtime checks; disable for no_std prep.
+// pub fn compile_clvm(
+//     input_path: &str,
+//     output_path: &str,
+//     search_paths: &[String],
+//     symbol_table: &mut HashMap<String, String>,
+// ) -> Result<String, String> {
+//     let mut allocator = Allocator::new();
+//
+//     let compile = newer(input_path, output_path).unwrap_or(true);
+//     let mut result_stream = Stream::new(None);
+//
+//     if compile {
+//         let text = fs::read_to_string(input_path)
+//             .map_err(|x| format!("error reading {input_path}: {x:?}"))?;
+//         let opts = Rc::new(DefaultCompilerOpts::new(input_path)).set_search_paths(search_paths);
+//
+//         compile_clvm_inner(
+//             &mut allocator,
+//             opts,
+//             symbol_table,
+//             input_path,
+//             &text,
+//             &mut result_stream,
+//             false,
+//         )?;
+//
+//         let mut target_data = result_stream.get_value().hex();
+//         target_data += "\n";
+//
+//         // Try to detect whether we'd put the same output in the output file.
+//         // Don't proceed if true.
+//         gentle_overwrite(input_path, output_path, &target_data)?;
+//     }
+//
+//     Ok(output_path.to_string())
+// }
 
 // export function find_files(path: str = ""){
 //   const r: string[] = [];

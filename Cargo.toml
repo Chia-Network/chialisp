@@ -56,10 +56,4 @@ getrandom = { version = "0.2", features = ["js"] }
 [target.'cfg(not(target_family="wasm"))'.dependencies]
 getrandom = { version = "0.2" }
 
-[[bin]]
-name = "run"
-path = "src/classic/bins/run.rs"
-
-[[bin]]
-name = "brun"
-path = "src/classic/bins/brun.rs"
+## CLI binaries removed for no_std prep

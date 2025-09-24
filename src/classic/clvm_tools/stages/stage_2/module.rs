@@ -11,7 +11,7 @@ use crate::classic::clvm::sexp::{
     NodeSel, Rest, SelectNode, ThisNode,
 };
 use crate::classic::clvm_tools::binutils::disassemble;
-use crate::classic::clvm_tools::debug::{build_symbol_dump, FunctionExtraInfo};
+// use crate::classic::clvm_tools::debug::{build_symbol_dump, FunctionExtraInfo}; // TODO(no_std): remove debug symbols
 use crate::classic::clvm_tools::node_path::NodePath;
 use crate::classic::clvm_tools::stages::assemble;
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
@@ -35,7 +35,7 @@ struct CollectionResult {
 #[derive(Default)]
 struct CompileOutput {
     pub functions: HashMap<Vec<u8>, NodePtr>,
-    pub symbols_extra_info: HashMap<Vec<u8>, FunctionExtraInfo>,
+    // pub symbols_extra_info: HashMap<Vec<u8>, FunctionExtraInfo>, // TODO(no_std): debug info removed
 }
 
 impl CompileOutput {
@@ -43,9 +43,9 @@ impl CompileOutput {
         for (n, v) in other.functions.iter() {
             self.functions.insert(n.to_vec(), *v);
         }
-        for (n, v) in other.symbols_extra_info.iter() {
-            self.symbols_extra_info.insert(n.to_vec(), v.clone());
-        }
+        // for (n, v) in other.symbols_extra_info.iter() {
+        //     self.symbols_extra_info.insert(n.to_vec(), v.clone());
+        // }
     }
 }
 
@@ -673,13 +673,13 @@ fn add_one_function(
 
     let opt_list = enlist(allocator, &[opt_atom, com_list])?;
     compile.functions.insert(name.to_vec(), opt_list);
-    compile.symbols_extra_info.insert(
-        name.to_vec(),
-        FunctionExtraInfo {
-            args: function_args,
-            has_constants_tree,
-        },
-    );
+    // compile.symbols_extra_info.insert(
+    //     name.to_vec(),
+    //     FunctionExtraInfo {
+    //         args: function_args,
+    //         has_constants_tree,
+    //     },
+    // );
 
     Ok(compile)
 }
@@ -798,31 +798,6 @@ fn finish_compile_from_collection(
 
         let quoted_apply_list = quote(allocator, apply_list)?;
         let opt_list = enlist(allocator, &[opt_atom, quoted_apply_list])?;
-        let symbols_no_main = build_symbol_dump(
-            allocator,
-            &all_constants_lookup,
-            &compiled.symbols_extra_info,
-            run_program.clone(),
-            produce_extra_info,
-        )?;
-        let first_of_args = first(allocator, args)?;
-        let symbols = if produce_extra_info {
-            add_main_args(allocator, first_of_args, symbols_no_main)?
-        } else {
-            symbols_no_main
-        };
-
-        let to_run = assemble(
-            allocator,
-            if produce_extra_info {
-                "(_set_symbol_table (c (c (q . \"source_file\") (_get_source_file)) 1))"
-            } else {
-                "(_set_symbol_table 1)"
-            },
-        )?;
-
-        run_program.run_program(allocator, to_run, symbols, None)?;
-
         Ok(opt_list)
     } else {
         let top_atom = allocator.new_atom(NodePath::new(None).as_path().data())?;
