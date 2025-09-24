@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use core::fmt::Display;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 
@@ -10,7 +10,7 @@ pub struct TreeHash {
 }
 
 impl Display for TreeHash {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
         formatter.write_str(&self.s)
     }
 }

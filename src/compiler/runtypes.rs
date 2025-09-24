@@ -12,7 +12,7 @@ pub enum RunFailure {
 }
 
 impl Display for RunFailure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
         match self {
             RunFailure::RunExn(l, s) => {
                 l.fmt(formatter)?;

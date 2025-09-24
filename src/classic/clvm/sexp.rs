@@ -1,5 +1,5 @@
 use core::borrow::Borrow;
-use std::fmt::Debug;
+use core::fmt::Debug;
 use alloc::rc::Rc;
 
 // use chia_bls::PublicKey; // TODO(BLS): restore when BLS support returns

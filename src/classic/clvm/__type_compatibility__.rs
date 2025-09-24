@@ -204,7 +204,7 @@ impl Bytes {
 }
 
 impl Display for Bytes {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+    fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
         fmt.write_str(&pybytes_repr(&self._b, false, true))?;
         Ok(())
     }
@@ -271,7 +271,7 @@ where
     T1: PythonStr,
     T2: PythonStr,
 {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+    fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
         fmt.write_str("(")?;
         fmt.write_str(self.first().py_str().as_str())?;
         fmt.write_str(", ")?;

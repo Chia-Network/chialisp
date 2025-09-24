@@ -2,7 +2,7 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::rc::Rc;
 use core::borrow::Borrow;
 use std::cmp::min;
-use std::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Error, Formatter};
 
 use crate::compiler::clvm::sha256tree;
 use crate::compiler::comptypes::{

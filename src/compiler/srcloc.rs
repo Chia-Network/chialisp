@@ -39,7 +39,7 @@ pub struct Srcloc {
 }
 
 impl Display for Srcloc {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
         match &self.until {
             None => formatter.write_str(&format!("{}({}):{}", self.file, self.line, self.col)),
             Some(u) => formatter.write_str(&format!(

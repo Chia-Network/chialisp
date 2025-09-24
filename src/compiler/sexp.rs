@@ -125,7 +125,7 @@ impl PartialEq for SExp {
 }
 
 impl Display for SExp {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
         match self {
             SExp::Nil(_) => {
                 formatter.write_str("()")?;
@@ -146,7 +146,7 @@ impl Display for SExp {
                 } else {
                     let vlen = s.len() * 2;
                     let mut outbuf = vec![0; vlen];
-                    bin2hex(s, &mut outbuf).map_err(|_e| std::fmt::Error)?;
+                    bin2hex(s, &mut outbuf).map_err(|_e| core::fmt::Error)?;
                     formatter.write_str("0x")?;
                     formatter.write_str(
                         std::str::from_utf8(&outbuf).expect("only hex digits expected"),
