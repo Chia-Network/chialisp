@@ -7,7 +7,7 @@ extern crate indoc;
 #[macro_use]
 extern crate do_notation;
 
-extern crate tempfile;
+// extern crate tempfile; // Removed for no_std
 
 extern crate clvmr as clvm_rs;
 

@@ -16,7 +16,7 @@ use crate::compiler::comptypes::{
     DefunData, HelperForm, InlineFunction, LetData, LetFormInlineHint, LetFormKind, PrimaryCodegen,
     RawCallSpec, SyntheticType,
 };
-use crate::compiler::debug::{build_swap_table_mut, relabel};
+// use crate::compiler::debug::{build_swap_table_mut, relabel}; // Removed for no_std
 use crate::compiler::evaluate::{Evaluator, EVAL_STACK_LIMIT};
 use crate::compiler::frontend::{compile_bodyform, make_provides_set};
 use crate::compiler::gensym::gensym;
@@ -379,9 +379,9 @@ pub fn process_macro_call(
     code: Rc<SExp>,
 ) -> Result<CompiledCode, CompileErr> {
     let converted_args: Vec<Rc<SExp>> = args.iter().map(|b| b.to_sexp()).collect();
-    let mut swap_table = HashMap::new();
+    let mut _swap_table: HashMap<String, String> = HashMap::new();
     let args_to_macro = list_to_cons(l.clone(), &converted_args);
-    build_swap_table_mut(&mut swap_table, &args_to_macro);
+    // build_swap_table_mut(&mut swap_table, &args_to_macro); // Removed for no_std
 
     let runner = context.runner();
     run(
@@ -398,8 +398,9 @@ pub fn process_macro_call(
         RunFailure::RunErr(rl, e) => CompileErr(l, format!("error executing macro: {rl} {e}")),
     })
     .and_then(|v| {
-        let relabeled_expr = relabel(&swap_table, &v);
-        compile_bodyform(opts.clone(), Rc::new(relabeled_expr))
+        // let relabeled_expr = relabel(&swap_table, &v); // Removed for no_std
+        // For no_std, just use v directly without relabeling
+        compile_bodyform(opts.clone(), v)
     })
     .and_then(|body| generate_expr_code(context, opts, compiler, Rc::new(body)))
 }

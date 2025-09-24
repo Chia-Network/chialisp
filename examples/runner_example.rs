@@ -13,8 +13,8 @@ use clvm_tools_rs::compiler::comptypes::CompilerOpts;
 use clvmr::allocator::Allocator;
 
 fn main() {
-    // Example Chialisp program: increment function
-    let clsp = "(mod (X) (defun inc (A) (+ A 1)) (inc X))";
+    // Example Chialisp program: factorial function
+    let clsp = "(mod (n) (defun factorial (x) (if (= x 0) 1 (* x (factorial (- x 1))))) (factorial n))";
     let filename = "*inline*";
     let search_paths: Vec<String> = vec![];
 
@@ -27,7 +27,7 @@ fn main() {
     let compiled_prog = compile_clvm_text(&mut allocator, opts, &mut symbols, clsp, filename, true)
         .expect("compile failed");
 
-    // 3) Build arguments (X = 5)
+    // 3) Build arguments (n = 5)
     let args_ir = read_ir("(5)").expect("arg parse failed");
     let args = assemble_from_ir(&mut allocator, Rc::new(args_ir)).expect("assemble args failed");
 

@@ -1,6 +1,3 @@
-/// Chialisp debugging.
-pub mod cldb;
-pub mod cldb_hierarchy;
 /// CLVM running.
 pub mod clvm;
 mod codegen;
@@ -13,13 +10,10 @@ pub mod compiler;
 /// - CompileForm - The type of finished (mod ) forms before code generation.
 /// - HelperForm - The type of declarations like macros, constants and functions.
 pub mod comptypes;
-pub mod debug;
 /// Utilities for chialisp dialect choice
 pub mod dialect;
 pub mod evaluate;
 pub mod frontend;
-#[cfg(any(test, feature = "fuzz"))]
-pub mod fuzz;
 pub mod gensym;
 mod inline;
 mod lambda;
@@ -27,7 +21,6 @@ pub mod optimize;
 pub mod preprocessor;
 pub mod prims;
 pub mod rename;
-pub mod repl;
 pub mod runtypes;
 pub mod sexp;
 pub mod srcloc;

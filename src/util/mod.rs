@@ -4,7 +4,7 @@ use std::fs;
 use std::io::Write;
 use std::mem::swap;
 use std::path::Path;
-use tempfile::NamedTempFile;
+// use tempfile::NamedTempFile; // Removed for no_std
 use unicode_segmentation::UnicodeSegmentation;
 
 pub type Number = BigInt;
@@ -150,6 +150,8 @@ where
     }
 }
 
+// atomic_write_file not supported in no_std mode - uses tempfile
+/*
 pub fn atomic_write_file(
     input_path: &str,
     output_path: &str,
@@ -179,7 +181,10 @@ pub fn atomic_write_file(
 
     Ok(())
 }
+*/
 
+// gentle_overwrite not supported in no_std mode - uses fs and atomic_write_file
+/*
 pub fn gentle_overwrite(
     input_path: &str,
     output_path: &str,
@@ -202,3 +207,4 @@ pub fn gentle_overwrite(
 
     atomic_write_file(input_path, output_path, target_data)
 }
+*/

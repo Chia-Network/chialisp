@@ -5,7 +5,14 @@ use clvmr::{Allocator, NodePtr};
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, Stream, UnvalidatedBytesFromType};
 use crate::classic::clvm::serialize::{sexp_from_stream, SimpleCreateCLVMObject};
-use crate::classic::platform::argparse::ArgumentValue;
+// Stub for ArgumentValue since platform module was removed
+#[derive(Debug, Clone)]
+pub enum ArgumentValue {
+    ArgString(String, String),
+    ArgInt(usize),
+    ArgBool(bool),
+    ArgArray(Vec<ArgumentValue>),
+}
 
 use crate::classic::clvm_tools::binutils::assemble_from_ir;
 use crate::classic::clvm_tools::ir::reader::read_ir;
@@ -13,7 +20,7 @@ use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 
 use crate::compiler::compiler::{compile_file, DefaultCompilerOpts};
 use crate::compiler::comptypes::{CompileErr, CompilerOpts};
-use crate::compiler::debug::build_symbol_table_mut;
+// use crate::compiler::debug::build_symbol_table_mut; // Removed for no_std
 use crate::compiler::dialect::{detect_modern, AcceptedDialect};
 use crate::compiler::optimize::maybe_finalize_program_via_classic_optimizer;
 use crate::compiler::sexp;
@@ -32,7 +39,7 @@ fn get_string_and_filename_with_default(
     default: Option<&str>,
 ) -> Option<(Option<String>, String)> {
     if let Some(ArgumentValue::ArgString(path, content)) = parsed_args.get(argument) {
-        Some((path.clone(), content.to_string()))
+        Some((Some(path.clone()), content.to_string()))
     } else {
         default.map(|p| (None, p.to_string()))
     }
@@ -219,7 +226,7 @@ impl RunAndCompileInputData {
             )
         })?;
 
-        build_symbol_table_mut(symbol_table, &res);
+        // build_symbol_table_mut(symbol_table, &res); // Removed for no_std
 
         Ok(res)
     }

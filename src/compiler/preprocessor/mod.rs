@@ -10,7 +10,7 @@ use clvmr::allocator::Allocator;
 use crate::classic::clvm_tools::binutils::assemble;
 use crate::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
 
-use crate::compiler::cldb::hex_to_modern_sexp;
+// use crate::compiler::cldb::hex_to_modern_sexp; // Removed for no_std
 use crate::compiler::clvm;
 use crate::compiler::clvm::truthy;
 use crate::compiler::comptypes::{
@@ -172,13 +172,7 @@ impl Preprocessor {
                     Rc::new(SExp::Atom(loc.clone(), content))
                 }
             }
-            IncludeProcessType::Hex => hex_to_modern_sexp(
-                &mut allocator,
-                &HashMap::new(),
-                loc.clone(),
-                &decode_string(&content),
-            )
-            .map_err(run_to_compile_err)?,
+            IncludeProcessType::Hex => return Err(CompileErr(loc, "Hex includes not supported in no_std mode".to_string())),
             IncludeProcessType::SExpression => {
                 let parsed = parse_sexp(Srcloc::start(&full_name), content.iter().copied())
                     .map_err(|e| CompileErr(e.0, e.1))?;
