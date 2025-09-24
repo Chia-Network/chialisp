@@ -149,7 +149,7 @@ impl Display for SExp {
                     bin2hex(s, &mut outbuf).map_err(|_e| core::fmt::Error)?;
                     formatter.write_str("0x")?;
                     formatter.write_str(
-                        std::str::from_utf8(&outbuf).expect("only hex digits expected"),
+                        core::str::from_utf8(&outbuf).expect("only hex digits expected"),
                     )?;
                 }
             }

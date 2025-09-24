@@ -468,7 +468,7 @@ pub fn compile_bodyform(
 
                                 qq_to_expression(opts, Rc::new(quote_body))
                             } else if *atom_name == b"mod" {
-                                let subparse = frontend(opts, std::slice::from_ref(&body))?;
+                                let subparse = frontend(opts, core::slice::from_ref(&body))?;
                                 Ok(BodyForm::Mod(op.loc(), subparse))
                             } else if *atom_name == b"lambda" {
                                 handle_lambda(opts, body.loc(), Some(l.clone()), &v)

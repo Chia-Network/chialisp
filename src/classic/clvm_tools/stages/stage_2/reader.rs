@@ -1,4 +1,4 @@
-use std::fs;
+// use std::fs; // TODO: filesystem - commented out for no_std compatibility
 use alloc::rc::Rc;
 
 use clvm_rs::error::EvalErr;
@@ -56,15 +56,20 @@ pub fn read_file(
     let search_paths = get_search_paths(runner, allocator)?;
     let full_path = full_path_for_filename(parent_sexp, filename, &search_paths)?;
 
-    fs::read(full_path.clone())
-        .map_err(|x| {
-            EvalErr::InternalError(parent_sexp, format!("error reading {full_path}: {x:?}"))
-        })
-        .map(|data| PresentFile {
-            data,
-            full_path,
-            search_paths,
-        })
+    // TODO: filesystem - commented out for no_std compatibility
+    // fs::read(full_path.clone())
+    //     .map_err(|x| {
+    //         EvalErr::InternalError(parent_sexp, format!("error reading {full_path}: {x:?}"))
+    //     })
+    //     .map(|data| PresentFile {
+    //         data,
+    //         full_path,
+    //         search_paths,
+    //     })
+    Err(EvalErr::InternalError(
+        parent_sexp,
+        "File reading not supported in no_std mode".to_string(),
+    ))
 }
 
 /// Given an sexp representing an embedding preprocessor form of some kind such

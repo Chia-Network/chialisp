@@ -1,5 +1,5 @@
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
+use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::Ordering;
 
 lazy_static! {
     pub static ref ARGNAME_CTR: AtomicUsize = AtomicUsize::new(0);

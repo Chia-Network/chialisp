@@ -1,5 +1,5 @@
-use std::io;
-use std::{error::Error, fmt};
+// use core::io; // TODO: io - commented out for no_std compatibility (core::io is unstable)
+use core::{error::Error, fmt};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyntaxErr {
@@ -20,8 +20,9 @@ impl fmt::Display for SyntaxErr {
     }
 }
 
-impl From<SyntaxErr> for io::Error {
-    fn from(err: SyntaxErr) -> Self {
-        io::Error::other(err.msg)
-    }
-}
+// TODO: io - commented out for no_std compatibility (core::io is unstable)
+// impl From<SyntaxErr> for io::Error {
+//     fn from(err: SyntaxErr) -> Self {
+//         io::Error::other(err.msg)
+//     }
+// }
