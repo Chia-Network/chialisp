@@ -1,5 +1,5 @@
+use alloc::collections::BTreeSet;
 use num_bigint::BigInt;
-use std::collections::HashSet;
 // use std::fs; // Removed for no_std
 // use std::io::Write; // Removed for no_std
 use core::mem::swap;
@@ -53,8 +53,8 @@ pub fn collapse<A>(r: Result<A, A>) -> A {
 #[derive(Debug, Clone)]
 pub struct TopoSortItem<K> {
     pub index: usize,
-    pub needs: HashSet<K>,
-    pub has: HashSet<K>,
+    pub needs: BTreeSet<K>,
+    pub has: BTreeSet<K>,
 }
 
 // F: tells whether t2 includes t1.
@@ -65,20 +65,19 @@ pub fn toposort<K, T, E, Needs, Has>(
     has: Has,
 ) -> Result<Vec<TopoSortItem<K>>, E>
 where
-    Needs: Fn(&HashSet<K>, &T) -> Result<HashSet<K>, E>,
-    Has: Fn(&T) -> HashSet<K>,
-    K: std::cmp::Eq,
-    K: std::hash::Hash,
+    Needs: Fn(&BTreeSet<K>, &T) -> Result<BTreeSet<K>, E>,
+    Has: Fn(&T) -> BTreeSet<K>,
+    K: std::cmp::Ord,
     K: Clone,
 {
-    let mut possible = HashSet::new();
-    let mut done = HashSet::new();
+    let mut possible = BTreeSet::new();
+    let mut done = BTreeSet::new();
     let mut items: Vec<TopoSortItem<K>> = list
         .iter()
         .enumerate()
         .map(|(i, item)| TopoSortItem {
             index: i,
-            needs: HashSet::new(),
+            needs: BTreeSet::new(),
             has: has(item),
         })
         .collect();
@@ -120,7 +119,7 @@ where
             }
 
             // Add new 'has' items to done.
-            let mut tmp = HashSet::new();
+            let mut tmp = BTreeSet::new();
             for u in done.union(&items[finished_idx].has) {
                 tmp.insert(u.clone());
             }

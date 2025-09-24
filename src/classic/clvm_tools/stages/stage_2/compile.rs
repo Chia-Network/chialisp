@@ -1,4 +1,5 @@
-use std::collections::{HashMap, HashSet};
+use alloc::collections::BTreeMap;
+use alloc::collections::BTreeSet;
 use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
@@ -20,8 +21,8 @@ use crate::classic::clvm_tools::stages::stage_2::module::compile_mod;
 const DIAG_OUTPUT: bool = false;
 
 lazy_static! {
-    static ref PASS_THROUGH_OPERATORS: HashSet<Vec<u8>> = {
-        let mut result = HashSet::new();
+    static ref PASS_THROUGH_OPERATORS: BTreeSet<Vec<u8>> = {
+        let mut result = BTreeSet::new();
         for key in keyword_to_atom(OPERATORS_LATEST_VERSION).keys() {
             result.insert(key.as_bytes().to_vec());
         }
@@ -48,8 +49,8 @@ struct Closure<'a> {
     ) -> Result<NodePtr, EvalErr>,
 }
 
-fn compile_bindings<'a>() -> HashMap<Vec<u8>, Closure<'a>> {
-    let mut bindings = HashMap::new();
+fn compile_bindings<'a>() -> BTreeMap<Vec<u8>, Closure<'a>> {
+    let mut bindings = BTreeMap::new();
     let bindings_source = vec![
         Closure {
             name: "qq".to_string(),

@@ -1,5 +1,6 @@
+use alloc::collections::BTreeMap;
+use alloc::collections::BTreeSet;
 use std::borrow::Borrow;
-use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::compiler::optimize::SyntheticType;
@@ -18,8 +19,8 @@ pub struct FunctionDependencyEntry {
     pub loc: Srcloc,
     pub name: Vec<u8>,
     pub status: DepgraphKind,
-    pub depends_on: HashSet<Vec<u8>>,
-    pub is_depended_on_by: HashSet<Vec<u8>>,
+    pub depends_on: BTreeSet<Vec<u8>>,
+    pub is_depended_on_by: BTreeSet<Vec<u8>>,
 }
 
 impl FunctionDependencyEntry {
@@ -63,15 +64,15 @@ impl FunctionDependencyEntry {
             loc,
             name: name.to_vec(),
             status,
-            depends_on: HashSet::default(),
-            is_depended_on_by: HashSet::default(),
+            depends_on: BTreeSet::default(),
+            is_depended_on_by: BTreeSet::default(),
         }
     }
 }
 
 pub struct FunctionDependencyGraph {
     pub loc: Srcloc,
-    pub helpers: HashMap<Vec<u8>, FunctionDependencyEntry>,
+    pub helpers: BTreeMap<Vec<u8>, FunctionDependencyEntry>,
 }
 
 fn status_from_defun(inline: bool, defun: &DefunData) -> DepgraphKind {
@@ -84,7 +85,7 @@ fn status_from_defun(inline: bool, defun: &DefunData) -> DepgraphKind {
 
 impl FunctionDependencyGraph {
     /// Find leaf functions.
-    pub fn leaves(&self) -> HashSet<Vec<u8>> {
+    pub fn leaves(&self) -> BTreeSet<Vec<u8>> {
         self.helpers
             .iter()
             .filter(|(_k, h)| h.depends_on.is_empty())
@@ -92,7 +93,7 @@ impl FunctionDependencyGraph {
             .collect()
     }
 
-    pub fn parents(&self, helper: &[u8]) -> Option<HashSet<Vec<u8>>> {
+    pub fn parents(&self, helper: &[u8]) -> Option<BTreeSet<Vec<u8>>> {
         self.helpers.get(helper).map(|h| {
             let mut result_set = h.is_depended_on_by.clone();
             result_set.remove(helper);
@@ -102,20 +103,20 @@ impl FunctionDependencyGraph {
 
     pub fn get_full_depended_on_by(
         &self,
-        depended_on_by: &mut HashSet<Vec<u8>>,
+        depended_on_by: &mut BTreeSet<Vec<u8>>,
         helper_name: &[u8],
     ) {
         if let Some(helper) = self.helpers.get(helper_name) {
             for d in helper.is_depended_on_by.iter() {
                 if !depended_on_by.contains(d) {
-                    depended_on_by.insert(d.to_vec());
+                    depended_on_by.insert(d.clone());
                     self.get_full_depended_on_by(depended_on_by, d);
                 }
             }
         }
     }
 
-    pub fn get_full_depends_on(&self, depends_on_fun: &mut HashSet<Vec<u8>>, helper_name: &[u8]) {
+    pub fn get_full_depends_on(&self, depends_on_fun: &mut BTreeSet<Vec<u8>>, helper_name: &[u8]) {
         if let Some(helper) = self.helpers.get(helper_name) {
             for d in helper.depends_on.iter() {
                 if !depends_on_fun.contains(d) {
@@ -181,7 +182,7 @@ impl FunctionDependencyGraph {
     }
 
     pub fn new(program: &CompileForm) -> Self {
-        let mut helpers: HashMap<Vec<u8>, FunctionDependencyEntry> = HashMap::new();
+        let mut helpers: BTreeMap<Vec<u8>, FunctionDependencyEntry> = BTreeMap::new();
 
         for h in program.helpers.iter() {
             if let HelperForm::Defun(inline, d) = h {

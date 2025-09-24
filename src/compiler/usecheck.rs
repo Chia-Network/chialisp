@@ -1,7 +1,8 @@
 extern crate clvmr as clvm_rs;
 
 use core::borrow::Borrow;
-use std::collections::{HashMap, HashSet};
+use alloc::collections::BTreeMap;
+use alloc::collections::BTreeSet;
 use std::rc::Rc;
 
 use clvm_rs::allocator::Allocator;
@@ -21,8 +22,8 @@ fn consider_as_uncurried(v: &[u8]) -> bool {
 }
 
 fn produce_env_captures(
-    envmap: &mut HashMap<Vec<u8>, Rc<BodyForm>>,
-    envlist: &mut HashMap<Vec<u8>, Vec<u8>>,
+    envmap: &mut BTreeMap<Vec<u8>, Rc<BodyForm>>,
+    envlist: &mut BTreeMap<Vec<u8>, Vec<u8>>,
     mut base_name: Vec<u8>,
     args: Rc<SExp>,
 ) {
@@ -45,7 +46,7 @@ fn produce_env_captures(
     }
 }
 
-fn remove_present_atoms(envlist: &mut HashMap<Vec<u8>, Vec<u8>>, args: Rc<SExp>) {
+fn remove_present_atoms(envlist: &mut BTreeMap<Vec<u8>, Vec<u8>>, args: Rc<SExp>) {
     match args.borrow() {
         SExp::Cons(_, a, b) => {
             remove_present_atoms(envlist, a.clone());
@@ -78,11 +79,11 @@ fn remove_present_atoms(envlist: &mut HashMap<Vec<u8>, Vec<u8>>, args: Rc<SExp>)
 pub fn check_parameters_used_compileform(
     opts: Rc<dyn CompilerOpts>,
     program: Rc<CompileForm>,
-) -> Result<HashSet<Vec<u8>>, CompileErr> {
+) -> Result<BTreeSet<Vec<u8>>, CompileErr> {
     let mut allocator = Allocator::new();
-    let mut env = HashMap::new();
+    let mut env = BTreeMap::new();
     let runner = Rc::new(DefaultProgramRunner::new());
-    let mut replacement_to_original = HashMap::new();
+    let mut replacement_to_original = BTreeMap::new();
     let base_name = Bytes::new(Some(BytesFromType::Raw(sha256tree(program.to_sexp()))))
         .hex()
         .as_bytes()
@@ -107,7 +108,7 @@ pub fn check_parameters_used_compileform(
 
     remove_present_atoms(&mut replacement_to_original, result.to_sexp());
 
-    let mut result_set = HashSet::new();
+    let mut result_set = BTreeSet::new();
     for kv in replacement_to_original.iter() {
         if consider_as_uncurried(kv.0) {
             result_set.insert(kv.1.clone());

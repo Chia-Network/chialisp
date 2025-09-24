@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use alloc::collections::BTreeMap;
 use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr};
@@ -76,7 +76,7 @@ impl CompileError {
 
 // TODO(no_std): symbol output to JSON requires std fs and serde_json. Disabled for no_std prep.
 // pub fn write_sym_output(
-//     compiled_lookup: &HashMap<String, String>,
+//     compiled_lookup: &BTreeMap<String, String>,
 //     path: &str,
 // ) -> Result<(), String> {
 //     let output = serde_json::to_string(compiled_lookup)
@@ -91,7 +91,7 @@ pub fn compile_clvm_text_maybe_opt(
     allocator: &mut Allocator,
     do_optimize: bool,
     opts: Rc<dyn CompilerOpts>,
-    symbol_table: &mut HashMap<String, String>,
+    symbol_table: &mut BTreeMap<String, String>,
     text: &str,
     input_path: &str,
     classic_with_opts: bool,
@@ -138,7 +138,7 @@ pub fn compile_clvm_text_maybe_opt(
 pub fn compile_clvm_text(
     allocator: &mut Allocator,
     opts: Rc<dyn CompilerOpts>,
-    symbol_table: &mut HashMap<String, String>,
+    symbol_table: &mut BTreeMap<String, String>,
     text: &str,
     input_path: &str,
     classic_with_opts: bool,
@@ -157,7 +157,7 @@ pub fn compile_clvm_text(
 pub fn compile_clvm_inner(
     allocator: &mut Allocator,
     opts: Rc<dyn CompilerOpts>,
-    symbol_table: &mut HashMap<String, String>,
+    symbol_table: &mut BTreeMap<String, String>,
     filename: &str,
     text: &str,
     result_stream: &mut Stream,
@@ -181,7 +181,7 @@ pub fn compile_clvm_inner(
 //     input_path: &str,
 //     output_path: &str,
 //     search_paths: &[String],
-//     symbol_table: &mut HashMap<String, String>,
+//     symbol_table: &mut BTreeMap<String, String>,
 // ) -> Result<String, String> {
 //     let mut allocator = Allocator::new();
 //

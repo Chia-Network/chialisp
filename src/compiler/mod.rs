@@ -28,7 +28,7 @@ pub mod stackvisit;
 pub mod usecheck;
 
 use clvmr::allocator::Allocator;
-use std::collections::HashMap;
+use alloc::collections::BTreeMap;
 use core::mem::swap;
 use std::rc::Rc;
 
@@ -44,7 +44,7 @@ use crate::compiler::sexp::SExp;
 pub struct BasicCompileContext {
     pub allocator: Allocator,
     pub runner: Rc<dyn TRunProgram>,
-    pub symbols: HashMap<String, String>,
+    pub symbols: BTreeMap<String, String>,
     pub optimizer: Box<dyn Optimization>,
 }
 
@@ -71,7 +71,7 @@ impl BasicCompileContext {
     /// There are times when we're in a subcompile (such as mod expressions when
     /// the compile context needs to do swap in or out symbols or transform them
     /// on behalf of the child.
-    fn symbols(&mut self) -> &mut HashMap<String, String> {
+    fn symbols(&mut self) -> &mut BTreeMap<String, String> {
         &mut self.symbols
     }
 
@@ -185,7 +185,7 @@ impl BasicCompileContext {
     pub fn new(
         allocator: Allocator,
         runner: Rc<dyn TRunProgram>,
-        symbols: HashMap<String, String>,
+        symbols: BTreeMap<String, String>,
         optimizer: Box<dyn Optimization>,
     ) -> Self {
         BasicCompileContext {
@@ -204,7 +204,7 @@ impl BasicCompileContext {
 /// or an inner mod is compiled.
 pub struct CompileContextWrapper<'a> {
     pub allocator: &'a mut Allocator,
-    pub symbols: &'a mut HashMap<String, String>,
+    pub symbols: &'a mut BTreeMap<String, String>,
     pub context: BasicCompileContext,
 }
 
@@ -229,13 +229,13 @@ impl<'a> CompileContextWrapper<'a> {
     pub fn new(
         allocator: &'a mut Allocator,
         runner: Rc<dyn TRunProgram>,
-        symbols: &'a mut HashMap<String, String>,
+        symbols: &'a mut BTreeMap<String, String>,
         optimizer: Box<dyn Optimization>,
     ) -> Self {
         let bcc = BasicCompileContext {
             allocator: Allocator::new(),
             runner,
-            symbols: HashMap::new(),
+            symbols: BTreeMap::new(),
             optimizer,
         };
         let mut wrapper = CompileContextWrapper {

@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 use std::cmp::min;
-use std::collections::{BTreeMap, HashSet};
+use alloc::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Error, Formatter};
 use std::rc::Rc;
 
@@ -100,7 +100,7 @@ fn is_fully_dominated(
     cse: &CSEDetectionWithoutConditions,
     detections: &[CSEDetectionWithoutConditions],
 ) -> bool {
-    let mut host_set = HashSet::new();
+    let mut host_set = BTreeSet::new();
 
     for i in cse.instances.iter() {
         for d in detections.iter() {
@@ -544,7 +544,7 @@ fn detect_merge_into_host_assign(
             return false;
         }
 
-        let used_names: HashSet<Vec<u8>> = collect_used_names_bodyform(binding.body.borrow())
+        let used_names: BTreeSet<Vec<u8>> = collect_used_names_bodyform(binding.body.borrow())
             .iter()
             .cloned()
             .collect();

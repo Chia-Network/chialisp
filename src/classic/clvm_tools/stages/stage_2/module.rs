@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-use std::collections::HashSet;
+use alloc::collections::BTreeMap;
+use alloc::collections::BTreeSet;
 use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
@@ -27,15 +27,15 @@ lazy_static! {
 }
 
 struct CollectionResult {
-    pub functions: HashMap<Vec<u8>, NodePtr>,
-    pub constants: HashMap<Vec<u8>, NodePtr>,
+    pub functions: BTreeMap<Vec<u8>, NodePtr>,
+    pub constants: BTreeMap<Vec<u8>, NodePtr>,
     pub macros: Vec<(Vec<u8>, NodePtr)>,
 }
 
 #[derive(Default)]
 struct CompileOutput {
-    pub functions: HashMap<Vec<u8>, NodePtr>,
-    // pub symbols_extra_info: HashMap<Vec<u8>, FunctionExtraInfo>, // TODO(no_std): debug info removed
+    pub functions: BTreeMap<Vec<u8>, NodePtr>,
+    // pub symbols_extra_info: BTreeMap<Vec<u8>, FunctionExtraInfo>, // TODO(no_std): debug info removed
 }
 
 impl CompileOutput {
@@ -96,8 +96,8 @@ fn build_tree_program(allocator: &mut Allocator, items: &[NodePtr]) -> Result<No
  */
 fn build_used_constants_names(
     allocator: &mut Allocator,
-    functions: &HashMap<Vec<u8>, NodePtr>,
-    constants: &HashMap<Vec<u8>, NodePtr>,
+    functions: &BTreeMap<Vec<u8>, NodePtr>,
+    constants: &BTreeMap<Vec<u8>, NodePtr>,
     macros: &[(Vec<u8>, NodePtr)],
 ) -> Result<Vec<Vec<u8>>, EvalErr> {
     /*
@@ -105,14 +105,14 @@ fn build_used_constants_names(
     be too small. Return a list of all atoms used that are also the names of
     functions or constants, starting with the MAIN_NAME function.
      */
-    let mut macro_as_dict = HashMap::new();
+    let mut macro_as_dict = BTreeMap::new();
 
     for nv in macros {
         let (name, value) = nv;
         macro_as_dict.insert(name.to_vec(), *value);
     }
 
-    let mut possible_symbols = HashSet::new();
+    let mut possible_symbols = BTreeSet::new();
     for key in functions.keys() {
         possible_symbols.insert(key);
     }
@@ -121,13 +121,13 @@ fn build_used_constants_names(
         possible_symbols.insert(key);
     }
 
-    let mut new_names: HashSet<Vec<u8>> = HashSet::new();
+    let mut new_names: BTreeSet<Vec<u8>> = BTreeSet::new();
     new_names.insert(MAIN_NAME.as_bytes().to_vec());
     let mut used_names = new_names.clone();
 
     while !new_names.is_empty() {
         let iterate_names = new_names.clone();
-        new_names = HashSet::new();
+        new_names = BTreeSet::new();
 
         for name in iterate_names {
             let functions_and_macros = [functions.get(&name), macro_as_dict.get(&name)];
@@ -179,10 +179,10 @@ fn build_used_constants_names(
 fn parse_include(
     allocator: &mut Allocator,
     name: NodePtr,
-    namespace: &mut HashSet<Vec<u8>>,
-    functions: &mut HashMap<Vec<u8>, NodePtr>,
-    constants: &mut HashMap<Vec<u8>, NodePtr>,
-    delayed_constants: &mut HashMap<Vec<u8>, NodePtr>,
+    namespace: &mut BTreeSet<Vec<u8>>,
+    functions: &mut BTreeMap<Vec<u8>, NodePtr>,
+    constants: &mut BTreeMap<Vec<u8>, NodePtr>,
+    delayed_constants: &mut BTreeMap<Vec<u8>, NodePtr>,
     macros: &mut Vec<(Vec<u8>, NodePtr)>,
     run_program: Rc<dyn TRunProgram>,
 ) -> Result<(), EvalErr> {
@@ -222,7 +222,7 @@ fn unquote_args(
     allocator: &mut Allocator,
     code: NodePtr,
     args: &[Vec<u8>],
-    matches: &HashMap<Vec<u8>, NodePtr>,
+    matches: &BTreeMap<Vec<u8>, NodePtr>,
 ) -> Result<NodePtr, EvalErr> {
     match allocator.sexp(code) {
         SExp::Atom => {
@@ -268,7 +268,7 @@ fn defun_inline_to_macro(
         .select_nodes(allocator, declaration_sexp)?;
     let defmacro_atom = allocator.new_atom("defmacro".as_bytes())?;
 
-    let mut destructure_matches = HashMap::new();
+    let mut destructure_matches = BTreeMap::new();
     let use_args = if is_inline_destructure(allocator, arg_spec) {
         // Given an attempt to destructure via the argument list, we need
         // to ensure that the inline function receives arguments that are
@@ -311,13 +311,13 @@ fn defun_inline_to_macro(
 fn parse_mod_sexp(
     allocator: &mut Allocator,
     declaration_sexp: NodePtr,
-    namespace: &mut HashSet<Vec<u8>>,
-    functions: &mut HashMap<Vec<u8>, NodePtr>,
-    constants: &mut HashMap<Vec<u8>, NodePtr>,
+    namespace: &mut BTreeSet<Vec<u8>>,
+    functions: &mut BTreeMap<Vec<u8>, NodePtr>,
+    constants: &mut BTreeMap<Vec<u8>, NodePtr>,
     // Delayed constants are new: they represent constant values
     // but we need the whole module to evaluate them since they
     // may call local functions (such as sha256tree).
-    delayed_constants: &mut HashMap<Vec<u8>, NodePtr>,
+    delayed_constants: &mut BTreeMap<Vec<u8>, NodePtr>,
     macros: &mut Vec<(Vec<u8>, NodePtr)>,
     run_program: Rc<dyn TRunProgram>,
 ) -> Result<(), EvalErr> {
@@ -413,11 +413,11 @@ fn compile_mod_stage_1(
 ) -> Result<CollectionResult, EvalErr> {
     // stage 1: collect up names of globals (functions, constants, macros)
     m! {
-        let mut functions = HashMap::new();
-        let mut constants = HashMap::new();
-        let mut delayed_constants = HashMap::new();
+        let mut functions = BTreeMap::new();
+        let mut constants = BTreeMap::new();
+        let mut delayed_constants = BTreeMap::new();
         let mut macros = Vec::new();
-        let mut namespace = HashSet::new();
+        let mut namespace = BTreeSet::new();
 
         // eslint-disable-next-line no-constant-condition
         match proper_list(allocator, args, true) {
@@ -686,7 +686,7 @@ fn add_one_function(
 
 fn compile_functions(
     allocator: &mut Allocator,
-    functions: &HashMap<Vec<u8>, NodePtr>,
+    functions: &BTreeMap<Vec<u8>, NodePtr>,
     macro_lookup_program: NodePtr,
     constants_symbol_table: &[(NodePtr, Vec<u8>)],
     args_root_node: &NodePath,
@@ -770,7 +770,7 @@ fn finish_compile_from_collection(
     let main_path = compiled.functions[MAIN_NAME.as_bytes()];
 
     if has_constants_tree {
-        let mut all_constants_lookup = HashMap::new();
+        let mut all_constants_lookup = BTreeMap::new();
         for (k, v) in compiled.functions {
             if all_constants_names.contains(&k) {
                 all_constants_lookup.insert(k, v);

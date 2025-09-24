@@ -1,17 +1,17 @@
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
 use crate::classic::clvm::sexp::equal_to;
+use alloc::collections::BTreeMap;
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
-use std::collections::HashMap;
 
 pub const ATOM_MATCH: [u8; 1] = [b'$'];
 pub const SEXP_MATCH: [u8; 1] = [b':'];
 
 pub fn unify_bindings(
     allocator: &mut Allocator,
-    bindings: HashMap<String, NodePtr>,
+    bindings: BTreeMap<String, NodePtr>,
     new_key: &[u8],
     new_value: NodePtr,
-) -> Option<HashMap<String, NodePtr>> {
+) -> Option<BTreeMap<String, NodePtr>> {
     /*
      * Try to add a new binding to the list, rejecting it if it conflicts
      * with an existing binding.
@@ -36,8 +36,8 @@ pub fn match_sexp(
     allocator: &mut Allocator,
     pattern: NodePtr,
     sexp: NodePtr,
-    known_bindings: HashMap<String, NodePtr>,
-) -> Option<HashMap<String, NodePtr>> {
+    known_bindings: BTreeMap<String, NodePtr>,
+) -> Option<BTreeMap<String, NodePtr>> {
     /*
      * Determine if sexp matches the pattern, with the given known bindings already applied.
      * Returns None if no match, or a (possibly empty) dictionary of bindings if there is a match
@@ -74,7 +74,7 @@ pub fn match_sexp(
                         if left_atom.as_ref() == ATOM_MATCH {
                             if right_atom.as_ref() == ATOM_MATCH {
                                 if sexp_atom.as_ref() == ATOM_MATCH {
-                                    return Some(HashMap::new());
+                                    return Some(BTreeMap::new());
                                 }
                                 return None;
                             }
@@ -89,7 +89,7 @@ pub fn match_sexp(
                         if left_atom.as_ref() == SEXP_MATCH {
                             if right_atom.as_ref() == SEXP_MATCH && sexp_atom.as_ref() == SEXP_MATCH
                             {
-                                return Some(HashMap::new());
+                                return Some(BTreeMap::new());
                             }
 
                             return unify_bindings(

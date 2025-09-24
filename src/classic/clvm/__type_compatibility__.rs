@@ -1,10 +1,10 @@
 // use chia_bls::PublicKey; // TODO(BLS): restore when BLS support returns
-use num_traits::{One, Zero};
+use alloc::collections::BTreeMap;
 use core::clone::Clone;
 use core::cmp::Ordering;
 use core::cmp::{max, min};
-use std::collections::HashMap;
 use core::fmt::{Debug, Display};
+use num_traits::{One, Zero};
 
 use sha2::Digest;
 use sha2::Sha256;
@@ -298,7 +298,7 @@ where
 
 const BUF_ALLOC_MULTIPLIER: usize = 4;
 
-pub type Record<K, V> = HashMap<K, V>;
+pub type Record<K, V> = BTreeMap<K, V>;
 
 #[derive(Debug)]
 pub struct Stream {

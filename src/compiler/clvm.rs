@@ -1,6 +1,6 @@
 use core::borrow::Borrow;
 use core::cell::RefCell;
-use std::collections::HashMap;
+use alloc::collections::BTreeMap;
 use core::mem::swap;
 use std::rc::Rc;
 
@@ -166,7 +166,7 @@ fn choose_path(
 fn translate_head(
     allocator: &mut Allocator,
     runner: Rc<dyn TRunProgram>,
-    prim_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>,
+    prim_map: Rc<BTreeMap<Vec<u8>, Rc<SExp>>>,
     _l: Srcloc,
     sexp: Rc<SExp>,
     context: Rc<SExp>,
@@ -220,7 +220,7 @@ fn translate_head(
 fn eval_args(
     _allocator: &mut Allocator,
     _runner: Rc<dyn TRunProgram>,
-    _prim_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>,
+    _prim_map: Rc<BTreeMap<Vec<u8>, Rc<SExp>>>,
     head: Rc<SExp>,
     sexp_: Rc<SExp>,
     context_: Rc<SExp>,
@@ -509,7 +509,7 @@ pub fn step_return_value(step: &RunStep, value: Rc<SExp>) -> RunStep {
 pub fn run_step(
     allocator: &mut Allocator,
     runner: Rc<dyn TRunProgram>,
-    prim_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>,
+    prim_map: Rc<BTreeMap<Vec<u8>, Rc<SExp>>>,
     step_: &RunStep,
     prim_override: Option<&dyn PrimOverride>,
 ) -> Result<RunStep, RunFailure> {
@@ -751,7 +751,7 @@ pub fn start_step(sexp_: Rc<SExp>, context_: Rc<SExp>) -> RunStep {
 pub fn run(
     allocator: &mut Allocator,
     runner: Rc<dyn TRunProgram>,
-    prim_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>,
+    prim_map: Rc<BTreeMap<Vec<u8>, Rc<SExp>>>,
     sexp_: Rc<SExp>,
     context_: Rc<SExp>,
     prim_override: Option<&dyn PrimOverride>,

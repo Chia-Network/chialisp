@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::collections::HashMap;
+use alloc::collections::BTreeMap;
 use std::rc::Rc;
 
 use crate::compiler::codegen::toposort_assign_bindings;
@@ -14,7 +14,7 @@ use crate::util::TopoSortItem;
 
 /// Rename in a qq form.  This searches for (unquote ...) forms inside and performs
 /// rename inside them, leaving the rest of the qq form as is.
-fn rename_in_qq(namemap: &HashMap<Vec<u8>, Vec<u8>>, body: Rc<SExp>) -> Rc<SExp> {
+fn rename_in_qq(namemap: &BTreeMap<Vec<u8>, Vec<u8>>, body: Rc<SExp>) -> Rc<SExp> {
     body.proper_list()
         .and_then(|x| {
             if let [SExp::Atom(_, q), body] = &x[..] {
@@ -37,7 +37,7 @@ fn rename_in_qq(namemap: &HashMap<Vec<u8>, Vec<u8>>, body: Rc<SExp>) -> Rc<SExp>
 
 /* Given a cons cell, rename occurrences of oldname to newname */
 pub fn rename_in_cons(
-    namemap: &HashMap<Vec<u8>, Vec<u8>>,
+    namemap: &BTreeMap<Vec<u8>, Vec<u8>>,
     body: Rc<SExp>,
     qq_handling: bool,
 ) -> Rc<SExp> {
@@ -115,14 +115,14 @@ fn invent_new_names_sexp(body: Rc<SExp>) -> Vec<(Vec<u8>, Vec<u8>)> {
 
 #[derive(Debug, Clone)]
 struct InnerRenameList {
-    bindings: HashMap<Vec<u8>, Vec<u8>>,
+    bindings: BTreeMap<Vec<u8>, Vec<u8>>,
     from_wing: Binding,
 }
 
 fn make_binding_unique(b: &Binding) -> InnerRenameList {
     match &b.pattern {
         BindingPattern::Name(name) => {
-            let mut single_name_map = HashMap::new();
+            let mut single_name_map = BTreeMap::new();
             let new_name = gensym(name.clone());
             single_name_map.insert(name.to_vec(), new_name.clone());
             InnerRenameList {
@@ -135,7 +135,7 @@ fn make_binding_unique(b: &Binding) -> InnerRenameList {
         }
         BindingPattern::Complex(pat) => {
             let new_names_vec = invent_new_names_sexp(pat.clone());
-            let mut new_names = HashMap::new();
+            let mut new_names = BTreeMap::new();
 
             for (n, v) in new_names_vec.iter() {
                 new_names.insert(n.clone(), v.clone());
@@ -160,7 +160,7 @@ pub fn rename_assign_bindings(
 ) -> Result<(BodyForm, Vec<Rc<Binding>>), CompileErr> {
     // Order the bindings.
     let sorted_bindings = toposort_assign_bindings(l, bindings)?;
-    let mut renames: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+    let mut renames: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
     // Process in reverse order so we rename from inner to outer.
     let bindings_to_rename: Vec<TopoSortItem<_>> = sorted_bindings.to_vec();
     let renamed_bindings = map_m_reverse(
@@ -189,7 +189,7 @@ pub fn rename_assign_bindings(
 }
 
 fn rename_in_bodyform(
-    namemap: &HashMap<Vec<u8>, Vec<u8>>,
+    namemap: &BTreeMap<Vec<u8>, Vec<u8>>,
     b: Rc<BodyForm>,
 ) -> Result<BodyForm, CompileErr> {
     match b.borrow() {
@@ -322,7 +322,7 @@ fn rename_args_bodyform(b: &BodyForm) -> Result<BodyForm, CompileErr> {
                 .iter()
                 .map(|ir| Rc::new(ir.from_wing.clone()))
                 .collect();
-            let mut local_namemap = HashMap::new();
+            let mut local_namemap = BTreeMap::new();
             for ir in renames.iter() {
                 for (oldname, binding_name) in ir.bindings.iter() {
                     local_namemap.insert(oldname.to_vec(), binding_name.clone());
@@ -384,7 +384,7 @@ fn rename_args_bodyform(b: &BodyForm) -> Result<BodyForm, CompileErr> {
         }
         BodyForm::Mod(l, program) => Ok(BodyForm::Mod(l.clone(), program.clone())),
         BodyForm::Lambda(ldata) => {
-            let mut own_args = HashMap::new();
+            let mut own_args = BTreeMap::new();
             for (n, v) in invent_new_names_sexp(ldata.args.clone()).iter() {
                 own_args.insert(n.clone(), v.clone());
             }
@@ -401,7 +401,7 @@ fn rename_args_bodyform(b: &BodyForm) -> Result<BodyForm, CompileErr> {
 }
 
 fn rename_in_helperform(
-    namemap: &HashMap<Vec<u8>, Vec<u8>>,
+    namemap: &BTreeMap<Vec<u8>, Vec<u8>>,
     h: &HelperForm,
 ) -> Result<HelperForm, CompileErr> {
     match h {
@@ -430,11 +430,11 @@ pub fn rename_args_helperform(h: &HelperForm) -> Result<HelperForm, CompileErr> 
             ..defc.clone()
         })),
         HelperForm::Defmacro(mac) => {
-            let mut new_names: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+            let mut new_names: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
             for x in invent_new_names_sexp(mac.args.clone()).iter() {
                 new_names.insert(x.0.clone(), x.1.clone());
             }
-            let mut local_namemap = HashMap::new();
+            let mut local_namemap = BTreeMap::new();
             for x in new_names.iter() {
                 local_namemap.insert(x.0.to_vec(), x.1.to_vec());
             }
@@ -451,7 +451,7 @@ pub fn rename_args_helperform(h: &HelperForm) -> Result<HelperForm, CompileErr> 
         }
         HelperForm::Defun(inline, defun) => {
             let new_names = invent_new_names_sexp(defun.args.clone());
-            let mut local_namemap = HashMap::new();
+            let mut local_namemap = BTreeMap::new();
             for x in new_names.iter() {
                 local_namemap.insert(x.0.clone(), x.1.clone());
             }
@@ -473,7 +473,7 @@ pub fn rename_args_helperform(h: &HelperForm) -> Result<HelperForm, CompileErr> 
 }
 
 fn rename_in_compileform(
-    namemap: &HashMap<Vec<u8>, Vec<u8>>,
+    namemap: &BTreeMap<Vec<u8>, Vec<u8>>,
     c: Rc<CompileForm>,
 ) -> Result<CompileForm, CompileErr> {
     let c_ref: &CompileForm = c.borrow();
@@ -504,7 +504,7 @@ pub fn rename_children_compileform(c: &CompileForm) -> Result<CompileForm, Compi
 /// lexical scope.
 pub fn rename_args_compileform(c: &CompileForm) -> Result<CompileForm, CompileErr> {
     let new_names = invent_new_names_sexp(c.args.clone());
-    let mut local_namemap = HashMap::new();
+    let mut local_namemap = BTreeMap::new();
     for x in new_names.iter() {
         local_namemap.insert(x.0.clone(), x.1.clone());
     }

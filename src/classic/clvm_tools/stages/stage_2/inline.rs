@@ -2,10 +2,10 @@ use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
 use crate::classic::clvm::sexp::{enlist, proper_list};
 use crate::compiler::gensym::gensym;
 use crate::util::Number;
+use alloc::collections::BTreeMap;
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::error::EvalErr;
 use num_bigint::ToBigInt;
-use std::collections::HashMap;
 
 // If this is an at capture of the form
 // (@ name substructure)
@@ -83,7 +83,7 @@ fn formulate_path_selections_for_destructuring_arg(
     arg_path: Number,
     arg_depth: Number,
     referenced_from: Option<NodePtr>,
-    selections: &mut HashMap<Vec<u8>, NodePtr>,
+    selections: &mut BTreeMap<Vec<u8>, NodePtr>,
 ) -> Result<NodePtr, EvalErr> {
     match allocator.sexp(arg_sexp) {
         SExp::Pair(a, b) => {
@@ -224,7 +224,7 @@ fn formulate_path_selections_for_destructuring_arg(
 pub fn formulate_path_selections_for_destructuring(
     allocator: &mut Allocator,
     args_sexp: NodePtr,
-    selections: &mut HashMap<Vec<u8>, NodePtr>,
+    selections: &mut BTreeMap<Vec<u8>, NodePtr>,
 ) -> Result<NodePtr, EvalErr> {
     if let SExp::Pair(a, b) = allocator.sexp(args_sexp) {
         if let Some((capture, substructure)) = is_at_capture(allocator, a, b) {

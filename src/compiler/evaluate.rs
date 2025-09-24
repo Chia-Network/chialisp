@@ -1,5 +1,6 @@
 use core::borrow::Borrow;
-use std::collections::{HashMap, HashSet};
+use alloc::collections::BTreeMap;
+use alloc::collections::BTreeSet;
 use std::rc::Rc;
 
 use num_bigint::ToBigInt;
@@ -31,7 +32,7 @@ pub const EVAL_STACK_LIMIT: usize = 200;
 // Stack depth checker.
 #[derive(Clone, Debug, Default)]
 pub struct VisitedInfo {
-    functions: HashMap<Vec<u8>, Rc<BodyForm>>,
+    functions: BTreeMap<Vec<u8>, Rc<BodyForm>>,
     max_depth: Option<usize>,
 }
 
@@ -98,7 +99,7 @@ pub enum ArgInputs {
 pub struct Evaluator {
     opts: Rc<dyn CompilerOpts>,
     runner: Rc<dyn TRunProgram>,
-    prims: Rc<HashMap<Vec<u8>, Rc<SExp>>>,
+    prims: Rc<BTreeMap<Vec<u8>, Rc<SExp>>>,
     helpers: Vec<HelperForm>,
     mash_conditions: bool,
     ignore_exn: bool,
@@ -159,9 +160,9 @@ fn compute_paths_of_destructure(
 }
 
 fn update_parallel_bindings(
-    bindings: &HashMap<Vec<u8>, Rc<BodyForm>>,
+    bindings: &BTreeMap<Vec<u8>, Rc<BodyForm>>,
     have_bindings: &[Rc<Binding>],
-) -> HashMap<Vec<u8>, Rc<BodyForm>> {
+) -> BTreeMap<Vec<u8>, Rc<BodyForm>> {
     let mut new_bindings = bindings.clone();
     for b in have_bindings.iter() {
         match &b.pattern {
@@ -234,13 +235,13 @@ fn get_bodyform_from_arginput(l: &Srcloc, arginput: &ArgInputs) -> Rc<BodyForm> 
 }
 
 // Given an SExp argument capture structure and SExp containing the arguments
-// constructed for the function, populate a HashMap with minimized expressions
+// constructed for the function, populate a BTreeMap with minimized expressions
 // which match the requested argument destructuring.
 //
 // It's possible this will result in irreducible (unknown at compile time)
 // argument expressions.
 pub fn create_argument_captures(
-    argument_captures: &mut HashMap<Vec<u8>, Rc<BodyForm>>,
+    argument_captures: &mut BTreeMap<Vec<u8>, Rc<BodyForm>>,
     formed_arguments: &ArgInputs,
     function_arg_spec: Rc<SExp>,
 ) -> Result<(), CompileErr> {
@@ -351,7 +352,7 @@ fn build_argument_captures(
     arguments_to_convert: &[Rc<BodyForm>],
     tail: Option<Rc<BodyForm>>,
     args: Rc<SExp>,
-) -> Result<HashMap<Vec<u8>, Rc<BodyForm>>, CompileErr> {
+) -> Result<BTreeMap<Vec<u8>, Rc<BodyForm>>, CompileErr> {
     let formed_tail = tail.unwrap_or_else(|| Rc::new(BodyForm::Quoted(SExp::Nil(l.clone()))));
     let mut formed_arguments = decons_args(formed_tail);
 
@@ -363,7 +364,7 @@ fn build_argument_captures(
         );
     }
 
-    let mut argument_captures = HashMap::new();
+    let mut argument_captures = BTreeMap::new();
     create_argument_captures(&mut argument_captures, &formed_arguments, args)?;
     Ok(argument_captures)
 }
@@ -372,7 +373,7 @@ fn make_prim_call(l: Srcloc, prim: Rc<SExp>, args: Rc<SExp>) -> Rc<SExp> {
     Rc::new(SExp::Cons(l, prim, args))
 }
 
-pub fn build_reflex_captures(captures: &mut HashMap<Vec<u8>, Rc<BodyForm>>, args: Rc<SExp>) {
+pub fn build_reflex_captures(captures: &mut BTreeMap<Vec<u8>, Rc<BodyForm>>, args: Rc<SExp>) {
     match args.borrow() {
         SExp::Atom(l, name) => {
             captures.insert(
@@ -411,7 +412,7 @@ pub fn dequote(l: Srcloc, exp: Rc<BodyForm>) -> Result<Rc<SExp>, CompileErr> {
 }
 
 /*
-fn show_env(env: &HashMap<Vec<u8>, Rc<BodyForm>>) {
+fn show_env(env: &BTreeMap<Vec<u8>, Rc<BodyForm>>) {
     let loc = Srcloc::start(&"*env*".to_string());
     for kv in env.iter() {
         println!(
@@ -439,7 +440,7 @@ pub fn second_of_alist(lst: Rc<SExp>) -> Result<Rc<SExp>, CompileErr> {
 
 fn synthesize_args(
     template: Rc<SExp>,
-    env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+    env: &BTreeMap<Vec<u8>, Rc<BodyForm>>,
 ) -> Result<Rc<BodyForm>, CompileErr> {
     match template.borrow() {
         SExp::Atom(_, name) => env.get(name).map(|x| Ok(x.clone())).unwrap_or_else(|| {
@@ -637,7 +638,7 @@ fn match_i_op(candidate: Rc<BodyForm>) -> Option<(Rc<BodyForm>, Rc<BodyForm>, Rc
     None
 }
 
-fn flatten_expression_to_names_inner(collection: &mut HashSet<Vec<u8>>, expr: Rc<SExp>) {
+fn flatten_expression_to_names_inner(collection: &mut BTreeSet<Vec<u8>>, expr: Rc<SExp>) {
     match expr.borrow() {
         SExp::Cons(_, a, b) => {
             flatten_expression_to_names_inner(collection, a.clone());
@@ -651,7 +652,7 @@ fn flatten_expression_to_names_inner(collection: &mut HashSet<Vec<u8>>, expr: Rc
 }
 
 fn flatten_expression_to_names(expr: Rc<SExp>) -> Rc<BodyForm> {
-    let mut collection = HashSet::new();
+    let mut collection = BTreeSet::new();
     flatten_expression_to_names_inner(&mut collection, expr.clone());
     let mut transformed = Vec::new();
     for a in collection.iter() {
@@ -673,7 +674,7 @@ pub fn eval_dont_expand_let(inline_hint: &Option<LetFormInlineHint>) -> bool {
     matches!(inline_hint, Some(LetFormInlineHint::NonInline(_)))
 }
 
-pub fn filter_capture_args(args: Rc<SExp>, name_map: &HashMap<Vec<u8>, Rc<BodyForm>>) -> Rc<SExp> {
+pub fn filter_capture_args(args: Rc<SExp>, name_map: &BTreeMap<Vec<u8>, Rc<BodyForm>>) -> Rc<SExp> {
     match args.borrow() {
         SExp::Cons(l, a, b) => {
             let a_filtered = filter_capture_args(a.clone(), name_map);
@@ -731,7 +732,7 @@ impl<'info> Evaluator {
         program: Rc<CompileForm>,
         prog_args: Rc<SExp>,
         arguments_to_convert: &[Rc<BodyForm>],
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+        env: &BTreeMap<Vec<u8>, Rc<BodyForm>>,
     ) -> Result<Rc<BodyForm>, CompileErr> {
         // Pass the SExp representation of the expressions into
         // the macro after forming an argument sexp and then
@@ -781,7 +782,7 @@ impl<'info> Evaluator {
         allocator: &mut Allocator,
         visited_: &'info mut VisitedMarker<'_, VisitedInfo>,
         prog_args: Rc<SExp>,
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+        env: &BTreeMap<Vec<u8>, Rc<BodyForm>>,
         parts: &[Rc<BodyForm>],
         only_inline: bool,
     ) -> Result<Option<LambdaApply>, CompileErr> {
@@ -820,7 +821,7 @@ impl<'info> Evaluator {
         allocator: &mut Allocator,
         visited: &mut VisitedMarker<'info, VisitedInfo>,
         prog_args: Rc<SExp>,
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+        env: &BTreeMap<Vec<u8>, Rc<BodyForm>>,
         lapply: &LambdaApply,
         only_inline: bool,
     ) -> Result<Rc<BodyForm>, CompileErr> {
@@ -871,7 +872,7 @@ impl<'info> Evaluator {
         call: &CallSpec,
         prog_args: Rc<SExp>,
         arguments_to_convert: &[Rc<BodyForm>],
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+        env: &BTreeMap<Vec<u8>, Rc<BodyForm>>,
         only_inline: bool,
     ) -> Result<Rc<BodyForm>, CompileErr> {
         let mut all_primitive = true;
@@ -1000,7 +1001,7 @@ impl<'info> Evaluator {
         env: Rc<BodyForm>,
         run_program: Rc<SExp>,
     ) -> Result<Rc<BodyForm>, CompileErr> {
-        let bindings = HashMap::new();
+        let bindings = BTreeMap::new();
         let program = promote_program_to_bodyform(run_program.clone(), env)?;
         let apply_result = self.shrink_bodyform_visited(
             allocator,
@@ -1116,7 +1117,7 @@ impl<'info> Evaluator {
         call: &CallSpec,
         prog_args: Rc<SExp>,
         arguments_to_convert: &[Rc<BodyForm>],
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+        env: &BTreeMap<Vec<u8>, Rc<BodyForm>>,
         only_inline: bool,
     ) -> Result<Rc<BodyForm>, CompileErr> {
         let helper = select_helper(&self.helpers, call.name);
@@ -1164,7 +1165,7 @@ impl<'info> Evaluator {
                     defun.args.clone(),
                 )?;
 
-                let mut argument_captures = HashMap::new();
+                let mut argument_captures = BTreeMap::new();
                 // Do this to protect against misalignment
                 // between argument vec and destructuring.
                 for kv in argument_captures_untranslated.iter() {
@@ -1208,7 +1209,7 @@ impl<'info> Evaluator {
         allocator: &mut Allocator,
         visited: &'info mut VisitedMarker<'_, VisitedInfo>,
         prog_args: Rc<SExp>,
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+        env: &BTreeMap<Vec<u8>, Rc<BodyForm>>,
         ldata: &LambdaData,
         only_inline: bool,
     ) -> Result<Rc<BodyForm>, CompileErr> {
@@ -1228,7 +1229,7 @@ impl<'info> Evaluator {
 
         // Break up and make binding map.
         let deconsed_args = decons_args(new_captures.clone());
-        let mut arg_captures = HashMap::new();
+        let mut arg_captures = BTreeMap::new();
         create_argument_captures(
             &mut arg_captures,
             &deconsed_args,
@@ -1236,7 +1237,7 @@ impl<'info> Evaluator {
         )?;
 
         // Filter out elements that are not interpretable yet.
-        let mut interpretable_captures = HashMap::new();
+        let mut interpretable_captures = BTreeMap::new();
         for (n, v) in arg_captures.iter() {
             if dequote(v.loc(), v.clone()).is_ok() {
                 // This capture has already been made into a literal.
@@ -1304,7 +1305,7 @@ impl<'info> Evaluator {
         allocator: &mut Allocator, // Support random prims via clvm_rs
         visited_: &'info mut VisitedMarker<'_, VisitedInfo>,
         prog_args: Rc<SExp>,
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+        env: &BTreeMap<Vec<u8>, Rc<BodyForm>>,
         body: Rc<BodyForm>,
         only_inline: bool,
     ) -> Result<Rc<BodyForm>, CompileErr> {
@@ -1486,7 +1487,7 @@ impl<'info> Evaluator {
             }
             BodyForm::Mod(l, program) => {
                 // A mod form yields the compiled code.
-                let mut symbols = HashMap::new();
+                let mut symbols = BTreeMap::new();
                 let optimizer = get_optimizer(l, self.opts.clone())?;
                 let mut context_wrapper = CompileContextWrapper::new(
                     allocator,
@@ -1527,7 +1528,7 @@ impl<'info> Evaluator {
         &self,
         allocator: &mut Allocator, // Support random prims via clvm_rs
         prog_args: Rc<SExp>,
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+        env: &BTreeMap<Vec<u8>, Rc<BodyForm>>,
         body: Rc<BodyForm>,
         only_inline: bool,
         stack_limit: Option<usize>,
@@ -1555,7 +1556,7 @@ impl<'info> Evaluator {
         args: Rc<SExp>,
     ) -> Result<Rc<BodyForm>, CompileErr> {
         let mut new_helpers = Vec::new();
-        let mut used_names = HashSet::new();
+        let mut used_names = BTreeSet::new();
 
         let mut end_of_list = Rc::new(SExp::Cons(
             call_loc.clone(),
@@ -1650,7 +1651,7 @@ impl<'info> Evaluator {
             allocator,
             self.runner.clone(),
             use_body,
-            &mut HashMap::new(),
+            &mut BTreeMap::new(),
         )?;
 
         Ok(Rc::new(com_result))

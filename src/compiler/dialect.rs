@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use alloc::collections::BTreeMap;
 
 use clvmr::allocator::{Allocator, NodePtr, SExp};
 
@@ -30,8 +30,8 @@ pub struct DialectDescription {
 }
 
 lazy_static! {
-    pub static ref KNOWN_DIALECTS: HashMap<String, DialectDescription> = {
-        let mut dialects: HashMap<String, DialectDescription> = HashMap::new();
+    pub static ref KNOWN_DIALECTS: BTreeMap<String, DialectDescription> = {
+        let mut dialects: BTreeMap<String, DialectDescription> = BTreeMap::new();
         let dialect_list = [
             (
                 "*standard-cl-21*",

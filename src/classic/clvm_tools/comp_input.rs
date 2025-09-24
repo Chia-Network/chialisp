@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use alloc::collections::BTreeMap;
 use std::rc::Rc;
 
 use clvmr::{Allocator, NodePtr};
@@ -25,16 +25,16 @@ use crate::compiler::dialect::{detect_modern, AcceptedDialect};
 use crate::compiler::optimize::maybe_finalize_program_via_classic_optimizer;
 use crate::compiler::sexp;
 
-pub fn get_disassembly_ver(p: &HashMap<String, ArgumentValue>) -> Option<usize> {
+pub fn get_disassembly_ver(p: &BTreeMap<String, ArgumentValue>) -> Option<usize> {
     if let Some(ArgumentValue::ArgInt(x)) = p.get("operators_version") {
-        return Some(*x as usize);
+        return Some(*x);
     }
 
     None
 }
 
 fn get_string_and_filename_with_default(
-    parsed_args: &HashMap<String, ArgumentValue>,
+    parsed_args: &BTreeMap<String, ArgumentValue>,
     argument: &str,
     default: Option<&str>,
 ) -> Option<(Option<String>, String)> {
@@ -60,7 +60,7 @@ impl ParsedInputPathOrCode {
 pub fn parse_tool_input_sexp(
     allocator: &mut Allocator,
     argument: &str,
-    parsed_args: &HashMap<String, ArgumentValue>,
+    parsed_args: &BTreeMap<String, ArgumentValue>,
     default_hex: Option<&str>,
     default_sexp: Option<&str>,
 ) -> Result<ParsedInputPathOrCode, String> {
@@ -135,7 +135,7 @@ pub struct RunAndCompileInputData {
 impl RunAndCompileInputData {
     pub fn new(
         allocator: &mut Allocator,
-        parsed_args: &HashMap<String, ArgumentValue>,
+        parsed_args: &BTreeMap<String, ArgumentValue>,
     ) -> Result<RunAndCompileInputData, String> {
         let program = parse_tool_input_sexp(allocator, "path_or_code", parsed_args, None, None)?;
         let args = parse_tool_input_sexp(allocator, "env", parsed_args, Some("80"), Some("()"))?;
@@ -205,7 +205,7 @@ impl RunAndCompileInputData {
     pub fn compile_modern(
         &self,
         allocator: &mut Allocator,
-        symbol_table: &mut HashMap<String, String>,
+        symbol_table: &mut BTreeMap<String, String>,
     ) -> Result<Rc<sexp::SExp>, CompileErr> {
         let runner = Rc::new(DefaultProgramRunner::new());
 

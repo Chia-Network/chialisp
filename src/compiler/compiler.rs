@@ -1,6 +1,7 @@
+use alloc::collections::BTreeMap;
 use num_bigint::ToBigInt;
 use std::borrow::Borrow;
-use std::collections::{HashMap, HashSet};
+use alloc::collections::BTreeSet;
 // use std::fs; // TODO: filesystem - commented out for no_std compatibility
 // use std::path::PathBuf; // TODO: filesystem - commented out for no_std compatibility
 use std::rc::Rc;
@@ -85,13 +86,13 @@ pub struct DefaultCompilerOpts {
     pub frontend_check_live: bool,
     pub start_env: Option<Rc<SExp>>,
     pub disassembly_ver: Option<usize>,
-    pub prim_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>,
-    pub diag_flags: Rc<HashSet<usize>>,
+    pub prim_map: Rc<BTreeMap<Vec<u8>, Rc<SExp>>>,
+    pub diag_flags: Rc<BTreeSet<usize>>,
     pub dialect: AcceptedDialect,
 }
 
-pub fn create_prim_map() -> Rc<HashMap<Vec<u8>, Rc<SExp>>> {
-    let mut prim_map: HashMap<Vec<u8>, Rc<SExp>> = HashMap::new();
+pub fn create_prim_map() -> Rc<BTreeMap<Vec<u8>, Rc<SExp>>> {
+    let mut prim_map: BTreeMap<Vec<u8>, Rc<SExp>> = BTreeMap::new();
 
     for p in prims::prims() {
         prim_map.insert(p.0.clone(), Rc::new(p.1.clone()));
@@ -161,7 +162,7 @@ pub fn compile_file(
     runner: Rc<dyn TRunProgram>,
     opts: Rc<dyn CompilerOpts>,
     content: &str,
-    symbol_table: &mut HashMap<String, String>,
+    symbol_table: &mut BTreeMap<String, String>,
 ) -> Result<SExp, CompileErr> {
     let _int_conversion_bug = NewStyleIntConversion::new(opts.dialect().int_fix);
     let srcloc = Srcloc::start(&opts.filename());
@@ -203,7 +204,7 @@ impl CompilerOpts for DefaultCompilerOpts {
     fn start_env(&self) -> Option<Rc<SExp>> {
         self.start_env.clone()
     }
-    fn prim_map(&self) -> Rc<HashMap<Vec<u8>, Rc<SExp>>> {
+    fn prim_map(&self) -> Rc<BTreeMap<Vec<u8>, Rc<SExp>>> {
         self.prim_map.clone()
     }
     fn disassembly_ver(&self) -> Option<usize> {
@@ -212,7 +213,7 @@ impl CompilerOpts for DefaultCompilerOpts {
     fn get_search_paths(&self) -> Vec<String> {
         self.include_dirs.clone()
     }
-    fn diag_flags(&self) -> Rc<HashSet<usize>> {
+    fn diag_flags(&self) -> Rc<BTreeSet<usize>> {
         self.diag_flags.clone()
     }
 
@@ -266,12 +267,12 @@ impl CompilerOpts for DefaultCompilerOpts {
         copy.start_env = start_env;
         Rc::new(copy)
     }
-    fn set_prim_map(&self, prims: Rc<HashMap<Vec<u8>, Rc<SExp>>>) -> Rc<dyn CompilerOpts> {
+    fn set_prim_map(&self, prims: Rc<BTreeMap<Vec<u8>, Rc<SExp>>>) -> Rc<dyn CompilerOpts> {
         let mut copy = self.clone();
         copy.prim_map = prims;
         Rc::new(copy)
     }
-    fn set_diag_flags(&self, flags: Rc<HashSet<usize>>) -> Rc<dyn CompilerOpts> {
+    fn set_diag_flags(&self, flags: Rc<BTreeSet<usize>>) -> Rc<dyn CompilerOpts> {
         let mut copy = self.clone();
         copy.diag_flags = flags;
         Rc::new(copy)
@@ -320,7 +321,7 @@ impl CompilerOpts for DefaultCompilerOpts {
         allocator: &mut Allocator,
         runner: Rc<dyn TRunProgram>,
         sexp: Rc<SExp>,
-        symbol_table: &mut HashMap<String, String>,
+        symbol_table: &mut BTreeMap<String, String>,
     ) -> Result<SExp, CompileErr> {
         let _int_conversion_bug = NewStyleIntConversion::new(self.dialect.int_fix);
         let me = Rc::new(self.clone());
@@ -346,7 +347,7 @@ impl DefaultCompilerOpts {
             dialect: AcceptedDialect::default(),
             prim_map: create_prim_map(),
             disassembly_ver: None,
-            diag_flags: Rc::new(HashSet::default()),
+            diag_flags: Rc::new(BTreeSet::default()),
         }
     }
 }

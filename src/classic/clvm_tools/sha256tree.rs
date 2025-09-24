@@ -4,7 +4,7 @@ use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 
 use crate::classic::clvm::__type_compatibility__::{sha256, Bytes, BytesFromType};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TreeHash {
     s: String,
 }

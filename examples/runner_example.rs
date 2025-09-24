@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+extern crate alloc;
+use alloc::collections::BTreeMap;
 use std::rc::Rc;
 
 use clvm_tools_rs::classic::clvm::__type_compatibility__::Stream;
@@ -24,7 +25,7 @@ fn main() {
     let opts = Rc::new(DefaultCompilerOpts::new(filename)).set_search_paths(&search_paths);
 
     // 2) Compile Chialisp -> CLVM node
-    let mut symbols: HashMap<String, String> = HashMap::new();
+    let mut symbols: BTreeMap<String, String> = BTreeMap::new();
     let compiled_prog = compile_clvm_text(&mut allocator, opts, &mut symbols, clsp, filename, true)
         .expect("compile failed");
 

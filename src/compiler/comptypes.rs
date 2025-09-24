@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-use std::collections::HashSet;
+use alloc::collections::BTreeMap;
+use alloc::collections::BTreeSet;
 use std::rc::Rc;
 
 use serde::Serialize;
@@ -365,19 +365,19 @@ pub struct DefunCall {
 /// during code generation.  It's mostly used internally.
 #[derive(Clone, Debug)]
 pub struct PrimaryCodegen {
-    pub prims: Rc<HashMap<Vec<u8>, Rc<SExp>>>,
-    pub constants: HashMap<Vec<u8>, Rc<SExp>>,
-    pub tabled_constants: HashMap<Vec<u8>, Rc<SExp>>,
-    pub macros: HashMap<Vec<u8>, Rc<SExp>>,
-    pub inlines: HashMap<Vec<u8>, InlineFunction>,
-    pub defuns: HashMap<Vec<u8>, DefunCall>,
-    pub parentfns: HashSet<Vec<u8>>,
+    pub prims: Rc<BTreeMap<Vec<u8>, Rc<SExp>>>,
+    pub constants: BTreeMap<Vec<u8>, Rc<SExp>>,
+    pub tabled_constants: BTreeMap<Vec<u8>, Rc<SExp>>,
+    pub macros: BTreeMap<Vec<u8>, Rc<SExp>>,
+    pub inlines: BTreeMap<Vec<u8>, InlineFunction>,
+    pub defuns: BTreeMap<Vec<u8>, DefunCall>,
+    pub parentfns: BTreeSet<Vec<u8>>,
     pub env: Rc<SExp>,
     pub to_process: Vec<HelperForm>,
     pub original_helpers: Vec<HelperForm>,
     pub final_expr: Rc<BodyForm>,
     pub final_code: Option<CompiledCode>,
-    pub function_symbols: HashMap<String, String>,
+    pub function_symbols: BTreeMap<String, String>,
     pub left_env: bool,
 }
 
@@ -417,12 +417,12 @@ pub trait CompilerOpts {
     /// parent's context.
     fn start_env(&self) -> Option<Rc<SExp>>;
     /// Specifies the map of primitives provided during this compilation.
-    fn prim_map(&self) -> Rc<HashMap<Vec<u8>, Rc<SExp>>>;
+    fn prim_map(&self) -> Rc<BTreeMap<Vec<u8>, Rc<SExp>>>;
     /// Specifies the search paths we're carrying.
     fn get_search_paths(&self) -> Vec<String>;
     /// Specifies flags that were passed down to various consumers.  This is
     /// open ended for various purposes, such as diagnostics.
-    fn diag_flags(&self) -> Rc<HashSet<usize>>;
+    fn diag_flags(&self) -> Rc<BTreeSet<usize>>;
 
     /// Set the dialect.
     fn set_dialect(&self, dialect: AcceptedDialect) -> Rc<dyn CompilerOpts>;
@@ -446,9 +446,9 @@ pub trait CompilerOpts {
     /// Set the environment shape to assume.
     fn set_start_env(&self, start_env: Option<Rc<SExp>>) -> Rc<dyn CompilerOpts>;
     /// Set the primitive map in use so we can add custom primitives.
-    fn set_prim_map(&self, new_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>) -> Rc<dyn CompilerOpts>;
+    fn set_prim_map(&self, new_map: Rc<BTreeMap<Vec<u8>, Rc<SExp>>>) -> Rc<dyn CompilerOpts>;
     /// Set the flags this CompilerOpts holds.  Consumers can examine these.
-    fn set_diag_flags(&self, new_flags: Rc<HashSet<usize>>) -> Rc<dyn CompilerOpts>;
+    fn set_diag_flags(&self, new_flags: Rc<BTreeSet<usize>>) -> Rc<dyn CompilerOpts>;
 
     /// Using the search paths list we have, try to read a file by name,
     /// Returning the expanded path to the file and its content.
@@ -465,7 +465,7 @@ pub trait CompilerOpts {
         allocator: &mut Allocator,
         runner: Rc<dyn TRunProgram>,
         sexp: Rc<SExp>,
-        symbol_table: &mut HashMap<String, String>,
+        symbol_table: &mut BTreeMap<String, String>,
     ) -> Result<SExp, CompileErr>;
 }
 
@@ -515,13 +515,13 @@ pub trait HasCompilerOptsDelegation {
     fn override_start_env(&self) -> Option<Rc<SExp>> {
         self.compiler_opts().start_env()
     }
-    fn override_prim_map(&self) -> Rc<HashMap<Vec<u8>, Rc<SExp>>> {
+    fn override_prim_map(&self) -> Rc<BTreeMap<Vec<u8>, Rc<SExp>>> {
         self.compiler_opts().prim_map()
     }
     fn override_get_search_paths(&self) -> Vec<String> {
         self.compiler_opts().get_search_paths()
     }
-    fn override_diag_flags(&self) -> Rc<HashSet<usize>> {
+    fn override_diag_flags(&self) -> Rc<BTreeSet<usize>> {
         self.compiler_opts().diag_flags()
     }
 
@@ -555,12 +555,12 @@ pub trait HasCompilerOptsDelegation {
     fn override_set_start_env(&self, start_env: Option<Rc<SExp>>) -> Rc<dyn CompilerOpts> {
         self.update_compiler_opts(|o| o.set_start_env(start_env))
     }
-    fn override_set_diag_flags(&self, flags: Rc<HashSet<usize>>) -> Rc<dyn CompilerOpts> {
+    fn override_set_diag_flags(&self, flags: Rc<BTreeSet<usize>>) -> Rc<dyn CompilerOpts> {
         self.update_compiler_opts(|o| o.set_diag_flags(flags))
     }
     fn override_set_prim_map(
         &self,
-        new_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>,
+        new_map: Rc<BTreeMap<Vec<u8>, Rc<SExp>>>,
     ) -> Rc<dyn CompilerOpts> {
         self.update_compiler_opts(|o| o.set_prim_map(new_map))
     }
@@ -576,7 +576,7 @@ pub trait HasCompilerOptsDelegation {
         allocator: &mut Allocator,
         runner: Rc<dyn TRunProgram>,
         sexp: Rc<SExp>,
-        symbol_table: &mut HashMap<String, String>,
+        symbol_table: &mut BTreeMap<String, String>,
     ) -> Result<SExp, CompileErr> {
         self.compiler_opts()
             .compile_program(allocator, runner, sexp, symbol_table)
@@ -615,13 +615,13 @@ impl<T: HasCompilerOptsDelegation> CompilerOpts for T {
     fn start_env(&self) -> Option<Rc<SExp>> {
         self.override_start_env()
     }
-    fn prim_map(&self) -> Rc<HashMap<Vec<u8>, Rc<SExp>>> {
+    fn prim_map(&self) -> Rc<BTreeMap<Vec<u8>, Rc<SExp>>> {
         self.override_prim_map()
     }
     fn get_search_paths(&self) -> Vec<String> {
         self.override_get_search_paths()
     }
-    fn diag_flags(&self) -> Rc<HashSet<usize>> {
+    fn diag_flags(&self) -> Rc<BTreeSet<usize>> {
         self.override_diag_flags()
     }
 
@@ -655,10 +655,10 @@ impl<T: HasCompilerOptsDelegation> CompilerOpts for T {
     fn set_start_env(&self, start_env: Option<Rc<SExp>>) -> Rc<dyn CompilerOpts> {
         self.override_set_start_env(start_env)
     }
-    fn set_prim_map(&self, new_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>) -> Rc<dyn CompilerOpts> {
+    fn set_prim_map(&self, new_map: Rc<BTreeMap<Vec<u8>, Rc<SExp>>>) -> Rc<dyn CompilerOpts> {
         self.override_set_prim_map(new_map)
     }
-    fn set_diag_flags(&self, new_flags: Rc<HashSet<usize>>) -> Rc<dyn CompilerOpts> {
+    fn set_diag_flags(&self, new_flags: Rc<BTreeSet<usize>>) -> Rc<dyn CompilerOpts> {
         self.override_set_diag_flags(new_flags)
     }
     fn read_new_file(
@@ -673,7 +673,7 @@ impl<T: HasCompilerOptsDelegation> CompilerOpts for T {
         allocator: &mut Allocator,
         runner: Rc<dyn TRunProgram>,
         sexp: Rc<SExp>,
-        symbol_table: &mut HashMap<String, String>,
+        symbol_table: &mut BTreeMap<String, String>,
     ) -> Result<SExp, CompileErr> {
         self.override_compile_program(allocator, runner, sexp, symbol_table)
     }
@@ -779,7 +779,7 @@ impl CompileForm {
     }
 
     /// Given a set of helpers by name, remove them.
-    pub fn remove_helpers(&self, names: &HashSet<Vec<u8>>) -> CompileForm {
+    pub fn remove_helpers(&self, names: &BTreeSet<Vec<u8>>) -> CompileForm {
         CompileForm {
             loc: self.loc.clone(),
             args: self.args.clone(),
@@ -797,7 +797,7 @@ impl CompileForm {
     /// Given a list of helpers, introduce them in this CompileForm, removing
     /// conflicting predecessors.
     pub fn replace_helpers(&self, helpers: &[HelperForm]) -> CompileForm {
-        let mut new_names = HashSet::new();
+        let mut new_names = BTreeSet::new();
         for h in helpers.iter() {
             new_names.insert(h.name());
         }
@@ -1163,7 +1163,7 @@ pub fn with_heading(l: Srcloc, name: &str, body: Rc<SExp>) -> SExp {
 pub fn cons_of_string_map<X>(
     l: Srcloc,
     cvt_body: &dyn Fn(&X) -> Rc<SExp>,
-    map: &HashMap<Vec<u8>, X>,
+    map: &BTreeMap<Vec<u8>, X>,
 ) -> SExp {
     // Thanks: https://users.rust-lang.org/t/sort-hashmap-data-by-keys/37095/3
     let mut v: Vec<_> = map.iter().collect();

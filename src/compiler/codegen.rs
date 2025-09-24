@@ -1,6 +1,6 @@
 use core::borrow::Borrow;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use alloc::collections::BTreeMap;
+use alloc::collections::BTreeSet;
 use core::mem::swap;
 use std::rc::Rc;
 
@@ -310,7 +310,7 @@ fn create_name_lookup(
         })
 }
 
-fn get_prim(loc: Srcloc, prims: Rc<HashMap<Vec<u8>, Rc<SExp>>>, name: &[u8]) -> Option<Rc<SExp>> {
+fn get_prim(loc: Srcloc, prims: Rc<BTreeMap<Vec<u8>, Rc<SExp>>>, name: &[u8]) -> Option<Rc<SExp>> {
     if let Some(p) = prims.get(name) {
         return Some(p.clone());
     }
@@ -379,7 +379,7 @@ pub fn process_macro_call(
     code: Rc<SExp>,
 ) -> Result<CompiledCode, CompileErr> {
     let converted_args: Vec<Rc<SExp>> = args.iter().map(|b| b.to_sexp()).collect();
-    let mut _swap_table: HashMap<String, String> = HashMap::new();
+    let mut _swap_table: BTreeMap<String, String> = BTreeMap::new();
     let args_to_macro = list_to_cons(l.clone(), &converted_args);
     // build_swap_table_mut(&mut swap_table, &args_to_macro); // Removed for no_std
 
@@ -604,7 +604,7 @@ fn compile_call(
                         )),
                     );
 
-                    let mut unused_symbol_table = HashMap::new();
+                    let mut unused_symbol_table = BTreeMap::new();
                     let runner = context.runner();
                     updated_opts
                         .compile_program(
@@ -643,7 +643,7 @@ pub fn do_mod_codegen(
 ) -> Result<CompiledCode, CompileErr> {
     // A mod form yields the compiled code.
     let without_env = opts.set_start_env(None).set_in_defun(false);
-    let mut throwaway_symbols = HashMap::new();
+    let mut throwaway_symbols = BTreeMap::new();
     let runner = context.runner();
     let optimizer = context.optimizer.duplicate();
     let mut context_wrapper = CompileContextWrapper::new(
@@ -833,7 +833,7 @@ fn combine_defun_env(old_env: Rc<SExp>, new_args: Rc<SExp>) -> Rc<SExp> {
 // Diverts to failure if a symbol is redefined.
 fn fail_if_present<T, R>(
     loc: Srcloc,
-    map: &HashMap<Vec<u8>, T>,
+    map: &BTreeMap<Vec<u8>, T>,
     name: &[u8],
     result: R,
 ) -> Result<R, CompileErr> {
@@ -892,7 +892,7 @@ fn codegen_(
                     )),
                 );
 
-                let mut unused_symbol_table = HashMap::new();
+                let mut unused_symbol_table = BTreeMap::new();
                 let runner = context.runner();
                 updated_opts
                     .compile_program(
@@ -935,24 +935,24 @@ fn is_defun_or_tabled_constant(b: &HelperForm) -> bool {
     }
 }
 
-pub fn empty_compiler(prim_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>, l: Srcloc) -> PrimaryCodegen {
+pub fn empty_compiler(prim_map: Rc<BTreeMap<Vec<u8>, Rc<SExp>>>, l: Srcloc) -> PrimaryCodegen {
     let nil = SExp::Nil(l.clone());
     let nil_rc = Rc::new(nil.clone());
 
     PrimaryCodegen {
         prims: prim_map,
-        constants: HashMap::new(),
-        tabled_constants: HashMap::new(),
-        inlines: HashMap::new(),
-        macros: HashMap::new(),
-        defuns: HashMap::new(),
-        parentfns: HashSet::new(),
+        constants: BTreeMap::new(),
+        tabled_constants: BTreeMap::new(),
+        inlines: BTreeMap::new(),
+        macros: BTreeMap::new(),
+        defuns: BTreeMap::new(),
+        parentfns: BTreeSet::new(),
         env: Rc::new(SExp::Cons(l, nil_rc.clone(), nil_rc)),
         to_process: Vec::new(),
         original_helpers: Vec::new(),
         final_expr: Rc::new(BodyForm::Quoted(nil)),
         final_code: None,
-        function_symbols: HashMap::new(),
+        function_symbols: BTreeMap::new(),
         left_env: true,
     }
 }
@@ -1057,9 +1057,9 @@ pub fn toposort_assign_bindings(
         CompileErr(loc.clone(), "deadlock resolving binding order".to_string()),
         // Needs: What this binding relies on.
         |possible, b| {
-            let mut need_set = HashSet::new();
+            let mut need_set = BTreeSet::new();
             make_provides_set(&mut need_set, b.body.to_sexp());
-            let mut need_set_thats_possible = HashSet::new();
+            let mut need_set_thats_possible = BTreeSet::new();
             for need in need_set.intersection(possible) {
                 need_set_thats_possible.insert(need.clone());
             }
@@ -1067,9 +1067,9 @@ pub fn toposort_assign_bindings(
         },
         // Has: What this binding provides.
         |b| match &b.pattern {
-            BindingPattern::Name(name) => HashSet::from([name.clone()]),
+            BindingPattern::Name(name) => BTreeSet::from([name.clone()]),
             BindingPattern::Complex(sexp) => {
-                let mut result_set = HashSet::new();
+                let mut result_set = BTreeSet::new();
                 make_provides_set(&mut result_set, sexp.clone());
                 result_set
             }
@@ -1094,10 +1094,10 @@ pub fn hoist_assign_form(letdata: &LetData) -> Result<BodyForm, CompileErr> {
     // If this becomes broader in a way that doesn't
     // match the existing provides, we need to break
     // the let binding.
-    let mut current_provides = HashSet::new();
+    let mut current_provides = BTreeSet::new();
     let mut binding_lists = Vec::new();
     let mut this_round_bindings = Vec::new();
-    let mut new_provides: HashSet<Vec<u8>> = HashSet::new();
+    let mut new_provides: BTreeSet<Vec<u8>> = BTreeSet::new();
 
     for spec in sorted_spec.iter() {
         let mut new_needs = spec.needs.difference(&current_provides).cloned();
@@ -1412,7 +1412,7 @@ fn start_codegen(
                         context.allocator(),
                         runner.clone(),
                         Rc::new(expand_program),
-                        &mut HashMap::new(),
+                        &mut BTreeMap::new(),
                     )?;
                     run(
                         context.allocator(),
@@ -1449,7 +1449,7 @@ fn start_codegen(
                     let constant_result = evaluator.shrink_bodyform(
                         context.allocator(),
                         Rc::new(SExp::Nil(defc.loc.clone())),
-                        &HashMap::new(),
+                        &BTreeMap::new(),
                         defc.body.clone(),
                         false,
                         Some(EVAL_STACK_LIMIT),
@@ -1493,7 +1493,7 @@ fn start_codegen(
                     context.allocator(),
                     runner.clone(),
                     macro_program,
-                    &mut HashMap::new(),
+                    &mut BTreeMap::new(),
                 )?;
 
                 let optimized_code =

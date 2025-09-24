@@ -1,7 +1,7 @@
 mod macros;
 
+use alloc::collections::BTreeMap;
 use core::borrow::Borrow;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use clvm_rs::error::EvalErr;
@@ -49,7 +49,7 @@ struct Preprocessor {
     runner: Rc<dyn TRunProgram>,
     helpers: Vec<HelperForm>,
     strict: bool,
-    stored_macros: HashMap<Vec<u8>, Rc<SExp>>,
+    stored_macros: BTreeMap<Vec<u8>, Rc<SExp>>,
 }
 
 fn compose_defconst(loc: Srcloc, name: &[u8], sexp: Rc<SExp>) -> Rc<SExp> {
@@ -100,7 +100,7 @@ impl Preprocessor {
             runner,
             helpers: Vec::new(),
             strict: opts.dialect().strict,
-            stored_macros: HashMap::default(),
+            stored_macros: BTreeMap::default(),
         }
     }
 
@@ -172,7 +172,12 @@ impl Preprocessor {
                     Rc::new(SExp::Atom(loc.clone(), content))
                 }
             }
-            IncludeProcessType::Hex => return Err(CompileErr(loc, "Hex includes not supported in no_std mode".to_string())),
+            IncludeProcessType::Hex => {
+                return Err(CompileErr(
+                    loc,
+                    "Hex includes not supported in no_std mode".to_string(),
+                ))
+            }
             IncludeProcessType::SExpression => {
                 let parsed = parse_sexp(Srcloc::start(&full_name), content.iter().copied())
                     .map_err(|e| CompileErr(e.0, e.1))?;
@@ -271,7 +276,7 @@ impl Preprocessor {
                         // The name matched, try calling it.
 
                         // Form argument env.
-                        let mut macro_arg_env = HashMap::new();
+                        let mut macro_arg_env = BTreeMap::new();
                         let args_borrowed: &SExp = args.borrow();
                         create_argument_captures(
                             &mut macro_arg_env,
@@ -287,7 +292,7 @@ impl Preprocessor {
                         } else {
                             // as inline defuns because they're closest to that
                             // semantically.
-                            let mut symbol_table = HashMap::new();
+                            let mut symbol_table = BTreeMap::new();
                             let new_program = CompileForm {
                                 loc: body.loc(),
                                 args: mdata.args.clone(),

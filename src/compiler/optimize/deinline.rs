@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use alloc::collections::{BTreeSet, BTreeMap};
 use std::rc::Rc;
 
 use crate::compiler::codegen::codegen;
@@ -8,7 +8,7 @@ use crate::compiler::{BasicCompileContext, CompileErr, CompileForm, CompilerOpts
 
 // Find the roots for the given function.
 fn find_roots(
-    visited: &mut HashSet<Vec<u8>>,
+    visited: &mut BTreeSet<Vec<u8>>,
     root_set: &mut BTreeSet<Vec<u8>>,
     depgraph: &FunctionDependencyGraph,
     function: &[u8],
@@ -61,7 +61,7 @@ pub fn deinline_opt(
         false
     };
 
-    let helper_to_index: HashMap<Vec<u8>, usize> = compileform
+    let helper_to_index: BTreeMap<Vec<u8>, usize> = compileform
         .helpers
         .iter()
         .enumerate()
@@ -109,11 +109,11 @@ pub fn deinline_opt(
         .cloned()
         .collect();
 
-    let mut roots: HashMap<Vec<u8>, BTreeSet<Vec<u8>>> = HashMap::new();
+    let mut roots: BTreeMap<Vec<u8>, BTreeSet<Vec<u8>>> = BTreeMap::new();
 
     // For each leaf, find roots.
     for l in leaves.iter() {
-        let mut visited = HashSet::new();
+        let mut visited = BTreeSet::new();
         let mut leaf_roots = BTreeSet::new();
         find_roots(&mut visited, &mut leaf_roots, &depgraph, l);
         if leaf_roots.is_empty() {
@@ -123,7 +123,7 @@ pub fn deinline_opt(
     }
 
     // Make a set of root sets to coalesce them.
-    let mut roots_set: HashSet<BTreeSet<Vec<u8>>> = HashSet::new();
+    let mut roots_set: BTreeSet<BTreeSet<Vec<u8>>> = BTreeSet::new();
     for (_, common_roots) in roots.iter() {
         roots_set.insert(common_roots.clone());
     }
@@ -132,7 +132,7 @@ pub fn deinline_opt(
     // with this collection to make a set of leaves reachable from each root set.
     // Each root set is a set of functions that will change representation when
     // inlining is changed so we have to handle each root set as a unit.
-    let mut root_set_to_leaf: HashMap<BTreeSet<Vec<u8>>, BTreeSet<Vec<u8>>> = roots_set
+    let mut root_set_to_leaf: BTreeMap<BTreeSet<Vec<u8>>, BTreeSet<Vec<u8>>> = roots_set
         .iter()
         .map(|root_set| (root_set.clone(), BTreeSet::new()))
         .collect();
@@ -150,7 +150,7 @@ pub fn deinline_opt(
         let from_root_set: Vec<BTreeSet<Vec<u8>>> = roots_set
             .iter()
             .filter(|r| {
-                let intersection_of_roots: HashSet<Vec<u8>> =
+                let intersection_of_roots: BTreeSet<Vec<u8>> =
                     r.intersection(&root).cloned().collect();
                 !intersection_of_roots.is_empty()
             })
@@ -166,12 +166,12 @@ pub fn deinline_opt(
 
     // Now collect the tree of synthetic functions rooted at any of the roots in
     // each root set.
-    let root_set_to_inline_tree: HashMap<BTreeSet<Vec<u8>>, HashSet<Vec<u8>>> = root_set_to_leaf
+    let root_set_to_inline_tree: BTreeMap<BTreeSet<Vec<u8>>, BTreeSet<Vec<u8>>> = root_set_to_leaf
         .iter()
         .map(|(root_set, leaves)| {
-            let mut full_tree_set = HashSet::new();
+            let mut full_tree_set = BTreeSet::new();
             for root in root_set.iter() {
-                let mut full_tree = HashSet::new();
+                let mut full_tree = BTreeSet::new();
                 depgraph.get_full_depends_on(&mut full_tree, root);
                 full_tree_set = full_tree.union(&full_tree_set).cloned().collect();
             }

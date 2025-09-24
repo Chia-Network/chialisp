@@ -1,6 +1,7 @@
 use num_bigint::ToBigInt;
 use std::borrow::Borrow;
-use std::collections::{HashMap, HashSet};
+use alloc::collections::BTreeMap;
+use alloc::collections::BTreeSet;
 use std::rc::Rc;
 
 use crate::classic::clvm::__type_compatibility__::bi_one;
@@ -262,7 +263,7 @@ fn get_inline_callable(
 /// expressions given in the ultimate original call.  This allows inline functions
 /// to seem to call each other as long as there's no cycle.
 fn make_args_for_call_from_inline(
-    visited_inlines: &HashSet<Vec<u8>>,
+    visited_inlines: &BTreeSet<Vec<u8>>,
     runner: Rc<dyn TRunProgram>,
     opts: Rc<dyn CompilerOpts>,
     compiler: &PrimaryCodegen,
@@ -334,7 +335,7 @@ fn make_args_for_call_from_inline(
 // that relies on the incoming argument expressions.
 #[allow(clippy::too_many_arguments)]
 fn replace_inline_body(
-    visited_inlines: &mut HashSet<Vec<u8>>,
+    visited_inlines: &mut BTreeSet<Vec<u8>>,
     runner: Rc<dyn TRunProgram>,
     opts: Rc<dyn CompilerOpts>,
     compiler: &PrimaryCodegen,
@@ -522,7 +523,7 @@ pub fn replace_in_inline(
     args: &[Rc<BodyForm>],
     tail: Option<Rc<BodyForm>>,
 ) -> Result<CompiledCode, CompileErr> {
-    let mut visited = HashSet::new();
+    let mut visited = BTreeSet::new();
     let runner = context.runner();
     visited.insert(inline.name.clone());
     replace_inline_body(
@@ -538,7 +539,7 @@ pub fn replace_in_inline(
         inline.body.clone(),
     )
     .and_then(|x| {
-        let mut symbols = HashMap::new();
+        let mut symbols = BTreeMap::new();
         let runner = context.runner();
         let optimizer = context.optimizer.duplicate();
         let mut context_wrapper =

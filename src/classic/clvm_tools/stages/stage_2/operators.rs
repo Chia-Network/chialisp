@@ -1,5 +1,5 @@
+use alloc::collections::BTreeMap;
 use core::cell::{Ref, RefCell};
-use std::collections::HashMap;
 // use std::fs; // TODO: filesystem - commented out for no_std compatibility
 // use std::path::PathBuf; // TODO: filesystem - commented out for no_std compatibility
 use std::rc::Rc;
@@ -31,7 +31,7 @@ use crate::classic::clvm_tools::stages::stage_2::optimize::do_optimize;
 use crate::compiler::comptypes::CompilerOpts;
 use crate::compiler::sexp::decode_string;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AllocatorRefOrTreeHash {
     AllocatorRef(NodePtr),
     TreeHash(TreeHash),
@@ -51,9 +51,9 @@ pub struct CompilerOperatorsInternal {
     source_file: String,
     search_paths: Vec<String>,
     symbols_extra_info: bool,
-    compile_outcomes: RefCell<HashMap<String, String>>,
+    compile_outcomes: RefCell<BTreeMap<String, String>>,
     runner: RefCell<Rc<dyn TRunProgram>>,
-    opt_memo: RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
+    opt_memo: RefCell<BTreeMap<AllocatorRefOrTreeHash, NodePtr>>,
     // A compiler opts as in the modern compiler.  If present, try using its
     // file system interface to read files.
     compiler_opts: RefCell<Option<Rc<dyn CompilerOpts>>>,
@@ -133,9 +133,9 @@ impl CompilerOperatorsInternal {
             source_file: source_file.to_owned(),
             search_paths,
             symbols_extra_info,
-            compile_outcomes: RefCell::new(HashMap::new()),
+            compile_outcomes: RefCell::new(BTreeMap::new()),
             runner: RefCell::new(base_runner),
-            opt_memo: RefCell::new(HashMap::new()),
+            opt_memo: RefCell::new(BTreeMap::new()),
             compiler_opts: RefCell::new(None),
             operators_version: RefCell::new(None),
         }
@@ -462,13 +462,13 @@ impl Dialect for CompilerOperatorsInternal {
 }
 
 impl CompilerOperatorsInternal {
-    pub fn get_compiles(&self) -> HashMap<String, String> {
+    pub fn get_compiles(&self) -> BTreeMap<String, String> {
         self.compile_outcomes.borrow().clone()
     }
 }
 
 impl CompilerOperators {
-    pub fn get_compiles(&self) -> HashMap<String, String> {
+    pub fn get_compiles(&self) -> BTreeMap<String, String> {
         self.parent.get_compiles()
     }
 

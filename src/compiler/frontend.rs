@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use alloc::collections::BTreeMap;
+use alloc::collections::BTreeSet;
 use std::rc::Rc;
 
 use crate::classic::clvm::__type_compatibility__::bi_one;
@@ -105,20 +105,20 @@ fn collect_used_names_compileform(body: &CompileForm) -> Vec<Vec<u8>> {
 }
 
 fn calculate_live_helpers(
-    last_names: &HashSet<Vec<u8>>,
-    names: &HashSet<Vec<u8>>,
-    helper_map: &HashMap<Vec<u8>, HelperForm>,
-) -> HashSet<Vec<u8>> {
+    last_names: &BTreeSet<Vec<u8>>,
+    names: &BTreeSet<Vec<u8>>,
+    helper_map: &BTreeMap<Vec<u8>, HelperForm>,
+) -> BTreeSet<Vec<u8>> {
     if last_names.len() == names.len() {
         names.clone()
     } else {
-        let new_names: HashSet<Vec<u8>> =
+        let new_names: BTreeSet<Vec<u8>> =
             names.difference(last_names).map(|x| x.to_vec()).collect();
-        let mut needed_helpers: HashSet<Vec<u8>> = names.clone();
+        let mut needed_helpers: BTreeSet<Vec<u8>> = names.clone();
 
         for name in new_names {
             if let Some(new_helper) = helper_map.get(&name) {
-                let even_newer_names: HashSet<Vec<u8>> = collect_used_names_helperform(new_helper)
+                let even_newer_names: BTreeSet<Vec<u8>> = collect_used_names_helperform(new_helper)
                     .iter()
                     .map(|x| x.to_vec())
                     .collect();
@@ -288,7 +288,7 @@ fn make_let_bindings(
 }
 
 // Make a set of names in this sexp.
-pub fn make_provides_set(provides_set: &mut HashSet<Vec<u8>>, body_sexp: Rc<SExp>) {
+pub fn make_provides_set(provides_set: &mut BTreeSet<Vec<u8>>, body_sexp: Rc<SExp>) {
     match body_sexp.atomize() {
         SExp::Cons(_, a, b) => {
             make_provides_set(provides_set, a);
@@ -315,7 +315,7 @@ fn handle_assign_form(
     }
 
     let mut bindings = Vec::new();
-    let mut check_duplicates = HashSet::new();
+    let mut check_duplicates = BTreeSet::new();
 
     for idx in (0..(v.len() - 1) / 2).map(|idx| idx * 2) {
         let destructure_pattern = Rc::new(v[idx].clone());
@@ -323,7 +323,7 @@ fn handle_assign_form(
 
         // Ensure bindings aren't duplicated as we won't be able to
         // guarantee their order during toposort.
-        let mut this_provides = HashSet::new();
+        let mut this_provides = BTreeSet::new();
         make_provides_set(&mut this_provides, destructure_pattern.clone());
 
         for item in this_provides.iter() {
@@ -888,18 +888,18 @@ pub fn compute_live_helpers(
     helper_list: &[HelperForm],
     main_exp: Rc<BodyForm>,
 ) -> Vec<HelperForm> {
-    let expr_names: HashSet<Vec<u8>> = collect_used_names_bodyform(main_exp.borrow())
+    let expr_names: BTreeSet<Vec<u8>> = collect_used_names_bodyform(main_exp.borrow())
         .iter()
         .map(|x| x.to_vec())
         .collect();
 
-    let mut helper_map = HashMap::new();
+    let mut helper_map = BTreeMap::new();
 
     for h in helper_list.iter() {
         helper_map.insert(h.name().clone(), h.clone());
     }
 
-    let helper_names = calculate_live_helpers(&HashSet::new(), &expr_names, &helper_map);
+    let helper_names = calculate_live_helpers(&BTreeSet::new(), &expr_names, &helper_map);
 
     helper_list
         .iter()
@@ -945,19 +945,19 @@ pub fn frontend(
 
     let our_mod = rename_children_compileform(&compiled?)?;
 
-    let expr_names: HashSet<Vec<u8>> = collect_used_names_bodyform(our_mod.exp.borrow())
+    let expr_names: BTreeSet<Vec<u8>> = collect_used_names_bodyform(our_mod.exp.borrow())
         .iter()
         .map(|x| x.to_vec())
         .collect();
 
     let helper_list = our_mod.helpers.iter().map(|h| (h.name(), h));
-    let mut helper_map = HashMap::new();
+    let mut helper_map = BTreeMap::new();
 
     for hpair in helper_list {
         helper_map.insert(hpair.0.clone(), hpair.1.clone());
     }
 
-    let helper_names = calculate_live_helpers(&HashSet::new(), &expr_names, &helper_map);
+    let helper_names = calculate_live_helpers(&BTreeSet::new(), &expr_names, &helper_map);
 
     let mut live_helpers = Vec::new();
     for h in our_mod.helpers {

@@ -1,5 +1,5 @@
+use alloc::collections::BTreeMap;
 use core::cell::{Ref, RefCell};
-use std::collections::HashMap;
 use core::mem::swap;
 use std::rc::Rc;
 
@@ -82,7 +82,7 @@ pub fn seems_constant(allocator: &mut Allocator, sexp: NodePtr) -> bool {
 
 pub fn constant_optimizer(
     allocator: &mut Allocator,
-    _memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
+    _memo: &RefCell<BTreeMap<AllocatorRefOrTreeHash, NodePtr>>,
     r: NodePtr,
     _max_cost: Cost,
     runner: Rc<dyn TRunProgram>,
@@ -153,7 +153,7 @@ pub fn cons_q_a_optimizer_pattern(allocator: &mut Allocator) -> NodePtr {
 
 pub fn cons_q_a_optimizer(
     allocator: &mut Allocator,
-    _memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
+    _memo: &RefCell<BTreeMap<AllocatorRefOrTreeHash, NodePtr>>,
     r: NodePtr,
     _eval_f: Rc<dyn TRunProgram>,
 ) -> Result<NodePtr, EvalErr> {
@@ -164,7 +164,7 @@ pub fn cons_q_a_optimizer(
      * (a (q . SEXP) @) => SEXP
      */
 
-    let matched = match_sexp(allocator, cons_q_a_optimizer_pattern, r, HashMap::new());
+    let matched = match_sexp(allocator, cons_q_a_optimizer_pattern, r, BTreeMap::new());
 
     match (
         matched.as_ref().and_then(|t1| t1.get("args").copied()),
@@ -188,7 +188,7 @@ fn cons_pattern(allocator: &mut Allocator) -> NodePtr {
 fn cons_f(allocator: &mut Allocator, args: NodePtr) -> Result<NodePtr, EvalErr> {
     m! {
         let cons_pattern = cons_pattern(allocator);
-        if let Some(first) = match_sexp(allocator, cons_pattern, args, HashMap::new()).and_then(|t| t.get("first").copied()) {
+        if let Some(first) = match_sexp(allocator, cons_pattern, args, BTreeMap::new()).and_then(|t| t.get("first").copied()) {
             Ok(first)
         } else {
             m! {
@@ -203,7 +203,7 @@ fn cons_f(allocator: &mut Allocator, args: NodePtr) -> Result<NodePtr, EvalErr> 
 fn cons_r(allocator: &mut Allocator, args: NodePtr) -> Result<NodePtr, EvalErr> {
     m! {
         let cons_pattern = cons_pattern(allocator);
-        if let Some(rest) = match_sexp(allocator, cons_pattern, args, HashMap::new()).and_then(|t| t.get("rest").copied()) {
+        if let Some(rest) = match_sexp(allocator, cons_pattern, args, BTreeMap::new()).and_then(|t| t.get("rest").copied()) {
             Ok(rest)
         } else {
             m! {
@@ -291,7 +291,7 @@ fn var_change_optimizer_cons_eval_pattern(allocator: &mut Allocator) -> NodePtr 
 
 pub fn var_change_optimizer_cons_eval(
     allocator: &mut Allocator,
-    memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
+    memo: &RefCell<BTreeMap<AllocatorRefOrTreeHash, NodePtr>>,
     r: NodePtr,
     eval_f: Rc<dyn TRunProgram>,
 ) -> Result<NodePtr, EvalErr> {
@@ -307,7 +307,7 @@ pub fn var_change_optimizer_cons_eval(
      */
 
     let pattern = var_change_optimizer_cons_eval_pattern(allocator);
-    match match_sexp(allocator, pattern, r, HashMap::new()).as_ref() {
+    match match_sexp(allocator, pattern, r, BTreeMap::new()).as_ref() {
         None => Ok(r),
         Some(t1) => {
             let original_args = t1.get("args").ok_or_else(|| {
@@ -411,7 +411,7 @@ pub fn var_change_optimizer_cons_eval(
 
 pub fn children_optimizer(
     allocator: &mut Allocator,
-    memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
+    memo: &RefCell<BTreeMap<AllocatorRefOrTreeHash, NodePtr>>,
     r: NodePtr,
     eval_f: Rc<dyn TRunProgram>,
 ) -> Result<NodePtr, EvalErr> {
@@ -461,7 +461,7 @@ fn cons_optimizer_pattern_rest(allocator: &mut Allocator) -> NodePtr {
 
 fn cons_optimizer(
     allocator: &mut Allocator,
-    _memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
+    _memo: &RefCell<BTreeMap<AllocatorRefOrTreeHash, NodePtr>>,
     r: NodePtr,
     _eval_f: Rc<dyn TRunProgram>,
 ) -> Result<NodePtr, EvalErr> {
@@ -476,14 +476,14 @@ fn cons_optimizer(
 
     m! {
         let t1 = match_sexp(
-            allocator, cons_optimizer_pattern_first, r, HashMap::new()
+            allocator, cons_optimizer_pattern_first, r, BTreeMap::new()
         );
         match t1.and_then(|t| t.get("first").copied()) {
             Some(first) => Ok(first),
             _ => {
                 m! {
                     let t2 = match_sexp(
-                        allocator, cons_optimizer_pattern_rest, r, HashMap::new()
+                        allocator, cons_optimizer_pattern_rest, r, BTreeMap::new()
                     );
                     match t2.and_then(|t| t.get("rest").copied()) {
                         Some(rest) => Ok(rest),
@@ -505,7 +505,7 @@ fn rest_atom_pattern(allocator: &mut Allocator) -> NodePtr {
 
 fn path_optimizer(
     allocator: &mut Allocator,
-    _memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
+    _memo: &RefCell<BTreeMap<AllocatorRefOrTreeHash, NodePtr>>,
     r: NodePtr,
     _eval_f: Rc<dyn TRunProgram>,
 ) -> Result<NodePtr, EvalErr> {
@@ -519,8 +519,8 @@ fn path_optimizer(
      *   (r N) => B
      */
 
-    let first_match = match_sexp(allocator, first_atom_pattern, r, HashMap::new());
-    let rest_match = match_sexp(allocator, rest_atom_pattern, r, HashMap::new());
+    let first_match = match_sexp(allocator, first_atom_pattern, r, BTreeMap::new());
+    let rest_match = match_sexp(allocator, rest_atom_pattern, r, BTreeMap::new());
 
     match (first_match, rest_match) {
         (Some(first), _) => {
@@ -559,14 +559,14 @@ fn quote_pattern_1(allocator: &mut Allocator) -> NodePtr {
 
 fn quote_null_optimizer(
     allocator: &mut Allocator,
-    _memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
+    _memo: &RefCell<BTreeMap<AllocatorRefOrTreeHash, NodePtr>>,
     r: NodePtr,
     _eval_f: Rc<dyn TRunProgram>,
 ) -> Result<NodePtr, EvalErr> {
     let quote_pattern_1 = quote_pattern_1(allocator);
 
     // This applies the transform `(q . 0)` => `0`
-    let t1 = match_sexp(allocator, quote_pattern_1, r, HashMap::new());
+    let t1 = match_sexp(allocator, quote_pattern_1, r, BTreeMap::new());
     Ok(t1.map(|_| NodePtr::NIL).unwrap_or_else(|| r))
 }
 
@@ -576,14 +576,14 @@ fn apply_null_pattern_1(allocator: &mut Allocator) -> NodePtr {
 
 fn apply_null_optimizer(
     allocator: &mut Allocator,
-    _memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
+    _memo: &RefCell<BTreeMap<AllocatorRefOrTreeHash, NodePtr>>,
     r: NodePtr,
     _eval_f: Rc<dyn TRunProgram>,
 ) -> Result<NodePtr, EvalErr> {
     let apply_null_pattern_1 = apply_null_pattern_1(allocator);
 
     // This applies the transform `(a 0 ARGS)` => `0`
-    let t1 = match_sexp(allocator, apply_null_pattern_1, r, HashMap::new());
+    let t1 = match_sexp(allocator, apply_null_pattern_1, r, BTreeMap::new());
     Ok(t1.map(|_| NodePtr::NIL).unwrap_or_else(|| r))
 }
 
@@ -592,7 +592,7 @@ struct OptimizerRunner<'a> {
     #[allow(clippy::type_complexity)]
     to_run: &'a dyn Fn(
         &mut Allocator,
-        &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
+        &RefCell<BTreeMap<AllocatorRefOrTreeHash, NodePtr>>,
         NodePtr,
         Rc<dyn TRunProgram>,
     ) -> Result<NodePtr, EvalErr>,
@@ -602,7 +602,7 @@ impl<'a> OptimizerRunner<'a> {
     pub fn invoke(
         &self,
         allocator: &mut Allocator,
-        memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
+        memo: &RefCell<BTreeMap<AllocatorRefOrTreeHash, NodePtr>>,
         r: NodePtr,
         eval_f: Rc<dyn TRunProgram>,
     ) -> Result<NodePtr, EvalErr> {
@@ -614,7 +614,7 @@ impl<'a> OptimizerRunner<'a> {
         name: &str,
         to_run: &'a dyn Fn(
             &mut Allocator,
-            &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
+            &RefCell<BTreeMap<AllocatorRefOrTreeHash, NodePtr>>,
             NodePtr,
             Rc<dyn TRunProgram>,
         ) -> Result<NodePtr, EvalErr>,
@@ -628,7 +628,7 @@ impl<'a> OptimizerRunner<'a> {
 
 pub fn optimize_sexp_(
     allocator: &mut Allocator,
-    memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
+    memo: &RefCell<BTreeMap<AllocatorRefOrTreeHash, NodePtr>>,
     r_: NodePtr,
     eval_f: Rc<dyn TRunProgram>,
 ) -> Result<NodePtr, EvalErr> {
@@ -637,8 +637,8 @@ pub fn optimize_sexp_(
     // preventing us from using memo downstream when we've done one optimize
     // pass and need to cache the result.
     {
-        let memo_ref: Ref<HashMap<AllocatorRefOrTreeHash, NodePtr>> = memo.borrow();
-        let memo: &HashMap<AllocatorRefOrTreeHash, NodePtr> = &memo_ref;
+        let memo_ref: Ref<BTreeMap<AllocatorRefOrTreeHash, NodePtr>> = memo.borrow();
+        let memo: &BTreeMap<AllocatorRefOrTreeHash, NodePtr> = &memo_ref;
         if let Some(res) = memo.get(&AllocatorRefOrTreeHash::new_from_nodeptr(r_)) {
             return Ok(*res);
         }
@@ -647,8 +647,8 @@ pub fn optimize_sexp_(
     // Fall back to treehash comparison since we didn't get an exact pointer hit.
     let footprint = AllocatorRefOrTreeHash::new_from_sexp(allocator, r_);
     {
-        let memo_ref: Ref<HashMap<AllocatorRefOrTreeHash, NodePtr>> = memo.borrow();
-        let memo: &HashMap<AllocatorRefOrTreeHash, NodePtr> = &memo_ref;
+        let memo_ref: Ref<BTreeMap<AllocatorRefOrTreeHash, NodePtr>> = memo.borrow();
+        let memo: &BTreeMap<AllocatorRefOrTreeHash, NodePtr> = &memo_ref;
         if let Some(res) = memo.get(&footprint) {
             return Ok(*res);
         }
@@ -702,7 +702,7 @@ pub fn optimize_sexp_(
 
                 if equal_to(allocator, start_r, r) {
                     memo.replace_with(|mr| {
-                        let mut work = HashMap::new();
+                        let mut work = BTreeMap::new();
                         swap(&mut work, mr);
                         work.insert(footprint.clone(), start_r);
                         work.insert(AllocatorRefOrTreeHash::new_from_nodeptr(r), start_r);
@@ -730,7 +730,7 @@ pub fn optimize_sexp(
     r: NodePtr,
     eval_f: Rc<dyn TRunProgram>,
 ) -> Result<NodePtr, EvalErr> {
-    let optimized = RefCell::new(HashMap::new());
+    let optimized = RefCell::new(BTreeMap::new());
 
     if DIAG_OPTIMIZATIONS {
         println!("START OPTIMIZE {}", disassemble(allocator, r, None));
@@ -749,7 +749,7 @@ pub fn optimize_sexp(
 pub fn do_optimize(
     runner: Rc<dyn TRunProgram>,
     allocator: &mut Allocator,
-    memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
+    memo: &RefCell<BTreeMap<AllocatorRefOrTreeHash, NodePtr>>,
     r: NodePtr,
 ) -> Response {
     let r_first = first(allocator, r)?;

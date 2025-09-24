@@ -1,5 +1,5 @@
 use core::borrow::Borrow;
-use std::collections::HashMap;
+use alloc::collections::BTreeMap;
 use std::rc::Rc;
 
 use num_bigint::ToBigInt;
@@ -332,7 +332,7 @@ impl ExtensionFunction for Substring {
 /// substring s start end
 ///
 pub struct PreprocessorExtension {
-    extfuns: HashMap<Vec<u8>, Rc<dyn ExtensionFunction>>,
+    extfuns: BTreeMap<Vec<u8>, Rc<dyn ExtensionFunction>>,
 }
 
 impl PrimOverride for PreprocessorExtension {
@@ -374,14 +374,14 @@ impl PreprocessorExtension {
             (b"substring".to_vec(), Substring::create()),
         ];
         PreprocessorExtension {
-            extfuns: HashMap::from(extfuns),
+            extfuns: BTreeMap::from(extfuns),
         }
     }
 
     /// Introduce new primitive names for the operators we use to bootstrap macros.
     pub fn enrich_prims(&self, opts: Rc<dyn CompilerOpts>) -> Rc<dyn CompilerOpts> {
         let old_prim_map = opts.prim_map();
-        let old_prim_map_borrowed: &HashMap<Vec<u8>, Rc<SExp>> = old_prim_map.borrow();
+        let old_prim_map_borrowed: &BTreeMap<Vec<u8>, Rc<SExp>> = old_prim_map.borrow();
         let mut new_prim_map_cloned = old_prim_map_borrowed.clone();
         let srcloc = Srcloc::start("*defmac*");
 

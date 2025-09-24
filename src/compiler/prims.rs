@@ -1,5 +1,5 @@
 use num_bigint::ToBigInt;
-use std::collections::HashMap;
+use alloc::collections::BTreeMap;
 use std::rc::Rc;
 
 use crate::classic::clvm::__type_compatibility__::bi_one;
@@ -210,8 +210,8 @@ pub fn prims() -> Vec<(Vec<u8>, SExp)> {
     ]
 }
 
-pub fn prim_map() -> Rc<HashMap<Vec<u8>, Rc<SExp>>> {
-    let mut out_map = HashMap::new();
+pub fn prim_map() -> Rc<BTreeMap<Vec<u8>, Rc<SExp>>> {
+    let mut out_map = BTreeMap::new();
     for p in prims() {
         out_map.insert(p.0, Rc::new(p.1));
     }

@@ -12,7 +12,7 @@ use clvm_rs::error::EvalErr;
 use num_bigint::ToBigInt;
 
 use std::borrow::Borrow;
-use std::collections::HashMap;
+use alloc::collections::BTreeMap;
 use std::rc::Rc;
 
 use clvm_rs::allocator::Allocator;
@@ -58,7 +58,7 @@ pub struct CodegenOptimizationResult {
     pub revised_definition: Option<HelperForm>,
     /// If present, each key represents the shatree of an environment part that
     /// was rewriten along with its new definition.
-    pub revised_environment: Option<HashMap<Vec<u8>, Rc<SExp>>>,
+    pub revised_environment: Option<BTreeMap<Vec<u8>, Rc<SExp>>>,
     /// Final generated code if different.
     pub code: Option<Rc<SExp>>,
 }
@@ -329,7 +329,7 @@ fn constant_fun_result(
                     return None;
                 };
 
-                let mut symbols = HashMap::new();
+                let mut symbols = BTreeMap::new();
                 let mut wrapper =
                     CompileContextWrapper::new(allocator, runner.clone(), &mut symbols, optimizer);
 
@@ -524,7 +524,7 @@ pub fn optimize_expr(
         BodyForm::Mod(l, cf) => {
             if let Some(stepping) = opts.dialect().stepping {
                 if stepping >= 23 {
-                    let mut throwaway_symbols = HashMap::new();
+                    let mut throwaway_symbols = BTreeMap::new();
                     if let Ok(optimizer) = get_optimizer(l, opts.clone()) {
                         let mut wrapper = CompileContextWrapper::new(
                             allocator,
@@ -626,7 +626,7 @@ fn fe_opt(
     for h in compileform.helpers.iter() {
         match h {
             HelperForm::Defun(inline, defun) => {
-                let mut env = HashMap::new();
+                let mut env = BTreeMap::new();
                 build_reflex_captures(&mut env, defun.args.clone());
                 let body_rc = evaluator.shrink_bodyform(
                     allocator,
@@ -655,7 +655,7 @@ fn fe_opt(
     let shrunk = new_evaluator.shrink_bodyform(
         allocator,
         Rc::new(SExp::Nil(compileform.args.loc())),
-        &HashMap::new(),
+        &BTreeMap::new(),
         compileform.exp.clone(),
         true,
         Some(EVAL_STACK_LIMIT),

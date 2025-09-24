@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use alloc::collections::BTreeMap;
 
 pub mod __type_compatibility__;
 pub mod as_rust;
@@ -269,43 +269,43 @@ const KW_PAIRS: [KwAtomPair; 49] = [
 ];
 
 lazy_static! {
-    pub static ref KEYWORD_FROM_ATOM_0: HashMap<Vec<u8>, String> = {
-        let mut result = HashMap::new();
+    pub static ref KEYWORD_FROM_ATOM_0: BTreeMap<Vec<u8>, String> = {
+        let mut result = BTreeMap::new();
         for pair in KW_PAIRS.iter().filter(|p| p.version == 0) {
             result.insert(pair.v.to_vec(), pair.n.to_string());
         }
         result
     };
-    pub static ref KEYWORD_TO_ATOM_0: HashMap<String, Vec<u8>> = {
-        let mut result = HashMap::new();
+    pub static ref KEYWORD_TO_ATOM_0: BTreeMap<String, Vec<u8>> = {
+        let mut result = BTreeMap::new();
         for pair in KW_PAIRS.iter().filter(|p| p.version == 0) {
             result.insert(pair.n.to_string(), pair.v.to_vec());
         }
         result
     };
-    pub static ref KEYWORD_FROM_ATOM_1: HashMap<Vec<u8>, String> = {
-        let mut result = HashMap::new();
+    pub static ref KEYWORD_FROM_ATOM_1: BTreeMap<Vec<u8>, String> = {
+        let mut result = BTreeMap::new();
         for pair in KW_PAIRS.iter().filter(|p| p.version <= 1) {
             result.insert(pair.v.to_vec(), pair.n.to_string());
         }
         result
     };
-    pub static ref KEYWORD_TO_ATOM_1: HashMap<String, Vec<u8>> = {
-        let mut result = HashMap::new();
+    pub static ref KEYWORD_TO_ATOM_1: BTreeMap<String, Vec<u8>> = {
+        let mut result = BTreeMap::new();
         for pair in KW_PAIRS.iter().filter(|p| p.version <= 1) {
             result.insert(pair.n.to_string(), pair.v.to_vec());
         }
         result
     };
-    pub static ref KEYWORD_FROM_ATOM_2: HashMap<Vec<u8>, String> = {
-        let mut result = HashMap::new();
+    pub static ref KEYWORD_FROM_ATOM_2: BTreeMap<Vec<u8>, String> = {
+        let mut result = BTreeMap::new();
         for pair in KW_PAIRS.iter().filter(|p| p.version <= 2) {
             result.insert(pair.v.to_vec(), pair.n.to_string());
         }
         result
     };
-    pub static ref KEYWORD_TO_ATOM_2: HashMap<String, Vec<u8>> = {
-        let mut result = HashMap::new();
+    pub static ref KEYWORD_TO_ATOM_2: BTreeMap<String, Vec<u8>> = {
+        let mut result = BTreeMap::new();
         for pair in KW_PAIRS.iter().filter(|p| p.version <= 2) {
             result.insert(pair.n.to_string(), pair.v.to_vec());
         }
@@ -313,7 +313,7 @@ lazy_static! {
     };
 }
 
-pub fn keyword_from_atom(version: usize) -> &'static HashMap<Vec<u8>, String> {
+pub fn keyword_from_atom(version: usize) -> &'static BTreeMap<Vec<u8>, String> {
     match version {
         0 => &KEYWORD_FROM_ATOM_0,
         1 => &KEYWORD_FROM_ATOM_1,
@@ -321,7 +321,7 @@ pub fn keyword_from_atom(version: usize) -> &'static HashMap<Vec<u8>, String> {
     }
 }
 
-pub fn keyword_to_atom(version: usize) -> &'static HashMap<String, Vec<u8>> {
+pub fn keyword_to_atom(version: usize) -> &'static BTreeMap<String, Vec<u8>> {
     match version {
         0 => &KEYWORD_TO_ATOM_0,
         1 => &KEYWORD_TO_ATOM_1,

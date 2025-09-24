@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::collections::HashMap;
+use alloc::collections::BTreeMap;
 use std::rc::Rc;
 
 use clvmr::allocator::Allocator;
@@ -90,7 +90,7 @@ impl Optimization for Strategy23 {
         opts: Rc<dyn CompilerOpts>,
         cf: CompileForm,
     ) -> Result<CompileForm, CompileErr> {
-        let mut symbols = HashMap::new();
+        let mut symbols = BTreeMap::new();
         let mut wrapper =
             CompileContextWrapper::new(allocator, runner, &mut symbols, self.duplicate());
         deinline_opt(&mut wrapper.context, opts.clone(), cf)

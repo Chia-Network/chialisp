@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::collections::HashSet;
+use alloc::collections::BTreeSet;
 use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
@@ -13,7 +13,7 @@ use crate::classic::clvm_tools::ir::reader::IRReader;
 use crate::classic::clvm_tools::ir::writer::write_ir;
 
 lazy_static! {
-    pub static ref PRINTABLE_CHARS: HashSet<char> =
+    pub static ref PRINTABLE_CHARS: BTreeSet<char> =
         "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ ".chars().collect();
 }
 pub fn is_printable_string(s: &str) -> bool {
