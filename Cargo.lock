@@ -151,7 +151,6 @@ name = "clvm_tools_rs"
 version = "0.4.0"
 dependencies = [
  "binascii",
- "chia-bls",
  "clvmr",
  "do-notation",
  "getrandom 0.2.15",

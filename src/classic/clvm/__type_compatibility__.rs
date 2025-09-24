@@ -1,4 +1,4 @@
-use chia_bls::PublicKey;
+// use chia_bls::PublicKey; // TODO(BLS): restore when BLS support returns
 use num_traits::{One, Zero};
 use std::clone::Clone;
 use std::cmp::Ordering;
@@ -84,7 +84,7 @@ pub enum UnvalidatedBytesFromType {
 pub enum BytesFromType {
     Raw(Vec<u8>),
     String(String),
-    G1Element(PublicKey),
+    // G1Element(PublicKey), // TODO(BLS): restore variant
 }
 
 #[derive(Debug, Clone)]
@@ -115,10 +115,9 @@ impl Bytes {
                     bvec.push(*b);
                 }
                 Bytes::new(Some(BytesFromType::Raw(bvec)))
-            }
-            Some(BytesFromType::G1Element(g1)) => Bytes {
-                _b: g1.to_bytes().to_vec(),
-            },
+            } // Some(BytesFromType::G1Element(g1)) => Bytes {
+              //     _b: g1.to_bytes().to_vec(),
+              // }, // TODO(BLS): restore conversion
         }
     }
 

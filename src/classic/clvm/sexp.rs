@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::rc::Rc;
 
-use chia_bls::PublicKey;
+// use chia_bls::PublicKey; // TODO(BLS): restore when BLS support returns
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::error::EvalErr;
 
@@ -16,7 +16,7 @@ pub enum CastableType {
     Bytes(Bytes),
     String(String),
     Number(Number),
-    G1Affine(PublicKey),
+    // G1Affine(PublicKey), // TODO(BLS): restore variant
     ListOf(usize, Vec<Rc<CastableType>>),
     TupleOf(Rc<CastableType>, Rc<CastableType>),
 }
@@ -112,19 +112,18 @@ pub fn to_sexp_type(allocator: &mut Allocator, value: CastableType) -> Result<No
                                 return Err(e);
                             }
                         }
-                    }
-                    CastableType::G1Affine(g) => {
-                        let bytes_ver = Bytes::new(Some(BytesFromType::G1Element(*g)));
-
-                        match allocator.new_atom(bytes_ver.data()) {
-                            Ok(a) => {
-                                stack.push(Rc::new(CastableType::CLVMObject(a)));
-                            }
-                            Err(e) => {
-                                return Err(e);
-                            }
-                        }
-                    }
+                    } // CastableType::G1Affine(g) => { // TODO(BLS): restore conversion
+                      //     let bytes_ver = Bytes::new(Some(BytesFromType::G1Element(*g)));
+                      //
+                      //     match allocator.new_atom(bytes_ver.data()) {
+                      //         Ok(a) => {
+                      //             stack.push(Rc::new(CastableType::CLVMObject(a)));
+                      //         }
+                      //         Err(e) => {
+                      //             return Err(e);
+                      //         }
+                      //     }
+                      // }
                 }
             }
             SexpStackOp::OpSetPair(toset, target) => match top.borrow() {
