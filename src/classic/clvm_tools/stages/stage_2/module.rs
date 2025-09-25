@@ -1,6 +1,10 @@
+use alloc::borrow::ToOwned;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::rc::Rc;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use alloc::{format, vec};
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::error::EvalErr;
@@ -10,7 +14,6 @@ use crate::classic::clvm::sexp::{
     enlist, first, flatten, fold_m, map_m, non_nil, nonempty_last, proper_list, rest, First,
     NodeSel, Rest, SelectNode, ThisNode,
 };
-use crate::classic::clvm_tools::binutils::disassemble;
 // use crate::classic::clvm_tools::debug::{build_symbol_dump, FunctionExtraInfo}; // TODO(no_std): remove debug symbols
 use crate::classic::clvm_tools::node_path::NodePath;
 use crate::classic::clvm_tools::stages::assemble;
@@ -640,7 +643,7 @@ fn add_one_function(
     constants_symbol_table: &[(NodePtr, Vec<u8>)],
     name: &[u8],
     lambda_expression: NodePtr,
-    has_constants_tree: bool,
+    _has_constants_tree: bool,
 ) -> Result<CompileOutput, EvalErr> {
     let mut compile: CompileOutput = Default::default();
     let com_atom = allocator.new_atom("com".as_bytes())?;
@@ -709,27 +712,13 @@ fn compile_functions(
     Ok(compiled)
 }
 
-// Add an entry for main's arguments, named __chia__main_arguments in the
-// symbols, to the symbol list, placing it at the front for simplicity.
-fn add_main_args(
-    allocator: &mut Allocator,
-    args: NodePtr,
-    symbols: NodePtr,
-) -> Result<NodePtr, EvalErr> {
-    let entry_name = allocator.new_atom("__chia__main_arguments".as_bytes())?;
-    let entry_value_string = disassemble(allocator, args, None);
-    let entry_value = allocator.new_atom(entry_value_string.as_bytes())?;
-    let entry_cons = allocator.new_pair(entry_name, entry_value)?;
-    allocator.new_pair(entry_cons, symbols)
-}
-
 fn finish_compile_from_collection(
     allocator: &mut Allocator,
-    args: NodePtr,
+    _args: NodePtr,
     macro_lookup: NodePtr,
     run_program: Rc<dyn TRunProgram>,
     cr: &CollectionResult,
-    produce_extra_info: bool,
+    _produce_extra_info: bool,
 ) -> Result<NodePtr, EvalErr> {
     let a_atom = allocator.new_atom(&[2])?;
     let cons_atom = allocator.new_atom(&[4])?;

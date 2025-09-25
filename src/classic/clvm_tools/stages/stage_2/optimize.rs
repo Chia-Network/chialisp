@@ -1,7 +1,9 @@
 use alloc::collections::BTreeMap;
+use alloc::rc::Rc;
+use alloc::string::{String, ToString};
+use alloc::{vec, vec::Vec};
 use core::cell::{Ref, RefCell};
 use core::mem::swap;
-use alloc::rc::Rc;
 
 use clvm_rs::error::EvalErr;
 use num_bigint::ToBigInt;
@@ -14,7 +16,6 @@ use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
 use crate::classic::clvm::sexp::{
     atom, enlist, equal_to, first, fold_m, map_m, non_nil, proper_list,
 };
-use crate::classic::clvm_tools::binutils::disassemble;
 use crate::classic::clvm_tools::node_path::NodePath;
 use crate::classic::clvm_tools::pattern_match::match_sexp;
 use crate::classic::clvm_tools::stages::assemble;
@@ -27,8 +28,7 @@ use crate::util::{number_from_u8, u8_from_number};
 #[derive(Clone)]
 pub struct DoOptProg {}
 
-const DEBUG_OPTIMIZATIONS: bool = false;
-const DIAG_OPTIMIZATIONS: bool = false;
+// const DIAG_OPTIMIZATIONS: bool = false; // Removed for no_std compatibility
 
 pub fn seems_constant_tail(allocator: &mut Allocator, sexp_: NodePtr) -> bool {
     let mut sexp = sexp_;
@@ -105,14 +105,7 @@ pub fn constant_optimizer(
 
     let sc_r = seems_constant(allocator, r);
     let nn_r = non_nil(allocator, r);
-    if DIAG_OPTIMIZATIONS {
-        println!(
-            "COPT {} SC_R {} NN_R {}",
-            disassemble(allocator, r, None),
-            sc_r,
-            nn_r
-        );
-    }
+    // Debug output removed for no_std
     if sc_r && nn_r {
         return m! {
             res <- runner.run_program(
@@ -122,13 +115,6 @@ pub fn constant_optimizer(
                 None
             );
             let r1 = res.1;
-            let _ = if DIAG_OPTIMIZATIONS {
-                println!(
-                    "CONSTANT_OPTIMIZER {} TO {}",
-                    disassemble(allocator, r, None),
-                    disassemble(allocator, r1, None)
-                );
-            };
             quoted <- quote(allocator, r1);
             Ok(quoted)
         };
@@ -314,44 +300,16 @@ pub fn var_change_optimizer_cons_eval(
                 EvalErr::InternalError(r, "bad pattern match on args".to_string())
             })?;
 
-            if DIAG_OPTIMIZATIONS {
-                println!(
-                    "XXX ORIGINAL_ARGS {}",
-                    disassemble(allocator, *original_args, None)
-                );
-            };
             let original_call = t1.get("sexp").ok_or_else(|| {
                 EvalErr::InternalError(r, "bad pattern match on sexp".to_string())
             })?;
 
-            if DIAG_OPTIMIZATIONS {
-                println!(
-                    "XXX ORIGINAL_CALL {}",
-                    disassemble(allocator, *original_call, None)
-                );
-            };
-
             let new_eval_sexp_args = sub_args(allocator, *original_call, *original_args)?;
-
-            if DIAG_OPTIMIZATIONS {
-                println!(
-                    "XXX new_eval_sexp_args {} ORIG {}",
-                    disassemble(allocator, new_eval_sexp_args, None),
-                    disassemble(allocator, *original_args, None)
-                );
-            };
 
             // Do not iterate into a quoted value as if it were a list
             if seems_constant(allocator, new_eval_sexp_args) {
-                if DIAG_OPTIMIZATIONS {
-                    println!("XXX seems_constant");
-                }
                 optimize_sexp_(allocator, memo, new_eval_sexp_args, eval_f)
             } else {
-                if DIAG_OPTIMIZATIONS {
-                    println!("XXX does not seems_constant");
-                };
-
                 proper_list(allocator, new_eval_sexp_args, true)
                     .map(|new_operands| {
                         let mut opt_operands = Vec::new();
@@ -367,13 +325,6 @@ pub fn var_change_optimizer_cons_eval(
                         let non_constant_count = fold_m(
                             allocator,
                             &|allocator, acc, val| {
-                                if DIAG_OPTIMIZATIONS {
-                                    println!(
-                                        "XXX opt_operands {} {}",
-                                        acc,
-                                        disassemble(allocator, val, None)
-                                    );
-                                }
                                 let increment = match allocator.sexp(val) {
                                     SExp::Pair(val_first, _) => match allocator.sexp(val_first) {
                                         SExp::Atom => {
@@ -392,10 +343,6 @@ pub fn var_change_optimizer_cons_eval(
                             0,
                             &mut opt_operands.iter().copied(),
                         )?;
-
-                        if DIAG_OPTIMIZATIONS {
-                            println!("XXX non_constant_count {non_constant_count}");
-                        };
 
                         if non_constant_count < 1 {
                             enlist(allocator, &opt_operands)
@@ -711,15 +658,6 @@ pub fn optimize_sexp_(
 
                     return Ok(start_r);
                 }
-
-                if DEBUG_OPTIMIZATIONS {
-                    println!(
-                        "OPT-{:?}[{}] => {}",
-                        name,
-                        disassemble(allocator, start_r, None),
-                        disassemble(allocator, r, None)
-                    );
-                }
             }
         }
     }
@@ -732,18 +670,7 @@ pub fn optimize_sexp(
 ) -> Result<NodePtr, EvalErr> {
     let optimized = RefCell::new(BTreeMap::new());
 
-    if DIAG_OPTIMIZATIONS {
-        println!("START OPTIMIZE {}", disassemble(allocator, r, None));
-    }
-    optimize_sexp_(allocator, &optimized, r, eval_f).inspect(|x| {
-        if DIAG_OPTIMIZATIONS {
-            println!(
-                "OPTIMIZE_SEXP {} GIVING {}",
-                disassemble(allocator, r, None),
-                disassemble(allocator, *x, None)
-            );
-        }
-    })
+    optimize_sexp_(allocator, &optimized, r, eval_f).inspect(|_x| {})
 }
 
 pub fn do_optimize(

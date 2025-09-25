@@ -1,6 +1,9 @@
+use alloc::boxed::Box;
+use alloc::rc::Rc;
+use alloc::vec;
+use alloc::vec::Vec;
 use core::borrow::Borrow;
 use core::cmp::{min, Ordering};
-use alloc::rc::Rc;
 
 use crate::compiler::comptypes::{Binding, BodyForm, CompileForm, LambdaData, LetData};
 

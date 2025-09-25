@@ -1,8 +1,11 @@
 mod macros;
 
 use alloc::collections::BTreeMap;
-use core::borrow::Borrow;
 use alloc::rc::Rc;
+use alloc::string::ToString;
+use alloc::vec::Vec;
+use alloc::{format, vec};
+use core::borrow::Borrow;
 
 use clvm_rs::error::EvalErr;
 use clvmr::allocator::Allocator;
@@ -149,8 +152,8 @@ impl Preprocessor {
         kind: &IncludeProcessType,
         constant_name: &[u8],
     ) -> Result<Vec<Rc<SExp>>, CompileErr> {
-        let mut allocator = Allocator::new();
-        let run_to_compile_err = |e| match e {
+        let _allocator = Allocator::new();
+        let _run_to_compile_err = |e| match e {
             RunFailure::RunExn(l, x) => CompileErr(
                 l,
                 format!("failed to convert compiled clvm to expression: throw ({x})"),
@@ -506,10 +509,10 @@ impl Preprocessor {
             Ok(vec![])
         } else if let Some(IncludeType::Basic(i)) = &included {
             self.recurse_dependencies(includes, i.clone())?;
-            self.process_include(includes, i)
+            self.process_include(includes, &i)
         } else if let Some(IncludeType::Processed(f, kind, name)) = &included {
             self.recurse_dependencies(includes, f.clone())?;
-            self.process_embed(body.loc(), &decode_string(&f.name), kind, name)
+            self.process_embed(body.loc(), &decode_string(&f.name), &kind, &name)
         } else {
             Ok(vec![body])
         }

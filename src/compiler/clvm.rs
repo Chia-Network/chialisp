@@ -1,8 +1,12 @@
-use core::borrow::Borrow;
-use core::cell::RefCell;
 use alloc::collections::BTreeMap;
-use core::mem::swap;
+use alloc::format;
 use alloc::rc::Rc;
+use alloc::string::ToString;
+#[cfg(test)]
+use alloc::vec;
+use alloc::vec::Vec;
+use core::borrow::Borrow;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use clvm_rs::allocator;
 use clvm_rs::allocator::{Allocator, NodePtr};
@@ -24,28 +28,22 @@ use crate::compiler::srcloc::Srcloc;
 
 use crate::util::{number_from_u8, u8_from_number, Number};
 
-thread_local! {
-    static NEW_COMPILATION_LEVEL_INT: RefCell<bool> = const { RefCell::new(true) };
-}
+static NEW_COMPILATION_LEVEL_INT: AtomicBool = AtomicBool::new(true);
 
 pub struct NewStyleIntConversion(bool);
 
 impl NewStyleIntConversion {
-    pub fn new(mut new_val: bool) -> NewStyleIntConversion {
-        NewStyleIntConversion(NEW_COMPILATION_LEVEL_INT.with(|v| {
-            let mut val_ref = v.borrow_mut();
-            swap(&mut new_val, &mut val_ref);
-            new_val
-        }))
+    pub fn new(new_val: bool) -> NewStyleIntConversion {
+        NewStyleIntConversion(NEW_COMPILATION_LEVEL_INT.swap(new_val, Ordering::SeqCst))
     }
     fn setting() -> bool {
-        NEW_COMPILATION_LEVEL_INT.with(|v| *v.borrow())
+        NEW_COMPILATION_LEVEL_INT.load(Ordering::SeqCst)
     }
 }
 
 impl Drop for NewStyleIntConversion {
     fn drop(&mut self) {
-        NEW_COMPILATION_LEVEL_INT.with(|v| *v.borrow_mut() = self.0)
+        NEW_COMPILATION_LEVEL_INT.store(self.0, Ordering::SeqCst)
     }
 }
 

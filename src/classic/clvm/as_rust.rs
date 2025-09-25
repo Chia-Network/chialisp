@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use clvm_rs::allocator::Allocator;
 use clvm_rs::reduction::Response;
 

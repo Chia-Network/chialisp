@@ -1,6 +1,8 @@
 use num_bigint::ToBigInt;
 use core::borrow::Borrow;
 use alloc::rc::Rc;
+#[cfg(test)]
+use alloc::string::ToString;
 
 use crate::classic::clvm::__type_compatibility__::bi_one;
 use crate::classic::clvm_tools::node_path::compose_paths;

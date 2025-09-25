@@ -1,12 +1,15 @@
+use alloc::rc::Rc;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use alloc::{format, vec};
 use core::borrow::Borrow;
 use core::fmt::Debug;
-use alloc::rc::Rc;
 
 // use chia_bls::PublicKey; // TODO(BLS): restore when BLS support returns
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::error::EvalErr;
 
-use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, Stream};
+use crate::classic::clvm::__type_compatibility__::{Bytes, Stream};
 use crate::classic::clvm::serialize::sexp_to_stream;
 use crate::util::{u8_from_number, Number};
 

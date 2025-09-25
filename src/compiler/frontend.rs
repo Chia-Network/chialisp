@@ -1,7 +1,11 @@
-use core::borrow::Borrow;
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::rc::Rc;
+use alloc::string::ToString;
+use alloc::vec::Vec;
+use alloc::{format, vec};
+use core::borrow::Borrow;
 
 use crate::classic::clvm::__type_compatibility__::bi_one;
 use crate::compiler::comptypes::{

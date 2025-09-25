@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use core::mem::swap;
 
 pub trait HasDepthLimit<L, E> {

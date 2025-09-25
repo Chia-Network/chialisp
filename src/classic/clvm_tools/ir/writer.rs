@@ -1,5 +1,7 @@
-use core::borrow::Borrow;
 use alloc::rc::Rc;
+use alloc::string::{String, ToString};
+use alloc::{vec, vec::Vec};
+use core::borrow::Borrow;
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, Stream};
 use crate::classic::clvm::casts::{bigint_from_bytes, TConvertOption};

@@ -1,7 +1,10 @@
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
-use core::borrow::Borrow;
+use alloc::format;
 use alloc::rc::Rc;
+
+use alloc::vec::Vec;
+use core::borrow::Borrow;
 
 use crate::compiler::optimize::SyntheticType;
 use crate::compiler::sexp::enlist;

@@ -1,8 +1,12 @@
-use num_bigint::ToBigInt;
-use core::borrow::Borrow;
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::rc::Rc;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use alloc::{format, vec};
+use core::borrow::Borrow;
+use num_bigint::ToBigInt;
 
 use crate::classic::clvm::__type_compatibility__::bi_one;
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;

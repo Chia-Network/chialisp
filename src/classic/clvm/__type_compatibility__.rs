@@ -1,5 +1,8 @@
 // use chia_bls::PublicKey; // TODO(BLS): restore when BLS support returns
 use alloc::collections::BTreeMap;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use alloc::{format, vec};
 use core::clone::Clone;
 use core::cmp::Ordering;
 use core::cmp::{max, min};

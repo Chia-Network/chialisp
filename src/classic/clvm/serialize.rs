@@ -13,12 +13,15 @@ leading bits is the count of bytes to read of size
 0xf7-0xfb is 5 bytes ((perform logical and of first byte with 0x3))
  */
 
-use alloc::rc::Rc;
-
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, Stream};
 use crate::classic::clvm::as_rust::{TToSexpF, TValStack};
 use crate::classic::clvm::casts::int_from_bytes;
 use crate::classic::clvm::sexp::{to_sexp_type, CastableType};
+use alloc::boxed::Box;
+use alloc::rc::Rc;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use alloc::{format, vec};
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::error::EvalErr;
 use clvm_rs::reduction::{Reduction, Response};

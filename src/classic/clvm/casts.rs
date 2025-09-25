@@ -1,3 +1,5 @@
+use alloc::string::ToString;
+use alloc::vec::Vec;
 use clvm_rs::NodePtr;
 use num_bigint::ToBigInt;
 

@@ -1,4 +1,5 @@
 // use core::io; // TODO: io - commented out for no_std compatibility (core::io is unstable)
+use alloc::string::String;
 use core::{error::Error, fmt};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

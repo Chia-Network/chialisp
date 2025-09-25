@@ -11,9 +11,13 @@ use clvm_rs::error::EvalErr;
 #[cfg(test)]
 use num_bigint::ToBigInt;
 
-use core::borrow::Borrow;
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::rc::Rc;
+use alloc::string::ToString;
+use alloc::vec::Vec;
+use alloc::{format, vec};
+use core::borrow::Borrow;
 
 use clvm_rs::allocator::Allocator;
 

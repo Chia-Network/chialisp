@@ -1,5 +1,7 @@
-use core::fmt::Display;
+use alloc::format;
 use alloc::rc::Rc;
+use alloc::string::String;
+use core::fmt::Display;
 
 use crate::compiler::comptypes::CompileErr;
 use crate::compiler::sexp::SExp;

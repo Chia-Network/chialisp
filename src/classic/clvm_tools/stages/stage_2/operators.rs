@@ -2,7 +2,12 @@ use alloc::collections::BTreeMap;
 use core::cell::{Ref, RefCell};
 // use std::fs; // TODO: filesystem - commented out for no_std compatibility
 // use std::path::PathBuf; // TODO: filesystem - commented out for no_std compatibility
+use alloc::borrow::ToOwned;
+use alloc::boxed::Box;
+use alloc::format;
 use alloc::rc::Rc;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::chia_dialect::{ChiaDialect, NO_UNKNOWN_OPS};
@@ -67,8 +72,8 @@ pub struct CompilerOperatorsInternal {
 /// They're searched in order so repetition doesn't do anything. (suggested Q+A)
 pub fn full_path_for_filename(
     parent_sexp: NodePtr,
-    filename: &str,
-    search_paths: &[String],
+    _filename: &str,
+    _search_paths: &[String],
 ) -> Result<String, EvalErr> {
     // TODO: filesystem - operations commented out for no_std compatibility
     /* TODO: filesystem - restore filesystem search when needed
@@ -249,7 +254,7 @@ impl CompilerOperatorsInternal {
             if let SExp::Pair(data, _) = allocator.sexp(r) {
                 if let SExp::Atom = allocator.sexp(filename_sexp) {
                     let filename_atom = allocator.atom(filename_sexp);
-                    let filename_bytes =
+                    let _filename_bytes =
                         Bytes::new(Some(BytesFromType::Raw(filename_atom.as_ref().to_vec())));
                     let ir = disassemble_to_ir_with_kw(
                         allocator,

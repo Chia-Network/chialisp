@@ -1,5 +1,8 @@
 use alloc::collections::BTreeSet;
 use num_bigint::BigInt;
+
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 // use std::fs; // Removed for no_std
 // use std::io::Write; // Removed for no_std
 use core::mem::swap;

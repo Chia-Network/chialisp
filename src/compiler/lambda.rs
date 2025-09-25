@@ -1,5 +1,10 @@
-use core::borrow::Borrow;
+use alloc::boxed::Box;
 use alloc::rc::Rc;
+use alloc::string::ToString;
+
+use alloc::vec;
+
+use core::borrow::Borrow;
 
 use crate::compiler::clvm::truthy;
 use crate::compiler::comptypes::{BodyForm, CompileErr, CompilerOpts, LambdaData};

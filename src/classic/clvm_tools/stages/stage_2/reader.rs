@@ -1,5 +1,8 @@
 // use std::fs; // TODO: filesystem - commented out for no_std compatibility
+use alloc::boxed::Box;
 use alloc::rc::Rc;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
 use clvm_rs::error::EvalErr;
 use clvmr::allocator::{Allocator, NodePtr, SExp};
@@ -54,7 +57,7 @@ pub fn read_file(
     filename: &str,
 ) -> Result<PresentFile, EvalErr> {
     let search_paths = get_search_paths(runner, allocator)?;
-    let full_path = full_path_for_filename(parent_sexp, filename, &search_paths)?;
+    let _full_path = full_path_for_filename(parent_sexp, filename, &search_paths)?;
 
     // TODO: filesystem - commented out for no_std compatibility
     // fs::read(full_path.clone())

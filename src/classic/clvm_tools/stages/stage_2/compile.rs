@@ -1,6 +1,10 @@
+use alloc::borrow::ToOwned;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::rc::Rc;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use alloc::{format, vec};
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::error::EvalErr;
@@ -18,7 +22,7 @@ use crate::classic::clvm_tools::stages::stage_2::defaults::default_macro_lookup;
 use crate::classic::clvm_tools::stages::stage_2::helpers::{brun, evaluate, quote};
 use crate::classic::clvm_tools::stages::stage_2::module::compile_mod;
 
-const DIAG_OUTPUT: bool = false;
+// const DIAG_OUTPUT: bool = false; // Removed for no_std
 
 lazy_static! {
     static ref PASS_THROUGH_OPERATORS: BTreeSet<Vec<u8>> = {
@@ -90,15 +94,13 @@ fn unquote_atom() -> Vec<u8> {
 
 fn com_qq(
     allocator: &mut Allocator,
-    ident: String,
+    _ident: String,
     macro_lookup: NodePtr,
     symbol_table: NodePtr,
     runner: Rc<dyn TRunProgram>,
     sexp: NodePtr,
 ) -> Result<NodePtr, EvalErr> {
-    if DIAG_OUTPUT {
-        println!("com_qq {} {}", ident, disassemble(allocator, sexp, None));
-    }
+    // Debug output removed for no_std
     do_com_prog(allocator, 110, sexp, macro_lookup, symbol_table, runner).map(|x| x.1)
 }
 
@@ -249,17 +251,7 @@ fn lower_quote_(allocator: &mut Allocator, prog: NodePtr) -> Result<NodePtr, Eva
 
 pub fn lower_quote(allocator: &mut Allocator, prog: NodePtr) -> Result<NodePtr, EvalErr> {
     let res = lower_quote_(allocator, prog);
-    if DIAG_OUTPUT {
-        res.as_ref()
-            .map(|x| {
-                println!(
-                    "LOWER_QUOTE {} TO {}",
-                    disassemble(allocator, prog, None),
-                    disassemble(allocator, *x, None)
-                );
-            })
-            .unwrap_or_else(|_| ())
-    }
+    // Debug output removed for no_std
     res
 }
 
@@ -291,16 +283,7 @@ fn try_expand_macro_for_atom_(
             to_eval,
             top_path
         ).map(|x| {
-            if DIAG_OUTPUT {
-                print!(
-                    "TRY_EXPAND_MACRO {} WITH {} GIVES {} MACROS {} SYMBOLS {}",
-                    disassemble(allocator, macro_code, None),
-                    disassemble(allocator, prog_rest, None),
-                    disassemble(allocator, x, None),
-                    disassemble(allocator, macro_lookup, None),
-                    disassemble(allocator, symbol_table, None)
-                );
-            }
+            // Debug output removed for no_std
             Reduction(1, x)
         })
     }
@@ -439,9 +422,7 @@ fn compile_operator_atom(
             top_atom <-
                 allocator.new_atom(NodePath::new(None).as_path().data());
 
-            let _ = if DIAG_OUTPUT {
-                print!("COMPILE_BINDINGS {}", disassemble(allocator, quoted_post_prog, None));
-            };
+            // Debug output removed for no_std
             evaluate(allocator, quoted_post_prog, top_atom).map(Some)
         };
     }
@@ -590,32 +571,15 @@ fn compile_application(
 
 pub fn do_com_prog(
     allocator: &mut Allocator,
-    from: usize,
+    _from: usize,
     prog: NodePtr,
     macro_lookup: NodePtr,
     symbol_table: NodePtr,
     run_program: Rc<dyn TRunProgram>,
 ) -> Response {
-    if DIAG_OUTPUT {
-        println!(
-            "START COMPILE {}: {} MACRO {} SYMBOLS {}",
-            from,
-            disassemble(allocator, prog, None),
-            disassemble(allocator, macro_lookup, None),
-            disassemble(allocator, symbol_table, None),
-        );
-    }
-    do_com_prog_(allocator, prog, macro_lookup, symbol_table, run_program).inspect(|x| {
-        if DIAG_OUTPUT {
-            println!(
-                "DO_COM_PROG {}: {} MACRO {} SYMBOLS {} RESULT {}",
-                from,
-                disassemble(allocator, prog, None),
-                disassemble(allocator, macro_lookup, None),
-                disassemble(allocator, symbol_table, None),
-                disassemble(allocator, x.1, None)
-            );
-        }
+    // Debug output removed for no_std
+    do_com_prog_(allocator, prog, macro_lookup, symbol_table, run_program).inspect(|_x| {
+        // Debug output removed for no_std
     })
 }
 

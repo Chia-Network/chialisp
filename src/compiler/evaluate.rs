@@ -1,7 +1,12 @@
-use core::borrow::Borrow;
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::rc::Rc;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use alloc::{format, vec};
+use core::borrow::Borrow;
+use alloc::borrow::ToOwned;
 
 use num_bigint::ToBigInt;
 
@@ -300,14 +305,14 @@ pub fn create_argument_captures(
         }
         (ArgInputs::Pair(af, ar), SExp::Cons(l, f, r)) => {
             if let Some((capture, substructure)) = is_at_capture(f.clone(), r.clone()) {
-                let bfa = get_bodyform_from_arginput(l, af);
-                let bfb = get_bodyform_from_arginput(l, ar);
+                let bfa = get_bodyform_from_arginput(l, &af);
+                let bfb = get_bodyform_from_arginput(l, &ar);
                 let fused_arguments = Rc::new(make_operator2(l, "c".to_string(), bfa, bfb));
                 argument_captures.insert(capture, fused_arguments);
                 create_argument_captures(argument_captures, formed_arguments, substructure)
             } else {
-                create_argument_captures(argument_captures, af, f.clone())?;
-                create_argument_captures(argument_captures, ar, r.clone())
+                create_argument_captures(argument_captures, &af, f.clone())?;
+                create_argument_captures(argument_captures, &ar, r.clone())
             }
         }
         (ArgInputs::Whole(x), SExp::Atom(_, name)) => {

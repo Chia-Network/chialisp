@@ -1,6 +1,7 @@
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
 use crate::classic::clvm::sexp::equal_to;
 use alloc::collections::BTreeMap;
+use alloc::string::String;
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 
 pub const ATOM_MATCH: [u8; 1] = [b'$'];

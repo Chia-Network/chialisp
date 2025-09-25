@@ -1,5 +1,6 @@
 use core::fmt::Display;
 
+use alloc::{string::String, vec};
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 
 use crate::classic::clvm::__type_compatibility__::{sha256, Bytes, BytesFromType};

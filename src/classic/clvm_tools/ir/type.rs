@@ -1,4 +1,5 @@
 use alloc::rc::Rc;
+use alloc::string::String;
 
 use crate::classic::clvm::__type_compatibility__::Bytes;
 

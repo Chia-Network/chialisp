@@ -1,4 +1,6 @@
 use alloc::rc::Rc;
+use alloc::string::{String, ToString};
+use alloc::{vec, vec::Vec};
 
 use clvm_rs::allocator::{Allocator, NodePtr};
 

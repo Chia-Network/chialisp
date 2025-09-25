@@ -15,6 +15,8 @@ use clvm_rs::reduction::{Reduction, Response};
 use clvm_rs::run_program::{run_program_with_pre_eval, PreEval};
 
 use crate::classic::clvm::OPERATORS_LATEST_VERSION;
+use alloc::boxed::Box;
+use alloc::string::ToString;
 
 #[derive(Default)]
 pub struct RunProgramOption {

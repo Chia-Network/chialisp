@@ -1,6 +1,10 @@
-use core::borrow::Borrow;
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::rc::Rc;
+
+use alloc::vec;
+use alloc::vec::Vec;
+use core::borrow::Borrow;
 
 use crate::compiler::codegen::toposort_assign_bindings;
 use crate::compiler::comptypes::{

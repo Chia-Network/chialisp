@@ -1,6 +1,8 @@
-use num_bigint::ToBigInt;
 use alloc::collections::BTreeMap;
 use alloc::rc::Rc;
+use alloc::vec;
+use alloc::vec::Vec;
+use num_bigint::ToBigInt;
 
 use crate::classic::clvm::__type_compatibility__::bi_one;
 

@@ -5,10 +5,13 @@ use rand::prelude::Distribution;
 #[cfg(test)]
 use rand::Rng;
 
+use alloc::rc::Rc;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use alloc::{format, vec};
 use core::borrow::Borrow;
 use core::fmt::Display;
 use core::hash::{Hash, Hasher};
-use alloc::rc::Rc;
 
 use binascii::{bin2hex, hex2bin};
 use num_traits::{zero, Num};
@@ -19,8 +22,8 @@ use serde::Serialize;
 use crate::classic::clvm::__type_compatibility__::bi_one;
 use crate::classic::clvm::__type_compatibility__::{bi_zero, Bytes, BytesFromType};
 use crate::classic::clvm::casts::{bigint_from_bytes, bigint_to_bytes_clvm, TConvertOption};
-#[cfg(any(test, feature = "fuzz"))]
-use crate::compiler::fuzz::{ExprModifier, FuzzChoice};
+// #[cfg(any(test, feature = "fuzz"))]
+// use crate::compiler::fuzz::{ExprModifier, FuzzChoice}; // TODO: fuzz module not available
 use crate::compiler::prims::prims;
 use crate::compiler::srcloc::Srcloc;
 use crate::util::{number_from_u8, u8_from_number, Number};
@@ -1237,86 +1240,68 @@ where
 //
 // Fuzzing support for SExp
 //
-#[cfg(any(test, feature = "fuzz"))]
-fn find_in_structure_inner(
-    parents: &mut Vec<Rc<SExp>>,
-    structure: Rc<SExp>,
-    target: &Rc<SExp>,
-) -> bool {
-    if let SExp::Cons(_, a, b) = structure.borrow() {
-        parents.push(structure.clone());
-        if find_in_structure_inner(parents, a.clone(), target) {
-            return true;
-        }
-        if find_in_structure_inner(parents, b.clone(), target) {
-            return true;
-        }
 
-        parents.pop();
-    }
+// TODO: fuzz module not available
+// #[cfg(any(test, feature = "fuzz"))]
+// pub fn extract_atom_replacement<Expr: Clone>(
+//     myself: &Expr,
+//     a: &[u8],
+// ) -> Option<FuzzChoice<Expr, Vec<u8>>> {
+//     if a.starts_with(b"${") && a.ends_with(b"}") {
+//         if let Some(c_idx) = a.iter().position(|&c| c == b':') {
+//             return Some(FuzzChoice {
+//                 tag: a[c_idx + 1..a.len() - 1].to_vec(),
+//                 atom: myself.clone(),
+//             });
+//         }
+//     }
+//
+//     None
+// }
 
-    structure == *target
-}
-
-#[cfg(any(test, feature = "fuzz"))]
-pub fn extract_atom_replacement<Expr: Clone>(
-    myself: &Expr,
-    a: &[u8],
-) -> Option<FuzzChoice<Expr, Vec<u8>>> {
-    if a.starts_with(b"${") && a.ends_with(b"}") {
-        if let Some(c_idx) = a.iter().position(|&c| c == b':') {
-            return Some(FuzzChoice {
-                tag: a[c_idx + 1..a.len() - 1].to_vec(),
-                atom: myself.clone(),
-            });
-        }
-    }
-
-    None
-}
-
-#[cfg(any(test, feature = "fuzz"))]
-impl ExprModifier for Rc<SExp> {
-    type Expr = Self;
-    type Tag = Vec<u8>;
-
-    fn find_waiters(&self, waiters: &mut Vec<FuzzChoice<Self::Expr, Self::Tag>>) {
-        match self.borrow() {
-            SExp::Cons(_, a, b) => {
-                a.find_waiters(waiters);
-                b.find_waiters(waiters);
-            }
-            SExp::Atom(_, a) => {
-                if let Some(r) = extract_atom_replacement(self, a) {
-                    waiters.push(r);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn replace_node(&self, to_replace: &Self::Expr, new_value: Self::Expr) -> Self::Expr {
-        if let SExp::Cons(l, a, b) = self.borrow() {
-            let new_a = a.replace_node(to_replace, new_value.clone());
-            let new_b = b.replace_node(to_replace, new_value.clone());
-            if Rc::as_ptr(&new_a) != Rc::as_ptr(a) || Rc::as_ptr(&new_b) != Rc::as_ptr(b) {
-                return Rc::new(SExp::Cons(l.clone(), new_a, new_b));
-            }
-        }
-
-        if self == to_replace {
-            return new_value;
-        }
-
-        self.clone()
-    }
-
-    fn find_in_structure(&self, target: &Self::Expr) -> Option<Vec<Self::Expr>> {
-        let mut parents = Vec::new();
-        if find_in_structure_inner(&mut parents, self.clone(), target) {
-            Some(parents)
-        } else {
-            None
-        }
-    }
-}
+// TODO: fuzz module not available
+// #[cfg(any(test, feature = "fuzz"))]
+// impl ExprModifier for Rc<SExp> {
+//     type Expr = Self;
+//     type Tag = Vec<u8>;
+//
+//     fn find_waiters(&self, waiters: &mut Vec<FuzzChoice<Self::Expr, Self::Tag>>) {
+//         match self.borrow() {
+//             SExp::Cons(_, a, b) => {
+//                 a.find_waiters(waiters);
+//                 b.find_waiters(waiters);
+//             }
+//             SExp::Atom(_, a) => {
+//                 if let Some(r) = extract_atom_replacement(self, a) {
+//                     waiters.push(r);
+//                 }
+//             }
+//             _ => {}
+//         }
+//     }
+//
+//     fn replace_node(&self, to_replace: &Self::Expr, new_value: Self::Expr) -> Self::Expr {
+//         if let SExp::Cons(l, a, b) = self.borrow() {
+//             let new_a = a.replace_node(to_replace, new_value.clone());
+//             let new_b = b.replace_node(to_replace, new_value.clone());
+//             if Rc::as_ptr(&new_a) != Rc::as_ptr(a) || Rc::as_ptr(&new_b) != Rc::as_ptr(b) {
+//                 return Rc::new(SExp::Cons(l.clone(), new_a, new_b));
+//             }
+//         }
+//
+//         if self == to_replace {
+//             return new_value;
+//         }
+//
+//         self.clone()
+//     }
+//
+//     fn find_in_structure(&self, target: &Self::Expr) -> Option<Vec<Self::Expr>> {
+//         let mut parents = Vec::new();
+//         if find_in_structure_inner(&mut parents, self.clone(), target) {
+//             Some(parents)
+//         } else {
+//             None
+//         }
+//     }
+// }

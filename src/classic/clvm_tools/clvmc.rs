@@ -1,6 +1,7 @@
 use alloc::collections::BTreeMap;
+use alloc::format;
 use alloc::rc::Rc;
-
+use alloc::string::{String, ToString};
 use clvm_rs::allocator::{Allocator, NodePtr};
 use clvm_rs::error::EvalErr;
 
@@ -16,7 +17,7 @@ use crate::classic::clvm_tools::stages::stage_2::operators::run_program_for_sear
 
 use crate::compiler::clvm::convert_to_clvm_rs;
 use crate::compiler::compiler::compile_file;
-use crate::compiler::compiler::DefaultCompilerOpts;
+
 use crate::compiler::comptypes::{CompileErr, CompilerOpts};
 use crate::compiler::dialect::detect_modern;
 use crate::compiler::optimize::maybe_finalize_program_via_classic_optimizer;

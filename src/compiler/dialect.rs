@@ -5,6 +5,7 @@ use clvmr::allocator::{Allocator, NodePtr, SExp};
 use crate::classic::clvm::sexp::proper_list;
 
 use crate::compiler::sexp::decode_string;
+use alloc::string::{String, ToString};
 
 /// Stepping 21 and 22 do optimization in special ways with flags
 /// I made this more general for other dialects, starting at

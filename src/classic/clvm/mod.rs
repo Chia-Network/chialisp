@@ -1,4 +1,6 @@
 use alloc::collections::BTreeMap;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
 pub mod __type_compatibility__;
 pub mod as_rust;

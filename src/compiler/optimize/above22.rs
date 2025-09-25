@@ -1,6 +1,8 @@
-use core::borrow::Borrow;
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::rc::Rc;
+use alloc::vec::Vec;
+use core::borrow::Borrow;
 
 use clvmr::allocator::Allocator;
 

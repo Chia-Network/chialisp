@@ -1,5 +1,8 @@
 use alloc::collections::BTreeSet;
 use alloc::rc::Rc;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
 use core::borrow::Borrow;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};

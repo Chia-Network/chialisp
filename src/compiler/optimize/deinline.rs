@@ -1,5 +1,7 @@
-use alloc::collections::{BTreeSet, BTreeMap};
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::rc::Rc;
+use alloc::string::ToString;
+use alloc::vec::Vec;
 
 use crate::compiler::codegen::codegen;
 use crate::compiler::optimize::depgraph::{DepgraphKind, FunctionDependencyGraph};

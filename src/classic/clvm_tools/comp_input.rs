@@ -1,6 +1,9 @@
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
+use alloc::format;
 use alloc::rc::Rc;
-
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use clvmr::{Allocator, NodePtr};
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, Stream, UnvalidatedBytesFromType};

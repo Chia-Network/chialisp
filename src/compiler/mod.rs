@@ -27,10 +27,13 @@ pub mod srcloc;
 pub mod stackvisit;
 pub mod usecheck;
 
-use clvmr::allocator::Allocator;
 use alloc::collections::BTreeMap;
-use core::mem::swap;
 use alloc::rc::Rc;
+use clvmr::allocator::Allocator;
+use core::mem::swap;
+
+use alloc::boxed::Box;
+use alloc::string::String;
 
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 use crate::compiler::comptypes::{

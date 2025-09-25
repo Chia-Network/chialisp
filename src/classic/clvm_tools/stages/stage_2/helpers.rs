@@ -1,3 +1,5 @@
+use alloc::vec;
+use alloc::vec::Vec;
 use clvm_rs::allocator::{Allocator, NodePtr};
 use clvm_rs::error::EvalErr;
 
