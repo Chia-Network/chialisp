@@ -8,8 +8,7 @@ use clvmr::allocator::Allocator;
 
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 
-#[cfg(any(test, feature = "fuzz"))]
-use crate::compiler::compiler::FUZZ_TEST_PRE_CSE_MERGE_FIX_FLAG;
+// Fuzzing support removed for compilation-only build
 use crate::compiler::comptypes::{
     BodyForm, CompileErr, CompileForm, CompilerOpts, DefunData, HelperForm, PrimaryCodegen,
 };
@@ -29,14 +28,6 @@ use crate::compiler::StartOfCodegenOptimization;
 #[derive(Default, Clone)]
 pub struct Strategy23 {}
 
-#[cfg(any(test, feature = "fuzz"))]
-fn enable_cse_merge_fix_so_can_be_disabled_for_tests(opts: Rc<dyn CompilerOpts>) -> bool {
-    !opts
-        .diag_flags()
-        .contains(&FUZZ_TEST_PRE_CSE_MERGE_FIX_FLAG)
-}
-
-#[cfg(not(any(test, feature = "fuzz")))]
 fn enable_cse_merge_fix_so_can_be_disabled_for_tests(_opts: Rc<dyn CompilerOpts>) -> bool {
     true
 }

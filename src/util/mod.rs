@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use core::mem::swap;
 // use std::path::Path; // Removed for no_std
 // use tempfile::NamedTempFile; // Removed for no_std
-use unicode_segmentation::UnicodeSegmentation;
+// unicode_segmentation removed - using simple char-based processing
 
 pub type Number = BigInt;
 
@@ -43,7 +43,8 @@ where
 }
 
 pub fn skip_leading(s: &str, dash: &str) -> String {
-    s.graphemes(true).skip_while(|ch| dash == *ch).collect()
+    // Simple char-based approach without unicode-segmentation dependency
+    s.chars().skip_while(|ch| dash == &ch.to_string()).collect()
 }
 
 pub fn collapse<A>(r: Result<A, A>) -> A {

@@ -27,7 +27,7 @@ use crate::compiler::srcloc::Srcloc;
 use crate::compiler::{BasicCompileContext, CompileContextWrapper};
 use crate::util::Number;
 
-pub const FUZZ_TEST_PRE_CSE_MERGE_FIX_FLAG: usize = 1;
+// Fuzzing constants removed for compilation-only build
 
 lazy_static! {
     pub static ref STANDARD_MACROS: String = {
