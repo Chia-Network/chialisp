@@ -15,6 +15,11 @@ concurrency:
   group: ${{ github.ref }}-${{ github.workflow }}-${{ github.event_name }}-${{ (github.ref == 'refs/heads/main') && github.sha || '' }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  actions: write
+  id-token: write
+
 jobs:
   build_npm:
     name: Npm
@@ -78,11 +83,9 @@ jobs:
           SECRET: "${{ secrets.NPM_TOKEN }}"
 
       - name: Publish wasm
-        if: env.FULL_RELEASE == 'true' && steps.check_secrets.outputs.HAS_SECRET
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        if: env.FULL_RELEASE == 'true'
         working-directory: ${{ github.workspace }}/wasm/pkg
         run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
           rm -f clvm_tools_wasm-*.tgz
+          npm config set provenance true
           npm publish --access public
