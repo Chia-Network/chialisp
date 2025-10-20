@@ -82,6 +82,12 @@ jobs:
         env:
           SECRET: "${{ secrets.NPM_TOKEN }}"
 
+      - name: Ensure we have a new enough npm version for trusted publishing
+        if: env.FULL_RELEASE == 'true'
+        run: |
+          npm install -g npm
+          npm --version
+
       - name: Publish wasm
         if: env.FULL_RELEASE == 'true'
         working-directory: ${{ github.workspace }}/wasm/pkg
