@@ -269,7 +269,7 @@ jobs:
         python-version: "3.12"
 
     - name: Download artifacts
-      uses: actions/download-artifact@v5
+      uses: actions/download-artifact@v6
       with:
         merge-multiple: true
         pattern: wheels-*-py-3.12
