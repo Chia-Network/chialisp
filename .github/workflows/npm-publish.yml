@@ -67,7 +67,7 @@ jobs:
           cd wasm/tests/clvm-tools-interface && npm install && yarn test
 
       - name: Upload npm pkg artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: npm-pkg
           path: ./wasm/pkg/clvm_tools_wasm-*.tgz

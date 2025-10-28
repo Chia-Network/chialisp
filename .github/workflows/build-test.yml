@@ -243,7 +243,7 @@ jobs:
         docker run -v ${GITHUB_WORKSPACE}:/root/chialisp -t clvm-tools-rs-alpine sh /root/build-alpine.sh
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: wheels-${{ matrix.os }}-py-${{ matrix.python }}
         path: ./target/wheels/
