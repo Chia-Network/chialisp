@@ -28,6 +28,14 @@ use crate::util::{number_from_u8, u8_from_number, Number};
 const PRIM_RUN_LIMIT: usize = 1000000;
 pub const EVAL_STACK_LIMIT: usize = 200;
 
+pub trait Process {
+    fn run(&self) -> Result<EvalResult, CompileErr>;
+}
+
+pub enum EvalResult {
+    Body(Rc<BodyForm>),
+}
+
 // Stack depth checker.
 #[derive(Clone, Debug, Default)]
 pub struct VisitedInfo {
@@ -1298,8 +1306,43 @@ impl<'info> Evaluator {
         ))
     }
 
-    // A frontend language evaluator and minifier
     fn shrink_bodyform_visited(
+        &self,
+        allocator: &mut Allocator, // Support random prims via clvm_rs
+        visited: &'info mut VisitedMarker<'_, VisitedInfo>,
+        prog_args: Rc<SExp>,
+        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+        body: Rc<BodyForm>,
+        only_inline: bool,
+    ) -> Result<Rc<BodyForm>, CompileErr> {
+        let mut result = None;
+
+        loop {
+            match result {
+                None => {
+                    result = Some(self.shrink_bodyform_visited_main(
+                        allocator,
+                        visited,
+                        prog_args.clone(),
+                        env,
+                        body.clone(),
+                        only_inline,
+                    )?);
+                }
+                Some(EvalResult::Body(b)) => {
+                    return Ok(b.clone());
+                }
+                /*
+                Some(EvalResult::MoreProcessing(p)) => {
+                    result = p.run();
+                }
+                */
+            }
+        }
+    }
+
+    // A frontend language evaluator and minifier
+    fn shrink_bodyform_visited_main(
         &self,
         allocator: &mut Allocator, // Support random prims via clvm_rs
         visited_: &'info mut VisitedMarker<'_, VisitedInfo>,
@@ -1307,16 +1350,16 @@ impl<'info> Evaluator {
         env: &HashMap<Vec<u8>, Rc<BodyForm>>,
         body: Rc<BodyForm>,
         only_inline: bool,
-    ) -> Result<Rc<BodyForm>, CompileErr> {
+    ) -> Result<EvalResult, CompileErr> {
         let mut visited = VisitedMarker::again(body.loc(), visited_)?;
         match body.borrow() {
             BodyForm::Let(LetFormKind::Parallel, letdata) => {
                 if eval_dont_expand_let(&letdata.inline_hint) && only_inline {
-                    return Ok(body.clone());
+                    return Ok(EvalResult::Body(body.clone()));
                 }
 
                 let updated_bindings = update_parallel_bindings(env, &letdata.bindings);
-                self.shrink_bodyform_visited(
+                self.shrink_bodyform_visited_main(
                     allocator,
                     &mut visited,
                     prog_args,
@@ -1327,11 +1370,11 @@ impl<'info> Evaluator {
             }
             BodyForm::Let(LetFormKind::Sequential, letdata) => {
                 if eval_dont_expand_let(&letdata.inline_hint) && only_inline {
-                    return Ok(body.clone());
+                    return Ok(EvalResult::Body(body.clone()));
                 }
 
                 if letdata.bindings.is_empty() {
-                    self.shrink_bodyform_visited(
+                    self.shrink_bodyform_visited_main(
                         allocator,
                         &mut visited,
                         prog_args,
@@ -1346,7 +1389,7 @@ impl<'info> Evaluator {
                         letdata.bindings.iter().skip(1).cloned().collect();
 
                     let updated_bindings = update_parallel_bindings(env, &first_binding_as_list);
-                    self.shrink_bodyform_visited(
+                    self.shrink_bodyform_visited_main(
                         allocator,
                         &mut visited,
                         prog_args,
@@ -1364,10 +1407,10 @@ impl<'info> Evaluator {
             }
             BodyForm::Let(LetFormKind::Assign, letdata) => {
                 if eval_dont_expand_let(&letdata.inline_hint) && only_inline {
-                    return Ok(body.clone());
+                    return Ok(EvalResult::Body(body.clone()));
                 }
 
-                self.shrink_bodyform_visited(
+                self.shrink_bodyform_visited_main(
                     allocator,
                     &mut visited,
                     prog_args,
@@ -1376,11 +1419,11 @@ impl<'info> Evaluator {
                     only_inline,
                 )
             }
-            BodyForm::Quoted(_) => Ok(body.clone()),
+            BodyForm::Quoted(_) => Ok(EvalResult::Body(body.clone())),
             BodyForm::Value(SExp::Atom(l, name)) => {
                 if name == &"@".as_bytes().to_vec() {
                     let literal_args = synthesize_args(prog_args.clone(), env)?;
-                    self.shrink_bodyform_visited(
+                    self.shrink_bodyform_visited_main(
                         allocator,
                         &mut visited,
                         prog_args,
@@ -1389,7 +1432,7 @@ impl<'info> Evaluator {
                         only_inline,
                     )
                 } else if let Some(function) = self.get_function(name) {
-                    self.shrink_bodyform_visited(
+                    self.shrink_bodyform_visited_main(
                         allocator,
                         &mut visited,
                         prog_args,
@@ -1401,9 +1444,9 @@ impl<'info> Evaluator {
                     env.get(name)
                         .map(|x| {
                             if reflex_capture(name, x.clone()) {
-                                Ok(x.clone())
+                                Ok(EvalResult::Body(x.clone()))
                             } else {
-                                self.shrink_bodyform_visited(
+                                self.shrink_bodyform_visited_main(
                                     allocator,
                                     &mut visited,
                                     prog_args.clone(),
@@ -1416,7 +1459,7 @@ impl<'info> Evaluator {
                         .unwrap_or_else(|| {
                             self.get_constant(name)
                                 .map(|x| {
-                                    self.shrink_bodyform_visited(
+                                    self.shrink_bodyform_visited_main(
                                         allocator,
                                         &mut visited,
                                         prog_args.clone(),
@@ -1426,15 +1469,15 @@ impl<'info> Evaluator {
                                     )
                                 })
                                 .unwrap_or_else(|| {
-                                    Ok(Rc::new(BodyForm::Value(SExp::Atom(
+                                    Ok(EvalResult::Body(Rc::new(BodyForm::Value(SExp::Atom(
                                         l.clone(),
                                         name.clone(),
-                                    ))))
+                                    )))))
                                 })
                         })
                 }
             }
-            BodyForm::Value(v) => Ok(Rc::new(BodyForm::Quoted(v.clone()))),
+            BodyForm::Value(v) => Ok(EvalResult::Body(Rc::new(BodyForm::Quoted(v.clone())))),
             BodyForm::Call(l, parts, tail) => {
                 if parts.is_empty() {
                     return Err(CompileErr(
@@ -1462,7 +1505,7 @@ impl<'info> Evaluator {
                         &arguments_to_convert,
                         env,
                         only_inline,
-                    ),
+                    ).map(|r| EvalResult::Body(r)),
                     BodyForm::Value(SExp::Integer(_call_loc, call_int)) => self.handle_invoke(
                         allocator,
                         &mut visited,
@@ -1477,7 +1520,7 @@ impl<'info> Evaluator {
                         &arguments_to_convert,
                         env,
                         only_inline,
-                    ),
+                    ).map(|r| EvalResult::Body(r)),
                     _ => Err(CompileErr(
                         l.clone(),
                         format!("Don't know how to call {}", head_expr.to_sexp()),
@@ -1497,7 +1540,7 @@ impl<'info> Evaluator {
                     &mut includes,
                 );
                 let code = codegen(&mut context_wrapper.context, self.opts.clone(), program)?;
-                Ok(Rc::new(BodyForm::Quoted(code)))
+                Ok(EvalResult::Body(Rc::new(BodyForm::Quoted(code))))
             }
             BodyForm::Lambda(ldata) => self.enrich_lambda_site_info(
                 allocator,
@@ -1506,7 +1549,7 @@ impl<'info> Evaluator {
                 env,
                 ldata,
                 only_inline,
-            ),
+            ).map(|r| EvalResult::Body(r)),
         }
     }
 
