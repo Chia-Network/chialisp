@@ -1834,7 +1834,7 @@ fn generate_complex_constant_body(
     let constant_result = evaluator.shrink_bodyform(
         context.allocator(),
         Rc::new(SExp::Nil(defc.loc.clone())),
-        &HashMap::new(),
+        Rc::new(HashMap::new()),
         defc.body.clone(),
         false,
         Some(EVAL_STACK_LIMIT),

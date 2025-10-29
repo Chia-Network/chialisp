@@ -31,7 +31,7 @@ fn shrink_expr_from_string(s: String) -> Result<String, CompileErr> {
             return e.shrink_bodyform(
                 &mut allocator,
                 program.compileform().args.clone(),
-                &HashMap::new(),
+                Rc::new(HashMap::new()),
                 program.compileform().exp.clone(),
                 false,
                 Some(EVAL_STACK_LIMIT),

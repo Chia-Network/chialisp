@@ -637,7 +637,7 @@ fn fe_opt(
                 let body_rc = evaluator.shrink_bodyform(
                     allocator,
                     defun.args.clone(),
-                    &env,
+                    Rc::new(env),
                     defun.body.clone(),
                     true,
                     Some(EVAL_STACK_LIMIT),
@@ -661,7 +661,7 @@ fn fe_opt(
     let shrunk = new_evaluator.shrink_bodyform(
         allocator,
         Rc::new(SExp::Nil(compileform.args.loc())),
-        &HashMap::new(),
+        Rc::new(HashMap::new()),
         compileform.exp.clone(),
         true,
         Some(EVAL_STACK_LIMIT),

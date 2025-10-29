@@ -38,7 +38,7 @@ fn main() {
             e.shrink_bodyform(
                 &mut allocator,
                 program.compileform().args.clone(),
-                &HashMap::new(),
+                Rc::new(HashMap::new()),
                 program.compileform().exp.clone(),
                 false,
                 Some(EVAL_STACK_LIMIT),

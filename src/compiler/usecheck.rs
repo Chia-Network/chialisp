@@ -99,7 +99,7 @@ pub fn check_parameters_used_compileform(
     let result = e.shrink_bodyform(
         &mut allocator,
         program.args.clone(),
-        &env,
+        Rc::new(env),
         program.exp.clone(),
         false,
         Some(EVAL_STACK_LIMIT),
