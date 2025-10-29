@@ -207,7 +207,7 @@ impl Repl {
                             self.evaluator.shrink_bodyform(
                                 context,
                                 program.args.clone(),
-                                &HashMap::new(),
+                                Rc::new(HashMap::new()),
                                 program.exp,
                                 false,
                                 self.stack_limit,

@@ -168,10 +168,11 @@ fn compute_paths_of_destructure(
 }
 
 fn update_parallel_bindings(
-    bindings: &HashMap<Vec<u8>, Rc<BodyForm>>,
+    bindings: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
     have_bindings: &[Rc<Binding>],
 ) -> HashMap<Vec<u8>, Rc<BodyForm>> {
-    let mut new_bindings = bindings.clone();
+    let new_bindings_ref: &HashMap<Vec<u8>, Rc<BodyForm>> = bindings.borrow();
+    let mut new_bindings = new_bindings_ref.clone();
     for b in have_bindings.iter() {
         match &b.pattern {
             BindingPattern::Name(name) => {
@@ -448,7 +449,7 @@ pub fn second_of_alist(lst: Rc<SExp>) -> Result<Rc<SExp>, CompileErr> {
 
 fn synthesize_args(
     template: Rc<SExp>,
-    env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+    env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
 ) -> Result<Rc<BodyForm>, CompileErr> {
     match template.borrow() {
         SExp::Atom(_, name) => env.get(name).map(|x| Ok(x.clone())).unwrap_or_else(|| {
@@ -465,7 +466,7 @@ fn synthesize_args(
                     l.clone(),
                     vec![
                         Rc::new(BodyForm::Value(SExp::atom_from_string(template.loc(), "c"))),
-                        synthesize_args(f.clone(), env)?,
+                        synthesize_args(f.clone(), env.clone())?,
                         synthesize_args(r.clone(), env)?,
                     ],
                     None,
@@ -682,10 +683,10 @@ pub fn eval_dont_expand_let(inline_hint: &Option<LetFormInlineHint>) -> bool {
     matches!(inline_hint, Some(LetFormInlineHint::NonInline(_)))
 }
 
-pub fn filter_capture_args(args: Rc<SExp>, name_map: &HashMap<Vec<u8>, Rc<BodyForm>>) -> Rc<SExp> {
+pub fn filter_capture_args(args: Rc<SExp>, name_map: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>) -> Rc<SExp> {
     match args.borrow() {
         SExp::Cons(l, a, b) => {
-            let a_filtered = filter_capture_args(a.clone(), name_map);
+            let a_filtered = filter_capture_args(a.clone(), name_map.clone());
             let b_filtered = filter_capture_args(b.clone(), name_map);
             if !truthy(a_filtered.clone()) && !truthy(b_filtered.clone()) {
                 return Rc::new(SExp::Nil(l.clone()));
@@ -740,7 +741,7 @@ impl<'info> Evaluator {
         program: Rc<CompileForm>,
         prog_args: Rc<SExp>,
         arguments_to_convert: &[Rc<BodyForm>],
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+        env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
     ) -> Result<Rc<BodyForm>, CompileErr> {
         // Pass the SExp representation of the expressions into
         // the macro after forming an argument sexp and then
@@ -792,7 +793,7 @@ impl<'info> Evaluator {
         context: &mut BasicCompileContext,
         visited_: &'info mut VisitedMarker<'_, VisitedInfo>,
         prog_args: Rc<SExp>,
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+        env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
         parts: &[Rc<BodyForm>],
         only_inline: bool,
     ) -> Result<Option<LambdaApply>, CompileErr> {
@@ -802,7 +803,7 @@ impl<'info> Evaluator {
                 context,
                 &mut visited,
                 prog_args.clone(),
-                env,
+                env.clone(),
                 parts[1].clone(),
                 only_inline,
             )?;
@@ -831,11 +832,12 @@ impl<'info> Evaluator {
         context: &mut BasicCompileContext,
         visited: &mut VisitedMarker<'info, VisitedInfo>,
         prog_args: Rc<SExp>,
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+        env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
         lapply: &LambdaApply,
         only_inline: bool,
     ) -> Result<Rc<BodyForm>, CompileErr> {
-        let mut lambda_env = env.clone();
+        let lambda_env_ref: &HashMap<Vec<u8>, Rc<BodyForm>> = env.borrow();
+        let mut lambda_env = lambda_env_ref.clone();
 
         // Finish eta-expansion.
 
@@ -868,7 +870,7 @@ impl<'info> Evaluator {
             context,
             visited,
             lapply.lambda.args.clone(),
-            &lambda_env,
+            Rc::new(lambda_env),
             lapply.body.clone(),
             only_inline,
         )
@@ -882,7 +884,7 @@ impl<'info> Evaluator {
         call: &CallSpec,
         prog_args: Rc<SExp>,
         arguments_to_convert: &[Rc<BodyForm>],
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+        env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
         only_inline: bool,
     ) -> Result<Rc<BodyForm>, CompileErr> {
         let mut all_primitive = true;
@@ -929,7 +931,7 @@ impl<'info> Evaluator {
                             context,
                             &mut visited,
                             prog_args.clone(),
-                            env,
+                            env.clone(),
                             arguments_to_convert[i].clone(),
                             only_inline,
                         )?;
@@ -968,7 +970,7 @@ impl<'info> Evaluator {
                         context,
                         &mut visited,
                         prog_args.clone(),
-                        env,
+                        env.clone(),
                         &target_vec,
                         only_inline,
                     )? {
@@ -1017,7 +1019,7 @@ impl<'info> Evaluator {
             context,
             visited,
             Rc::new(SExp::Nil(run_program.loc())),
-            &bindings,
+            Rc::new(bindings),
             program,
             false,
         )?;
@@ -1127,7 +1129,7 @@ impl<'info> Evaluator {
         call: &CallSpec,
         prog_args: Rc<SExp>,
         arguments_to_convert: &[Rc<BodyForm>],
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+        env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
         only_inline: bool,
     ) -> Result<Rc<BodyForm>, CompileErr> {
         let helper = select_helper(&self.helpers, call.name);
@@ -1160,7 +1162,7 @@ impl<'info> Evaluator {
                         context,
                         visited,
                         prog_args.clone(),
-                        env,
+                        env.clone(),
                         t.clone(),
                         only_inline,
                     )?)
@@ -1183,7 +1185,7 @@ impl<'info> Evaluator {
                         context,
                         visited,
                         prog_args.clone(),
-                        env,
+                        env.clone(),
                         kv.1.clone(),
                         only_inline,
                     )?;
@@ -1195,7 +1197,7 @@ impl<'info> Evaluator {
                     context,
                     visited,
                     defun.args.clone(),
-                    &argument_captures,
+                    Rc::new(argument_captures),
                     defun.body,
                     only_inline,
                 )
@@ -1219,7 +1221,7 @@ impl<'info> Evaluator {
         context: &mut BasicCompileContext,
         visited: &'info mut VisitedMarker<'_, VisitedInfo>,
         prog_args: Rc<SExp>,
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+        env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
         ldata: &LambdaData,
         only_inline: bool,
     ) -> Result<Rc<BodyForm>, CompileErr> {
@@ -1264,17 +1266,18 @@ impl<'info> Evaluator {
         ));
 
         // Eliminate the captures via beta substituion.
+        let interpretable_rc = Rc::new(interpretable_captures);
         let simplified_body = self.shrink_bodyform_visited(
             context,
             visited,
             combined_args.clone(),
-            &interpretable_captures,
+            interpretable_rc.clone(),
             ldata.body.clone(),
             only_inline,
         )?;
 
         let new_capture_args =
-            filter_capture_args(ldata.capture_args.clone(), &interpretable_captures);
+            filter_capture_args(ldata.capture_args.clone(), interpretable_rc);
         Ok(Rc::new(BodyForm::Lambda(Box::new(LambdaData {
             args: ldata.args.clone(),
             capture_args: new_capture_args,
@@ -1314,7 +1317,7 @@ impl<'info> Evaluator {
         context: &mut BasicCompileContext,
         visited: &'info mut VisitedMarker<'_, VisitedInfo>,
         prog_args: Rc<SExp>,
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+        env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
         body: Rc<BodyForm>,
         only_inline: bool,
     ) -> Result<Rc<BodyForm>, CompileErr> {
@@ -1327,7 +1330,7 @@ impl<'info> Evaluator {
                         context,
                         visited,
                         prog_args.clone(),
-                        env,
+                        env.clone(),
                         body.clone(),
                         only_inline,
                     )?);
@@ -1350,7 +1353,7 @@ impl<'info> Evaluator {
         context: &mut BasicCompileContext,
         visited_: &'info mut VisitedMarker<'_, VisitedInfo>,
         prog_args: Rc<SExp>,
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+        env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
         body: Rc<BodyForm>,
         only_inline: bool,
     ) -> Result<EvalResult, CompileErr> {
@@ -1366,7 +1369,7 @@ impl<'info> Evaluator {
                     context,
                     &mut visited,
                     prog_args,
-                    &updated_bindings,
+                    Rc::new(updated_bindings),
                     letdata.body.clone(),
                     only_inline,
                 )
@@ -1396,7 +1399,7 @@ impl<'info> Evaluator {
                         context,
                         &mut visited,
                         prog_args,
-                        &updated_bindings,
+                        Rc::new(updated_bindings),
                         Rc::new(BodyForm::Let(
                             LetFormKind::Sequential,
                             Box::new(LetData {
@@ -1425,7 +1428,7 @@ impl<'info> Evaluator {
             BodyForm::Quoted(_) => Ok(EvalResult::Body(body.clone())),
             BodyForm::Value(SExp::Atom(l, name)) => {
                 if name == &"@".as_bytes().to_vec() {
-                    let literal_args = synthesize_args(prog_args.clone(), env)?;
+                    let literal_args = synthesize_args(prog_args.clone(), env.clone())?;
                     self.shrink_bodyform_visited_main(
                         context,
                         &mut visited,
@@ -1453,7 +1456,7 @@ impl<'info> Evaluator {
                                     context,
                                     &mut visited,
                                     prog_args.clone(),
-                                    env,
+                                    env.clone(),
                                     x.clone(),
                                     only_inline,
                                 )
@@ -1569,7 +1572,7 @@ impl<'info> Evaluator {
         &self,
         context: &mut BasicCompileContext,
         prog_args: Rc<SExp>,
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+        env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
         body: Rc<BodyForm>,
         only_inline: bool,
         stack_limit: Option<usize>,
