@@ -26,7 +26,7 @@ use crate::compiler::CompileContextWrapper;
 use crate::util::{number_from_u8, u8_from_number, Number};
 
 const PRIM_RUN_LIMIT: usize = 1000000;
-pub const EVAL_STACK_LIMIT: usize = 200;
+pub const EVAL_STACK_LIMIT: usize = 150;
 
 pub trait Process {
     fn run(&self) -> Result<EvalResult, CompileErr>;
@@ -34,6 +34,14 @@ pub trait Process {
 
 pub enum EvalResult {
     Body(Rc<BodyForm>),
+}
+
+#[derive(Clone)]
+pub struct EvalData {
+    prog_args: Rc<SExp>,
+    env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
+    body: Rc<BodyForm>,
+    only_inline: bool
 }
 
 // Stack depth checker.
@@ -768,10 +776,12 @@ impl<'info> Evaluator {
                 self.shrink_bodyform_visited(
                     allocator,
                     visited,
-                    prog_args.clone(),
-                    env,
-                    program.compileform().exp.clone(),
-                    false,
+                    Rc::new(EvalData {
+                        prog_args: prog_args.clone(),
+                        env,
+                        body: program.compileform().exp.clone(),
+                        only_inline: false,
+                    })
                 )
             })
         } else {
@@ -799,18 +809,22 @@ impl<'info> Evaluator {
             let evaluated_prog = self.shrink_bodyform_visited(
                 allocator,
                 &mut visited,
-                prog_args.clone(),
-                env.clone(),
-                parts[1].clone(),
-                only_inline,
+                Rc::new(EvalData {
+                    prog_args: prog_args.clone(),
+                    env: env.clone(),
+                    body: parts[1].clone(),
+                    only_inline: only_inline,
+                })
             )?;
             let evaluated_env = self.shrink_bodyform_visited(
                 allocator,
                 &mut visited,
-                prog_args,
-                env,
-                parts[2].clone(),
-                only_inline,
+                Rc::new(EvalData {
+                    prog_args,
+                    env,
+                    body: parts[2].clone(),
+                    only_inline,
+                })
             )?;
             if let BodyForm::Lambda(ldata) = evaluated_prog.borrow() {
                 return Ok(Some(LambdaApply {
@@ -847,10 +861,12 @@ impl<'info> Evaluator {
         let reified_captures = self.shrink_bodyform_visited(
             allocator,
             visited,
-            prog_args,
-            env,
-            lapply.lambda.captures.clone(),
-            only_inline,
+            Rc::new(EvalData {
+                prog_args,
+                env,
+                body: lapply.lambda.captures.clone(),
+                only_inline,
+            })
         )?;
         let formed_caps = ArgInputs::Whole(reified_captures);
         create_argument_captures(
@@ -866,10 +882,12 @@ impl<'info> Evaluator {
         self.shrink_bodyform_visited(
             allocator,
             visited,
-            lapply.lambda.args.clone(),
-            Rc::new(lambda_env),
-            lapply.body.clone(),
-            only_inline,
+            Rc::new(EvalData {
+                prog_args: lapply.lambda.args.clone(),
+                env: Rc::new(lambda_env),
+                body: lapply.body.clone(),
+                only_inline,
+            })
         )
     }
 
@@ -927,10 +945,12 @@ impl<'info> Evaluator {
                         let shrunk = self.shrink_bodyform_visited(
                             allocator,
                             &mut visited,
-                            prog_args.clone(),
-                            env.clone(),
-                            arguments_to_convert[i].clone(),
-                            only_inline,
+                            Rc::new(EvalData {
+                                prog_args: prog_args.clone(),
+                                env: env.clone(),
+                                body: arguments_to_convert[i].clone(),
+                                only_inline,
+                            })
                         )?;
 
                         target_vec[i + 1] = shrunk.clone();
@@ -1015,10 +1035,12 @@ impl<'info> Evaluator {
         let apply_result = self.shrink_bodyform_visited(
             allocator,
             visited,
-            Rc::new(SExp::Nil(run_program.loc())),
-            Rc::new(bindings),
-            program,
-            false,
+            Rc::new(EvalData {
+                prog_args: Rc::new(SExp::Nil(run_program.loc())),
+                env: Rc::new(bindings),
+                body: program,
+                only_inline: false,
+            })
         )?;
         self.chase_apply(allocator, visited, apply_result)
     }
@@ -1158,10 +1180,12 @@ impl<'info> Evaluator {
                     Some(self.shrink_bodyform_visited(
                         allocator,
                         visited,
-                        prog_args.clone(),
-                        env.clone(),
-                        t.clone(),
-                        only_inline,
+                        Rc::new(EvalData {
+                            prog_args: prog_args.clone(),
+                            env: env.clone(),
+                            body: t.clone(),
+                            only_inline,
+                        })
                     )?)
                 } else {
                     None
@@ -1181,10 +1205,12 @@ impl<'info> Evaluator {
                     let shrunk = self.shrink_bodyform_visited(
                         allocator,
                         visited,
-                        prog_args.clone(),
-                        env.clone(),
-                        kv.1.clone(),
-                        only_inline,
+                        Rc::new(EvalData {
+                            prog_args: prog_args.clone(),
+                            env: env.clone(),
+                            body: kv.1.clone(),
+                            only_inline,
+                        })
                     )?;
 
                     argument_captures.insert(kv.0.clone(), shrunk.clone());
@@ -1193,10 +1219,12 @@ impl<'info> Evaluator {
                 self.shrink_bodyform_visited(
                     allocator,
                     visited,
-                    defun.args.clone(),
-                    Rc::new(argument_captures),
-                    defun.body,
-                    only_inline,
+                    Rc::new(EvalData {
+                        prog_args: defun.args.clone(),
+                        env: Rc::new(argument_captures),
+                        body: defun.body,
+                        only_inline,
+                    })
                 )
             }
             _ => self
@@ -1230,10 +1258,12 @@ impl<'info> Evaluator {
         let new_captures = self.shrink_bodyform_visited(
             allocator,
             visited,
-            prog_args.clone(),
-            env,
-            ldata.captures.clone(),
-            only_inline,
+            Rc::new(EvalData {
+                prog_args: prog_args.clone(),
+                env,
+                body: ldata.captures.clone(),
+                only_inline,
+            })
         )?;
 
         // Break up and make binding map.
@@ -1267,10 +1297,12 @@ impl<'info> Evaluator {
         let simplified_body = self.shrink_bodyform_visited(
             allocator,
             visited,
-            combined_args.clone(),
-            interpretable_rc.clone(),
-            ldata.body.clone(),
-            only_inline,
+            Rc::new(EvalData {
+                prog_args: combined_args.clone(),
+                env: interpretable_rc.clone(),
+                body: ldata.body.clone(),
+                only_inline,
+            })
         )?;
 
         let new_capture_args =
@@ -1313,23 +1345,19 @@ impl<'info> Evaluator {
         &self,
         allocator: &mut Allocator, // Support random prims via clvm_rs
         visited: &'info mut VisitedMarker<'_, VisitedInfo>,
-        prog_args: Rc<SExp>,
-        env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
-        body: Rc<BodyForm>,
-        only_inline: bool,
+        eval_data: Rc<EvalData>,
     ) -> Result<Rc<BodyForm>, CompileErr> {
         let mut result = None;
+        let mut eval_stack = vec![eval_data];
 
         loop {
+            let eval_data = eval_stack[eval_stack.len()-1].clone();
             match result {
                 None => {
                     result = Some(self.shrink_bodyform_visited_main(
                         allocator,
                         visited,
-                        prog_args.clone(),
-                        env.clone(),
-                        body.clone(),
-                        only_inline,
+                        eval_data.clone(),
                     )?);
                 }
                 Some(EvalResult::Body(b)) => {
@@ -1349,41 +1377,42 @@ impl<'info> Evaluator {
         &self,
         allocator: &mut Allocator, // Support random prims via clvm_rs
         visited_: &'info mut VisitedMarker<'_, VisitedInfo>,
-        prog_args: Rc<SExp>,
-        env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
-        body: Rc<BodyForm>,
-        only_inline: bool,
+        eval_data: Rc<EvalData>,
     ) -> Result<EvalResult, CompileErr> {
-        let mut visited = VisitedMarker::again(body.loc(), visited_)?;
-        match body.borrow() {
+        let mut visited = VisitedMarker::again(eval_data.body.loc(), visited_)?;
+        match eval_data.body.borrow() {
             BodyForm::Let(LetFormKind::Parallel, letdata) => {
-                if eval_dont_expand_let(&letdata.inline_hint) && only_inline {
-                    return Ok(EvalResult::Body(body.clone()));
+                if eval_dont_expand_let(&letdata.inline_hint) && eval_data.only_inline {
+                    return Ok(EvalResult::Body(eval_data.body.clone()));
                 }
 
-                let updated_bindings = update_parallel_bindings(env, &letdata.bindings);
+                let updated_bindings = update_parallel_bindings(eval_data.env.clone(), &letdata.bindings);
                 self.shrink_bodyform_visited_main(
                     allocator,
                     &mut visited,
-                    prog_args,
-                    Rc::new(updated_bindings),
-                    letdata.body.clone(),
-                    only_inline,
+                    Rc::new(EvalData {
+                        prog_args: eval_data.prog_args.clone(),
+                        env: Rc::new(updated_bindings),
+                        body: letdata.body.clone(),
+                        only_inline: eval_data.only_inline,
+                    })
                 )
             }
             BodyForm::Let(LetFormKind::Sequential, letdata) => {
-                if eval_dont_expand_let(&letdata.inline_hint) && only_inline {
-                    return Ok(EvalResult::Body(body.clone()));
+                if eval_dont_expand_let(&letdata.inline_hint) && eval_data.only_inline {
+                    return Ok(EvalResult::Body(eval_data.body.clone()));
                 }
 
                 if letdata.bindings.is_empty() {
                     self.shrink_bodyform_visited_main(
                         allocator,
                         &mut visited,
-                        prog_args,
-                        env,
-                        letdata.body.clone(),
-                        only_inline,
+                        Rc::new(EvalData {
+                            prog_args: eval_data.prog_args.clone(),
+                            env: eval_data.env.clone(),
+                            body: letdata.body.clone(),
+                            only_inline: eval_data.only_inline,
+                        })
                     )
                 } else {
                     let first_binding_as_list: Vec<Rc<Binding>> =
@@ -1391,60 +1420,68 @@ impl<'info> Evaluator {
                     let rest_of_bindings: Vec<Rc<Binding>> =
                         letdata.bindings.iter().skip(1).cloned().collect();
 
-                    let updated_bindings = update_parallel_bindings(env, &first_binding_as_list);
+                    let updated_bindings = update_parallel_bindings(eval_data.env.clone(), &first_binding_as_list);
                     self.shrink_bodyform_visited_main(
                         allocator,
                         &mut visited,
-                        prog_args,
-                        Rc::new(updated_bindings),
-                        Rc::new(BodyForm::Let(
-                            LetFormKind::Sequential,
-                            Box::new(LetData {
-                                bindings: rest_of_bindings,
-                                ..*letdata.clone()
-                            }),
-                        )),
-                        only_inline,
+                        Rc::new(EvalData {
+                            prog_args: eval_data.prog_args.clone(),
+                            env: Rc::new(updated_bindings),
+                            body: Rc::new(BodyForm::Let(
+                                LetFormKind::Sequential,
+                                Box::new(LetData {
+                                    bindings: rest_of_bindings,
+                                    ..*letdata.clone()
+                                }),
+                            )),
+                            only_inline: eval_data.only_inline,
+                        })
                     )
                 }
             }
             BodyForm::Let(LetFormKind::Assign, letdata) => {
-                if eval_dont_expand_let(&letdata.inline_hint) && only_inline {
-                    return Ok(EvalResult::Body(body.clone()));
+                if eval_dont_expand_let(&letdata.inline_hint) && eval_data.only_inline {
+                    return Ok(EvalResult::Body(eval_data.body.clone()));
                 }
 
                 self.shrink_bodyform_visited_main(
                     allocator,
                     &mut visited,
-                    prog_args,
-                    env,
-                    Rc::new(hoist_assign_form(letdata)?),
-                    only_inline,
+                    Rc::new(EvalData {
+                        prog_args: eval_data.prog_args.clone(),
+                        env: eval_data.env.clone(),
+                        body: Rc::new(hoist_assign_form(letdata)?),
+                        only_inline: eval_data.only_inline,
+                    })
                 )
             }
-            BodyForm::Quoted(_) => Ok(EvalResult::Body(body.clone())),
+            BodyForm::Quoted(_) => Ok(EvalResult::Body(eval_data.body.clone())),
             BodyForm::Value(SExp::Atom(l, name)) => {
                 if name == &"@".as_bytes().to_vec() {
-                    let literal_args = synthesize_args(prog_args.clone(), env.clone())?;
+                    let literal_args = synthesize_args(eval_data.prog_args.clone(), eval_data.env.clone())?;
                     self.shrink_bodyform_visited_main(
                         allocator,
                         &mut visited,
-                        prog_args,
-                        env,
-                        literal_args,
-                        only_inline,
+                        Rc::new(EvalData {
+                            prog_args: eval_data.prog_args.clone(),
+                            env: eval_data.env.clone(),
+                            body: literal_args,
+                            only_inline: eval_data.only_inline,
+                        })
                     )
                 } else if let Some(function) = self.get_function(name) {
                     self.shrink_bodyform_visited_main(
                         allocator,
                         &mut visited,
-                        prog_args,
-                        env,
-                        self.create_mod_for_fun(l, function.borrow()),
-                        only_inline,
+                        Rc::new(EvalData {
+                            prog_args: eval_data.prog_args.clone(),
+                            env: eval_data.env.clone(),
+                            body: self.create_mod_for_fun(l, function.borrow()),
+                            only_inline: eval_data.only_inline,
+                        })
                     )
                 } else {
-                    env.get(name)
+                    eval_data.env.get(name)
                         .map(|x| {
                             if reflex_capture(name, x.clone()) {
                                 Ok(EvalResult::Body(x.clone()))
@@ -1452,10 +1489,12 @@ impl<'info> Evaluator {
                                 self.shrink_bodyform_visited_main(
                                     allocator,
                                     &mut visited,
-                                    prog_args.clone(),
-                                    env.clone(),
-                                    x.clone(),
-                                    only_inline,
+                                    Rc::new(EvalData {
+                                        prog_args: eval_data.prog_args.clone(),
+                                        env: eval_data.env.clone(),
+                                        body: x.clone(),
+                                        only_inline: eval_data.only_inline,
+                                    })
                                 )
                             }
                         })
@@ -1465,10 +1504,12 @@ impl<'info> Evaluator {
                                     self.shrink_bodyform_visited_main(
                                         allocator,
                                         &mut visited,
-                                        prog_args.clone(),
-                                        env,
-                                        x,
-                                        only_inline,
+                                        Rc::new(EvalData {
+                                            prog_args: eval_data.prog_args.clone(),
+                                            env: eval_data.env.clone(),
+                                            body: x,
+                                            only_inline: eval_data.only_inline,
+                                        })
                                     )
                                 })
                                 .unwrap_or_else(|| {
@@ -1501,13 +1542,13 @@ impl<'info> Evaluator {
                             loc: l.clone(),
                             name: call_name,
                             args: parts,
-                            original: body.clone(),
+                            original: eval_data.body.clone(),
                             tail: tail.clone(),
                         },
-                        prog_args,
+                        eval_data.prog_args.clone(),
                         &arguments_to_convert,
-                        env,
-                        only_inline,
+                        eval_data.env.clone(),
+                        eval_data.only_inline,
                     ).map(|r| EvalResult::Body(r)),
                     BodyForm::Value(SExp::Integer(_call_loc, call_int)) => self.handle_invoke(
                         allocator,
@@ -1516,13 +1557,13 @@ impl<'info> Evaluator {
                             loc: l.clone(),
                             name: &u8_from_number(call_int.clone()),
                             args: parts,
-                            original: body.clone(),
+                            original: eval_data.body.clone(),
                             tail: None,
                         },
-                        prog_args,
+                        eval_data.prog_args.clone(),
                         &arguments_to_convert,
-                        env,
-                        only_inline,
+                        eval_data.env.clone(),
+                        eval_data.only_inline,
                     ).map(|r| EvalResult::Body(r)),
                     _ => Err(CompileErr(
                         l.clone(),
@@ -1548,10 +1589,10 @@ impl<'info> Evaluator {
             BodyForm::Lambda(ldata) => self.enrich_lambda_site_info(
                 allocator,
                 &mut visited,
-                prog_args,
-                env,
+                eval_data.prog_args.clone(),
+                eval_data.env.clone(),
                 ldata,
-                only_inline,
+                eval_data.only_inline,
             ).map(|r| EvalResult::Body(r)),
         }
     }
@@ -1588,10 +1629,12 @@ impl<'info> Evaluator {
         self.shrink_bodyform_visited(
             allocator, // Support random prims via clvm_rs
             &mut visited_marker,
-            prog_args,
-            env,
-            body,
-            only_inline,
+            Rc::new(EvalData {
+                prog_args,
+                env,
+                body,
+                only_inline,
+            })
         )
     }
 
