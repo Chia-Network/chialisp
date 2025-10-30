@@ -1,4 +1,4 @@
-use std::borrow::Borrow;
+use std::borrow::{Borrow, BorrowMut};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -32,16 +32,41 @@ pub trait Process {
     fn run(&self) -> Result<EvalResult, CompileErr>;
 }
 
-pub enum EvalResult {
-    Body(Rc<BodyForm>),
+#[derive(Debug)]
+pub struct Call {
+    loc: Srcloc,
+    name: Vec<u8>,
+    tail: Option<Rc<BodyForm>>,
+    processed_tail: Option<Rc<BodyForm>>,
+    args: Vec<Rc<BodyForm>>,
+    processed_args: Vec<Rc<BodyForm>>,
+    original: Rc<BodyForm>,
 }
 
-#[derive(Clone)]
+#[derive(Debug)]
+pub enum EvalResult {
+    Body(Rc<BodyForm>),
+    Process(Rc<EvalData>),
+    Call(Call, Rc<EvalData>),
+    Invoke(Call, Rc<EvalData>),
+}
+
+#[derive(Clone, Debug)]
 pub struct EvalData {
     prog_args: Rc<SExp>,
     env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
     body: Rc<BodyForm>,
     only_inline: bool
+}
+
+impl EvalData {
+    fn with_body_or_env(&self, new_body: Option<Rc<BodyForm>>, new_env: Option<Rc<HashMap<Vec<u8>, Rc<BodyForm>>>>) -> EvalData {
+        EvalData {
+            env: new_env.unwrap_or_else(|| self.env.clone()),
+            body: new_body.unwrap_or_else(|| self.body.clone()),
+            .. self.clone()
+        }
+    }
 }
 
 // Stack depth checker.
@@ -903,7 +928,7 @@ impl<'info> Evaluator {
         only_inline: bool,
     ) -> Result<Rc<BodyForm>, CompileErr> {
         let mut all_primitive = true;
-        let mut target_vec: Vec<Rc<BodyForm>> = call.args.to_owned();
+        let mut target_vec: Vec<Rc<BodyForm>> = call.args.to_vec();
         let mut visited = VisitedMarker::again(call.loc.clone(), visited_)?;
 
         if call.name == "@".as_bytes() {
@@ -940,20 +965,21 @@ impl<'info> Evaluator {
                     // Reduce all arguments.
                     let mut converted_args = SExp::Nil(call.loc.clone());
 
-                    for i_reverse in 0..arguments_to_convert.len() {
-                        let i = arguments_to_convert.len() - i_reverse - 1;
+                    eprintln!("args to convert {arguments_to_convert:?}");
+                    for (i, element) in arguments_to_convert.iter().enumerate().skip(1).rev() {
                         let shrunk = self.shrink_bodyform_visited(
                             allocator,
                             &mut visited,
                             Rc::new(EvalData {
                                 prog_args: prog_args.clone(),
                                 env: env.clone(),
-                                body: arguments_to_convert[i].clone(),
+                                body: element.clone(),
                                 only_inline,
                             })
                         )?;
 
-                        target_vec[i + 1] = shrunk.clone();
+                        eprintln!("shrunk {shrunk:?}");
+                        target_vec[i] = shrunk.clone();
 
                         if !arg_inputs_primitive(Rc::new(ArgInputs::Whole(shrunk.clone()))) {
                             all_primitive = false;
@@ -1147,10 +1173,12 @@ impl<'info> Evaluator {
         visited: &'_ mut VisitedMarker<'info, VisitedInfo>,
         call: &CallSpec,
         prog_args: Rc<SExp>,
+        arguments: &[Rc<BodyForm>],
         arguments_to_convert: &[Rc<BodyForm>],
+        translated_tail: Option<Rc<BodyForm>>,
         env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
         only_inline: bool,
-    ) -> Result<Rc<BodyForm>, CompileErr> {
+    ) -> Result<EvalResult, CompileErr> {
         let helper = select_helper(&self.helpers, call.name);
         match helper {
             Some(HelperForm::Defmacro(mac)) => {
@@ -1169,63 +1197,26 @@ impl<'info> Evaluator {
                     prog_args,
                     arguments_to_convert,
                     env,
-                )
+                ).map(|r| EvalResult::Body(r))
             }
             Some(HelperForm::Defun(inline, defun)) => {
                 if !inline && only_inline {
-                    return Ok(call.original.clone());
+                    return Ok(EvalResult::Body(call.original.clone()));
                 }
 
-                let translated_tail = if let Some(t) = call.tail.as_ref() {
-                    Some(self.shrink_bodyform_visited(
-                        allocator,
-                        visited,
-                        Rc::new(EvalData {
-                            prog_args: prog_args.clone(),
-                            env: env.clone(),
-                            body: t.clone(),
-                            only_inline,
-                        })
-                    )?)
-                } else {
-                    None
-                };
-
-                let argument_captures_untranslated = build_argument_captures(
+                let argument_captures = build_argument_captures(
                     &call.loc.clone(),
                     arguments_to_convert,
                     translated_tail.clone(),
                     defun.args.clone(),
                 )?;
 
-                let mut argument_captures = HashMap::new();
-                // Do this to protect against misalignment
-                // between argument vec and destructuring.
-                for kv in argument_captures_untranslated.iter() {
-                    let shrunk = self.shrink_bodyform_visited(
-                        allocator,
-                        visited,
-                        Rc::new(EvalData {
-                            prog_args: prog_args.clone(),
-                            env: env.clone(),
-                            body: kv.1.clone(),
-                            only_inline,
-                        })
-                    )?;
-
-                    argument_captures.insert(kv.0.clone(), shrunk.clone());
-                }
-
-                self.shrink_bodyform_visited(
-                    allocator,
-                    visited,
-                    Rc::new(EvalData {
-                        prog_args: defun.args.clone(),
-                        env: Rc::new(argument_captures),
-                        body: defun.body,
-                        only_inline,
-                    })
-                )
+                Ok(EvalResult::Process(Rc::new(EvalData {
+                    prog_args: defun.args.clone(),
+                    env: Rc::new(argument_captures),
+                    body: defun.body,
+                    only_inline,
+                })))
             }
             _ => self
                 .invoke_primitive(
@@ -1237,7 +1228,8 @@ impl<'info> Evaluator {
                     env,
                     only_inline,
                 )
-                .and_then(|res| self.chase_apply(allocator, visited, res)),
+                .and_then(|res| self.chase_apply(allocator, visited, res))
+                .map(|r| EvalResult::Body(r)),
         }
     }
 
@@ -1347,27 +1339,126 @@ impl<'info> Evaluator {
         visited: &'info mut VisitedMarker<'_, VisitedInfo>,
         eval_data: Rc<EvalData>,
     ) -> Result<Rc<BodyForm>, CompileErr> {
-        let mut result = None;
-        let mut eval_stack = vec![eval_data];
+        let mut result_stack = vec![EvalResult::Process(eval_data.clone())];
+
+        let choose_call_target = |call: &Call| -> Option<Rc<BodyForm>> {
+            if let Some(t) = call.tail.as_ref() {
+                if call.processed_tail.is_none() {
+                    return Some(t.clone());
+                }
+            }
+
+            if call.processed_args.len() >= call.args.len() {
+                return None;
+            }
+
+            Some(call.args[call.processed_args.len()].clone())
+        };
+
+        let handle_call = |result_stack: &mut Vec<EvalResult>, call: Call, eval_data: Rc<EvalData>| -> Result<(), CompileErr> {
+            if let Some(t) = choose_call_target(&call) {
+                result_stack.push(EvalResult::Call(call, eval_data.clone()));
+                result_stack.push(EvalResult::Process(
+                    Rc::new(eval_data.with_body_or_env(Some(t.clone()), None)),
+                ));
+            } else {
+                result_stack.push(EvalResult::Invoke(
+                    call,
+                    eval_data.clone(),
+                ));
+            }
+
+            Ok(())
+        };
 
         loop {
-            let eval_data = eval_stack[eval_stack.len()-1].clone();
+            let result = result_stack.pop();
+            eprintln!("result {result:?} {result_stack:?}");
             match result {
                 None => {
-                    result = Some(self.shrink_bodyform_visited_main(
-                        allocator,
-                        visited,
-                        eval_data.clone(),
-                    )?);
+                    return Err(CompileErr(eval_data.body.loc(), "empty eval stack".to_string()));
                 }
                 Some(EvalResult::Body(b)) => {
-                    return Ok(b.clone());
+                    match result_stack.pop() {
+                        None => {
+                            return Ok(b.clone());
+                        }
+                        Some(EvalResult::Body(_)) => {
+                            return Err(CompileErr(b.loc(), "can't collapse concrete value".to_string()));
+                        }
+                        Some(EvalResult::Process(_)) => {
+                            result_stack.push(EvalResult::Body(b));
+                        }
+                        Some(EvalResult::Call(mut call, eval_data)) => {
+                            let need_tail = call.tail.is_some() && call.processed_tail.is_none();
+                            let need_arg = call.processed_args.len() < call.args.len();
+                            if need_tail || need_arg {
+                                if need_tail {
+                                    call.processed_tail = Some(b.clone());
+                                } else if need_arg {
+                                    call.processed_args.push(b.clone());
+                                }
+                            }
+
+                            if call.processed_args.len() < call.args.len() {
+                                let new_arg = call.args[call.processed_args.len()].clone();
+                                result_stack.push(EvalResult::Call(call, eval_data.clone()));
+                                result_stack.push(EvalResult::Process(Rc::new(eval_data.with_body_or_env(Some(new_arg), None))));
+                            } else {
+                                result_stack.push(EvalResult::Invoke(call, eval_data.clone()));
+                            }
+                        }
+                        Some(EvalResult::Invoke(call, eval_data)) => {
+                            result_stack.push(self.handle_invoke(
+                                allocator,
+                                visited,
+                                &CallSpec {
+                                    args: &call.args,
+                                    name: &call.name,
+                                    loc: call.loc.clone(),
+                                    original: call.original.clone(),
+                                    tail: call.tail.clone(),
+                                },
+                                eval_data.prog_args.clone(),
+                                &call.processed_args,
+                                &call.args,
+                                call.processed_tail.clone(),
+                                eval_data.env.clone(),
+                                eval_data.only_inline
+                            )?);
+                        }
+                    }
                 }
-                /*
-                Some(EvalResult::MoreProcessing(p)) => {
-                    result = p.run();
+                Some(EvalResult::Call(call, eval_data)) => {
+                    handle_call(&mut result_stack, call, eval_data.clone())?;
                 }
-                */
+                Some(EvalResult::Invoke(call, eval_data)) => {
+                    eprintln!("invoke {:?} {:?}", call.args, call.processed_args);
+                    result_stack.push(self.handle_invoke(
+                        allocator,
+                        visited,
+                        &CallSpec {
+                            loc: call.loc.clone(),
+                            name: &call.name,
+                            args: &call.args,
+                            original: call.original.clone(),
+                            tail: call.tail.clone(),
+                        },
+                        eval_data.prog_args.clone(),
+                        &call.args,
+                        &call.processed_args,
+                        call.processed_tail.clone(),
+                        eval_data.env.clone(),
+                        eval_data.only_inline,
+                    )?);
+                }
+                Some(EvalResult::Process(eval_data)) => {
+                    result_stack.push(self.shrink_bodyform_visited_main(
+                        allocator,
+                        visited,
+                        eval_data.clone()
+                    )?);
+                }
             }
         }
     }
@@ -1531,40 +1622,34 @@ impl<'info> Evaluator {
                 }
 
                 let head_expr = parts[0].clone();
-                let arguments_to_convert: Vec<Rc<BodyForm>> =
-                    parts.iter().skip(1).cloned().collect();
+
+                eprintln!("call parts {parts:?}");
 
                 match head_expr.borrow() {
-                    BodyForm::Value(SExp::Atom(_call_loc, call_name)) => self.handle_invoke(
-                        allocator,
-                        &mut visited,
-                        &CallSpec {
+                    BodyForm::Value(SExp::Atom(_call_loc, call_name)) => Ok(EvalResult::Call(
+                        Call {
                             loc: l.clone(),
-                            name: call_name,
-                            args: parts,
-                            original: eval_data.body.clone(),
+                            name: call_name.clone(),
                             tail: tail.clone(),
-                        },
-                        eval_data.prog_args.clone(),
-                        &arguments_to_convert,
-                        eval_data.env.clone(),
-                        eval_data.only_inline,
-                    ).map(|r| EvalResult::Body(r)),
-                    BodyForm::Value(SExp::Integer(_call_loc, call_int)) => self.handle_invoke(
-                        allocator,
-                        &mut visited,
-                        &CallSpec {
-                            loc: l.clone(),
-                            name: &u8_from_number(call_int.clone()),
-                            args: parts,
+                            processed_tail: None,
+                            args: parts.clone(),
+                            processed_args: vec![parts[0].clone()],
                             original: eval_data.body.clone(),
-                            tail: None,
                         },
-                        eval_data.prog_args.clone(),
-                        &arguments_to_convert,
-                        eval_data.env.clone(),
-                        eval_data.only_inline,
-                    ).map(|r| EvalResult::Body(r)),
+                        eval_data.clone(),
+                    )),
+                    BodyForm::Value(SExp::Integer(_call_loc, call_int)) => Ok(EvalResult::Call(
+                        Call {
+                            loc: l.clone(),
+                            name: u8_from_number(call_int.clone()),
+                            tail: None,
+                            processed_tail: None,
+                            args: parts.clone(),
+                            processed_args: vec![parts[0].clone()],
+                            original: eval_data.body.clone(),
+                        },
+                        eval_data.clone()
+                    )),
                     _ => Err(CompileErr(
                         l.clone(),
                         format!("Don't know how to call {}", head_expr.to_sexp()),
