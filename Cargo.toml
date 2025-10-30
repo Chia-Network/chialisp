@@ -39,7 +39,7 @@ lfsr = { version = "0.3.0", optional = true }
 chia-bls = "0.32.0"
 
 [dependencies.pyo3]
-version = "0.24.1"
+version = "0.27.1"
 features = ["abi3-py39", "extension-module"]
 optional = true
 
