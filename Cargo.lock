@@ -70,9 +70,9 @@ dependencies = [
 
 [[package]]
 name = "blst"
-version = "0.3.14"
+version = "0.3.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47c79a94619fade3c0b887670333513a67ac28a6a7e653eb260bf0d4103db38d"
+checksum = "dcdb4c7013139a150f9fc55d123186dbfaba0d912817466282c73ac49e71fb45"
 dependencies = [
  "cc",
  "glob",
@@ -116,13 +116,13 @@ dependencies = [
 
 [[package]]
 name = "chia-bls"
-version = "0.30.0"
+version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a74b1699d07115c71c081826608e3fb73f2aed94f9060fa09d074a95cfc93ab"
+checksum = "b274e851a75b5e97d2f1ac42344e5a9a5a40ecbbb1865657a14dc6c7beb57f5a"
 dependencies = [
  "blst",
- "chia-sha2 0.30.0",
- "chia-traits 0.30.0",
+ "chia-sha2 0.32.0",
+ "chia-traits 0.32.0",
  "hex",
  "hkdf",
  "linked-hash-map",
@@ -141,9 +141,9 @@ dependencies = [
 
 [[package]]
 name = "chia-sha2"
-version = "0.30.0"
+version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4114775b95f24b296047dc9c91e43834aa651c7c25bb2bbae05d23d79c9c777b"
+checksum = "1d79f137b6120136fd6b0225a9b3eac1b120dabdbb58605f4f4722d25bcceba9"
 dependencies = [
  "sha2",
 ]
@@ -161,12 +161,12 @@ dependencies = [
 
 [[package]]
 name = "chia-traits"
-version = "0.30.0"
+version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "143545b13658929fce2e770a499fd4755f04a4d5f6459dc76a79068ae192a8c5"
+checksum = "8760b99d823a3d45eca6697f2322d9bfe11acc6a5a75a87fd4456d73b928ff2f"
 dependencies = [
- "chia-sha2 0.30.0",
- "chia_streamable_macro 0.30.0",
+ "chia-sha2 0.32.0",
+ "chia_streamable_macro 0.32.0",
  "thiserror",
 ]
 
@@ -184,9 +184,9 @@ dependencies = [
 
 [[package]]
 name = "chia_streamable_macro"
-version = "0.30.0"
+version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25bd4fbc3f05375c267ee4cb2a4a1bf8125fa0d817e57d7b141993c35994c751"
+checksum = "dea0d3978e7d176e75225a312ef3e70fd404cefcdc46465bee243e8b99c6a617"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2 1.0.95",
@@ -199,7 +199,7 @@ name = "chialisp"
 version = "0.4.1"
 dependencies = [
  "binascii",
- "chia-bls 0.30.0",
+ "chia-bls 0.32.0",
  "clvmr",
  "do-notation",
  "getrandom 0.2.15",
