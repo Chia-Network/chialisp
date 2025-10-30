@@ -59,7 +59,7 @@ default = []
 
 [target.'cfg(target_family="wasm")'.dependencies]
 wasm-bindgen = { version = "0.2.100", features = ["serde-serialize"] }
-js-sys = "0.3.58"
+js-sys = "0.3.82"
 getrandom = { version = "0.2", features = ["js"] }
 
 [target.'cfg(not(target_family="wasm"))'.dependencies]
