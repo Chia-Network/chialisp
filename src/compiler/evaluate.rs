@@ -965,7 +965,6 @@ impl<'info> Evaluator {
                     // Reduce all arguments.
                     let mut converted_args = SExp::Nil(call.loc.clone());
 
-                    eprintln!("args to convert {arguments_to_convert:?}");
                     for (i, element) in arguments_to_convert.iter().enumerate().skip(1).rev() {
                         let shrunk = self.shrink_bodyform_visited(
                             allocator,
@@ -978,7 +977,6 @@ impl<'info> Evaluator {
                             })
                         )?;
 
-                        eprintln!("shrunk {shrunk:?}");
                         target_vec[i] = shrunk.clone();
 
                         if !arg_inputs_primitive(Rc::new(ArgInputs::Whole(shrunk.clone()))) {
@@ -1206,7 +1204,7 @@ impl<'info> Evaluator {
 
                 let argument_captures = build_argument_captures(
                     &call.loc.clone(),
-                    arguments_to_convert,
+                    &arguments[1..],
                     translated_tail.clone(),
                     defun.args.clone(),
                 )?;
@@ -1373,7 +1371,6 @@ impl<'info> Evaluator {
 
         loop {
             let result = result_stack.pop();
-            eprintln!("result {result:?} {result_stack:?}");
             match result {
                 None => {
                     return Err(CompileErr(eval_data.body.loc(), "empty eval stack".to_string()));
@@ -1433,7 +1430,6 @@ impl<'info> Evaluator {
                     handle_call(&mut result_stack, call, eval_data.clone())?;
                 }
                 Some(EvalResult::Invoke(call, eval_data)) => {
-                    eprintln!("invoke {:?} {:?}", call.args, call.processed_args);
                     result_stack.push(self.handle_invoke(
                         allocator,
                         visited,
@@ -1622,8 +1618,6 @@ impl<'info> Evaluator {
                 }
 
                 let head_expr = parts[0].clone();
-
-                eprintln!("call parts {parts:?}");
 
                 match head_expr.borrow() {
                     BodyForm::Value(SExp::Atom(_call_loc, call_name)) => Ok(EvalResult::Call(
