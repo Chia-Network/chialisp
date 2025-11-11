@@ -316,5 +316,6 @@ impl Drop for CompileContextWrapper<'_> {
 #[derive(Debug, Clone)]
 pub struct StartOfCodegenOptimization {
     program: CompileForm,
+    allowed: Vec<Rc<SExp>>,
     code_generator: PrimaryCodegen,
 }

@@ -161,7 +161,6 @@ fn compute_env_shape(
 
             let extra_env_data_strings: Vec<String> =
                 extra_env_data.iter().map(|e| e.to_string()).collect();
-            eprintln!("extra_env_data_strings {extra_env_data_strings:?}");
             let extra_env_tree =
                 make_env_tree(&sp.env.loc(), &extra_env_data, 0, extra_env_data.len());
             if let SExp::Cons(l, all_env, _) = sp.env.borrow() {
@@ -179,7 +178,6 @@ fn compute_env_shape(
         }
         Some(ModulePhase::CommonPhase) => {
             let car = compute_code_shape(l.clone(), helpers);
-            eprintln!("about to compute env shape with helpers: {car}");
             let res = SExp::Cons(
                 l.clone(),
                 Rc::new(SExp::Cons(
@@ -189,7 +187,6 @@ fn compute_env_shape(
                 )),
                 args,
             );
-            eprintln!("common phase computed shape {car}");
             res
         }
         Some(ModulePhase::CommonConstant(env)) => {
@@ -1617,11 +1614,8 @@ fn decide_constant_generation_order(
     let mut exp = Rc::new(BodyForm::Quoted(SExp::Nil(loc.clone())));
 
     for h in helpers.iter() {
-        eprintln!("decide_constant_generation_order {}", h.to_sexp());
-
         let do_include = match h {
             HelperForm::Defconstant(dc) => {
-                eprintln!("{:?} {}", dc.kind, decode_string(&dc.name));
                 matches!(dc.kind, ConstantKind::Module(false))
             }
             HelperForm::Defun(false, _) => true,
@@ -2295,6 +2289,7 @@ fn do_start_codegen_optimization_and_dead_code_elimination(
         let program = newly_optimized_start.program;
         start_of_codegen_optimization = StartOfCodegenOptimization {
             program: program.clone(),
+            allowed: start_of_codegen_optimization.allowed.clone(),
             code_generator: dummy_functions(&start_codegen(context, opts.clone(), program)?)?,
         };
     }
@@ -2339,8 +2334,15 @@ pub fn codegen(
     opts: Rc<dyn CompilerOpts>,
     cmod: &CompileForm,
 ) -> Result<SExp, CompileErr> {
+    let allowed =
+        if let Some(ModulePhase::StandalonePhase(sp)) = opts.module_phase() {
+            collect_env_names(sp.env.clone())
+        } else {
+            vec![]
+        };
     let mut start_of_codegen_optimization = StartOfCodegenOptimization {
         program: cmod.clone(),
+        allowed,
         code_generator: dummy_functions(&start_codegen(context, opts.clone(), cmod.clone())?)?,
     };
 

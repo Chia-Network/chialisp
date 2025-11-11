@@ -120,21 +120,32 @@ impl Optimization for Strategy23 {
             .iter()
             .map(|h| {
                 if let HelperForm::Defun(inline, defun) = h {
-                    let new_body = optimize_expr(
-                        allocator,
-                        opts.clone(),
-                        runner.clone(),
-                        &to_optimize.code_generator,
-                        defun.body.clone(),
-                    )
-                    .map(|x| x.1)
-                    .unwrap_or_else(|| defun.body.clone());
+                    let new_body =
+                        if to_optimize.allowed.is_empty() || to_optimize.allowed.iter().any(|v| {
+                            if let SExp::Atom(_, n) = v.borrow() {
+                                *n == defun.name
+                            } else {
+                                false
+                            }
+                        }) {
+                            optimize_expr(
+                                allocator,
+                                opts.clone(),
+                                runner.clone(),
+                                &to_optimize.code_generator,
+                                defun.body.clone(),
+                            )
+                            .map(|x| x.1)
+                            .unwrap_or_else(|| defun.body.clone())
+                        } else {
+                            defun.body.clone()
+                        };
                     HelperForm::Defun(
                         *inline,
                         Box::new(DefunData {
                             body: new_body,
                             ..*defun.clone()
-                        }),
+                        })
                     )
                 } else {
                     h.clone()
