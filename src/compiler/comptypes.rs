@@ -887,6 +887,7 @@ pub enum ModulePhase {
     CommonPhase,
     CommonConstant(SExp),
     StandalonePhase(StandalonePhaseInfo),
+    Optimization(HashSet<Vec<u8>>),
 }
 
 impl Debug for ModulePhase {
@@ -895,6 +896,7 @@ impl Debug for ModulePhase {
             ModulePhase::CommonPhase => write!(formatter, "CommonPhase"),
             ModulePhase::CommonConstant(env) => write!(formatter, "CommonConstant({env})"),
             ModulePhase::StandalonePhase(sp) => write!(formatter, "StandalonePhase({sp:?})"),
+            ModulePhase::Optimization(path) => write!(formatter, "Optimization({path:?}"),
         }
     }
 }

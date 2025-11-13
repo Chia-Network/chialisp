@@ -11,7 +11,7 @@ pub mod strategy;
 use num_bigint::ToBigInt;
 
 use std::borrow::Borrow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use clvm_rs::allocator::Allocator;
@@ -35,6 +35,10 @@ use crate::compiler::evaluate::{
 };
 use crate::compiler::optimize::above22::Strategy23;
 use crate::compiler::optimize::strategy::ExistingStrategy;
+use crate::compiler::optimize::depgraph::{
+    DepgraphOptions,
+    FunctionDependencyGraph
+};
 use crate::compiler::runtypes::RunFailure;
 #[cfg(test)]
 use crate::compiler::sexp::parse_sexp;
@@ -42,6 +46,7 @@ use crate::compiler::sexp::{AtomValue, NodeSel, SExp, SelectNode, ThisNode};
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::CompileContextWrapper;
 use crate::compiler::StartOfCodegenOptimization;
+use crate::compiler::Indent;
 use crate::util::u8_from_number;
 
 const CONST_FOLD_LIMIT: usize = 10000000;
@@ -268,6 +273,8 @@ fn constant_fun_result(
     compiler: &PrimaryCodegen,
     call_spec: &CallSpec,
 ) -> Option<Rc<BodyForm>> {
+    let indent = Indent::default();
+    eprintln!("{indent}constant_fun_result {}", call_spec.original.to_sexp());
     if let Some(res) = opts.dialect().stepping {
         if res >= 23 {
             let mut constant = true;
@@ -299,7 +306,12 @@ fn constant_fun_result(
             }
 
             let compiled_body = {
-                let to_compile = CompileForm {
+                eprintln!("{indent}constant_fun_result get compiled_body");
+                // Filter helpers to just things that are directly depended on
+                // by this function.  Nothing else is needed.  Any constant
+                // observation of functions in the tree is handled at the
+                // module phase layer.
+                let mut to_compile = CompileForm {
                     loc: call_spec.loc.clone(),
                     include_forms: Vec::new(),
                     helpers: compiler.original_helpers.clone(),
@@ -322,6 +334,21 @@ fn constant_fun_result(
                         None,
                     )),
                 };
+                let depgraph = FunctionDependencyGraph::new_with_options(
+                    &to_compile,
+                    DepgraphOptions {
+                        with_constants: true,
+                    },
+                );
+                let mut depended_on = HashSet::default();
+                depgraph.get_full_depends_on(
+                    &mut depended_on,
+                    &call_spec.name,
+                );
+                to_compile.helpers =
+                    compiler.original_helpers.iter().filter(|h| {
+                       depended_on.contains(h.name())
+                    }).cloned().collect();
                 let optimizer = if let Ok(res) = get_optimizer(&call_spec.loc, opts.clone()) {
                     res
                 } else {
@@ -337,14 +364,18 @@ fn constant_fun_result(
                     optimizer,
                     &mut includes,
                 );
+                eprintln!("{indent}do codegen of program {}", to_compile.to_sexp());
                 if let Ok(code) = codegen(&mut wrapper.context, opts.clone(), &to_compile) {
+                    eprintln!("{indent}generated code {code}");
                     code
                 } else {
+                    eprintln!("{indent}no improved generation");
                     return None;
                 }
             };
 
             // Reified args reflect the actual ABI shape with a tail if any.
+            eprintln!("{indent}reified_args");
             let mut reified_args = if let Some((_, t)) = optimized_tail {
                 if let Ok(res) = dequote(call_spec.loc.clone(), t) {
                     res
@@ -354,6 +385,7 @@ fn constant_fun_result(
             } else {
                 Rc::new(SExp::Nil(call_spec.loc.clone()))
             };
+            eprintln!("{indent}optimized_args");
             for (_, v) in optimized_args.iter().rev() {
                 let unquoted = if let Ok(res) = dequote(call_spec.loc.clone(), v.clone()) {
                     res
@@ -362,6 +394,7 @@ fn constant_fun_result(
                 };
                 reified_args = Rc::new(SExp::Cons(call_spec.loc.clone(), unquoted, reified_args));
             }
+            eprintln!("{indent}return new call...");
             let borrowed_args: &SExp = reified_args.borrow();
             let new_body = BodyForm::Call(
                 call_spec.loc.clone(),
@@ -375,6 +408,7 @@ fn constant_fun_result(
                 None,
             );
 
+            eprintln!("{indent}return new call... {}", new_body.to_sexp());
             return Some(Rc::new(new_body));
         }
     }

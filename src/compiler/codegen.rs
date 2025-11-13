@@ -31,6 +31,8 @@ use crate::compiler::StartOfCodegenOptimization;
 use crate::compiler::{BasicCompileContext, CompileContextWrapper};
 use crate::util::{toposort, u8_from_number, Number, TopoSortItem};
 
+use crate::compiler::Indent;
+
 const MACRO_TIME_LIMIT: usize = 1000000;
 pub const CONST_EVAL_LIMIT: usize = 1000000;
 const CONSTANT_GENERATIONS_ALLOWED: usize = 50;
@@ -176,7 +178,7 @@ fn compute_env_shape(
             eprintln!("Weird env {} trying to add {extra_env_tree}", sp.env);
             todo!();
         }
-        Some(ModulePhase::CommonPhase) => {
+        Some(ModulePhase::CommonPhase) | Some(ModulePhase::Optimization(_)) => {
             let car = compute_code_shape(l.clone(), helpers);
             let res = SExp::Cons(
                 l.clone(),
@@ -372,9 +374,10 @@ fn create_name_lookup(
     // it integrates with the rest of the program it lives in.
     as_variable: bool,
 ) -> Result<Rc<SExp>, CompileErr> {
+    let indent = Indent::default();
     if let Some(ModulePhase::StandalonePhase(sp)) = opts.module_phase() {
         eprintln!(
-            "lookup {} with standalone env {}",
+            "{indent}lookup {} with standalone env {}",
             sp.env,
             decode_string(name)
         );
@@ -421,6 +424,8 @@ pub fn get_callable(
     l: Srcloc,
     atom: Rc<SExp>,
 ) -> Result<Callable, CompileErr> {
+    let indent = Indent::default();
+    eprintln!("{indent}get_callable {atom}");
     match atom.borrow() {
         SExp::Atom(l, name) => {
             let macro_def = compiler.macros.get(name);
@@ -617,6 +622,8 @@ fn compile_call(
     compiler: &PrimaryCodegen,
     call: &RawCallSpec,
 ) -> Result<CompiledCode, CompileErr> {
+    let indent = Indent::default();
+    eprintln!("{indent}compile_call {}", call.original.to_sexp());
     let arg_string_list: Vec<Vec<u8>> = call
         .args
         .iter()
@@ -1798,13 +1805,14 @@ fn generate_complex_constant_body(
     h: &HelperForm,
     defc: &DefconstData,
 ) -> Result<PrimaryCodegen, CompileErr> {
+    let indent = Indent::default();
     eprintln!(
-        "evaluate code for constant {}: {}",
+        "{indent}evaluate code for constant {}: {}",
         decode_string(&defc.name),
         defc.body.to_sexp()
     );
     if matches!(code_generator.module_phase, Some(ModulePhase::CommonPhase)) {
-        eprintln!("module constant env {}", code_generator.env);
+        eprintln!("{indent}module constant env {}", code_generator.env);
         let env_borrow: &SExp = code_generator.env.borrow();
         let new_phase = Some(ModulePhase::CommonConstant(env_borrow.clone()));
         return generate_module_constant_body(
@@ -1836,10 +1844,10 @@ fn generate_complex_constant_body(
     if let BodyForm::Quoted(q) = constant_result.borrow() {
         let res = Rc::new(q.clone());
         if defc.tabled {
-            eprintln!("add_tabled_constant {} = {res}", decode_string(&defc.name));
+            eprintln!("{indent}add_tabled_constant {} = {res}", decode_string(&defc.name));
             Ok(code_generator.add_tabled_constant(&defc.name, res))
         } else {
-            eprintln!("add_constant {} = {res}", decode_string(&defc.name));
+            eprintln!("{indent}add_constant {} = {res}", decode_string(&defc.name));
             let quoted = primquote(defc.loc.clone(), res);
             Ok(code_generator.add_constant(&defc.name, Rc::new(quoted)))
         }
@@ -1847,7 +1855,7 @@ fn generate_complex_constant_body(
         Err(CompileErr(
             defc.loc.clone(),
             format!(
-                "constant definition didn't reduce to constant value {}, got {}",
+                "{indent}constant definition didn't reduce to constant value {}, got {}",
                 h.to_sexp(),
                 constant_result.to_sexp()
             ),
@@ -2259,12 +2267,14 @@ fn do_start_codegen_optimization_and_dead_code_elimination(
     opts: Rc<dyn CompilerOpts>,
     mut start_of_codegen_optimization: StartOfCodegenOptimization,
 ) -> Result<StartOfCodegenOptimization, CompileErr> {
+    let indent = Indent::default();
     // This is a tree-shaking loop.  It results in the minimum number of emitted
     // helpers in the environment by taking only those still alive after each
     // optimization pass.  If a function is constant at all call sites, then
     // then the function will be constant reduced and won't appear when we do
     // the live calculation again, which can also remove the last reference to
     // other helpers.
+    eprintln!("{indent}optimization loop start");
     loop {
         // We should not modify the environment if we're here on behalf of a
         // function in a program, only the toplevel program itself.
@@ -2289,10 +2299,10 @@ fn do_start_codegen_optimization_and_dead_code_elimination(
         let program = newly_optimized_start.program;
         start_of_codegen_optimization = StartOfCodegenOptimization {
             program: program.clone(),
-            allowed: start_of_codegen_optimization.allowed.clone(),
             code_generator: dummy_functions(&start_codegen(context, opts.clone(), program)?)?,
         };
     }
+    eprintln!("{indent}optimization loop end");
 
     Ok(start_of_codegen_optimization)
 }
@@ -2334,18 +2344,13 @@ pub fn codegen(
     opts: Rc<dyn CompilerOpts>,
     cmod: &CompileForm,
 ) -> Result<SExp, CompileErr> {
-    let allowed =
-        if let Some(ModulePhase::StandalonePhase(sp)) = opts.module_phase() {
-            collect_env_names(sp.env.clone())
-        } else {
-            vec![]
-        };
+    let indent = Indent::default();
     let mut start_of_codegen_optimization = StartOfCodegenOptimization {
         program: cmod.clone(),
-        allowed,
         code_generator: dummy_functions(&start_codegen(context, opts.clone(), cmod.clone())?)?,
     };
 
+    eprintln!("{indent}codegen for {}", cmod.to_sexp());
     start_of_codegen_optimization = do_start_codegen_optimization_and_dead_code_elimination(
         context,
         opts.clone(),
@@ -2359,7 +2364,7 @@ pub fn codegen(
     if !opts.in_defun() && matches!(code_generator.module_phase, Some(ModulePhase::CommonPhase)) {
         // Process defuns first in case they're needed.
         for h in to_process.iter() {
-            eprintln!("generate function (first time) {}", decode_string(h.name()));
+            eprintln!("{indent}generate function (first time) {}", decode_string(h.name()));
             if let HelperForm::Defun(_, _) = h {
                 already_processed.insert(h.name().to_vec());
                 code_generator = codegen_(context, opts.clone(), &code_generator, h, true)?;
@@ -2371,7 +2376,7 @@ pub fn codegen(
         let final_env = finalize_env(context, opts.clone(), &code_generator)?;
         code_generator.final_env = final_env.clone();
 
-        eprintln!("common phase");
+        eprintln!("{indent}common phase");
         let generation_order = decide_constant_generation_order(
             &cmod.loc,
             &code_generator,
@@ -2388,7 +2393,7 @@ pub fn codegen(
         // the environment shape so if function bodies or computations that depend on
         // them are captured, they've been computed.
         for h in generation_order.iter() {
-            eprintln!("generate constant {}", h.to_sexp());
+            eprintln!("{indent}generate constant {}", h.to_sexp());
             already_processed.insert(h.name().to_vec());
             code_generator = codegen_(context, opts.clone(), &code_generator, h, true)?;
         }
@@ -2399,7 +2404,7 @@ pub fn codegen(
             continue;
         }
 
-        eprintln!("generate normal helper {}", decode_string(f.name()));
+        eprintln!("{indent}generate normal helper {}", decode_string(f.name()));
         code_generator = codegen_(context, opts.clone(), &code_generator, f, false)?;
     }
 
@@ -2522,7 +2527,7 @@ pub fn codegen(
     };
 
     eprintln!(
-        "code generation {:?} {:?}",
+        "{indent}code generation {:?} {:?}",
         opts.in_defun(),
         opts.module_phase()
     );
@@ -2533,10 +2538,10 @@ pub fn codegen(
         )),
         (true, _, Some(code)) => Ok(normal_produce_code(code)),
         (_, None, Some(code)) => Ok(normal_produce_code(code)),
-        (false, Some(ModulePhase::CommonPhase), Some(code)) => {
+        (false, Some(ModulePhase::CommonPhase), Some(code)) | (false, Some(ModulePhase::Optimization(_)), Some(code)) => {
             // Produce a triple of env shape, env, output code
-            eprintln!("common phase env {}", c.env);
-            eprintln!("final_env {}", c.final_env);
+            eprintln!("{indent}common phase env {}", c.env);
+            eprintln!("{indent}final_env {}", c.final_env);
             Ok(SExp::Cons(
                 c.env.loc(),
                 c.env.clone(),

@@ -40,6 +40,9 @@ use std::collections::HashMap;
 use std::mem::swap;
 use std::rc::Rc;
 
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic;
+
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 use crate::compiler::comptypes::{
     BodyForm, CompileErr, CompileForm, CompilerOpts, DefunData, HelperForm, IncludeDesc,
@@ -47,6 +50,10 @@ use crate::compiler::comptypes::{
 };
 use crate::compiler::optimize::Optimization;
 use crate::compiler::sexp::SExp;
+
+lazy_static! {
+    pub static ref INDENT: AtomicUsize = AtomicUsize::new(0);
+}
 
 /// An object which represents the standard set of mutable items passed down the
 /// stack when compiling chialisp.
@@ -316,6 +323,32 @@ impl Drop for CompileContextWrapper<'_> {
 #[derive(Debug, Clone)]
 pub struct StartOfCodegenOptimization {
     program: CompileForm,
-    allowed: Vec<Rc<SExp>>,
     code_generator: PrimaryCodegen,
+}
+
+struct Indent {
+    indent: usize
+}
+
+impl Default for Indent {
+    fn default() -> Indent {
+        let indent = INDENT.fetch_add(1, atomic::Ordering::SeqCst);
+        Indent { indent }
+    }
+}
+
+impl Drop for Indent {
+    fn drop(&mut self) {
+        INDENT.fetch_sub(1, atomic::Ordering::SeqCst);
+    }
+}
+
+impl std::fmt::Display for Indent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        for i in 0..self.indent {
+            formatter.write_str(" ")?;
+        }
+
+        Ok(())
+    }
 }

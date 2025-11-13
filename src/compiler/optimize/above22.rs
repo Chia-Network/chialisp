@@ -22,6 +22,7 @@ use crate::compiler::optimize::{
 };
 use crate::compiler::sexp::SExp;
 use crate::compiler::StartOfCodegenOptimization;
+use crate::compiler::Indent;
 
 /// Captures the strategy for cl23 and above.
 /// Until formally released, we can take action in here.
@@ -37,6 +38,10 @@ fn enable_cse_merge_fix_so_can_be_disabled_for_tests(opts: Rc<dyn CompilerOpts>)
 
 #[cfg(not(any(test, feature = "fuzz")))]
 fn enable_cse_merge_fix_so_can_be_disabled_for_tests(_opts: Rc<dyn CompilerOpts>) -> bool {
+    true
+}
+
+fn get_can_optimize(opts: Rc<dyn CompilerOpts>, name: &[u8]) -> bool {
     true
 }
 
@@ -114,20 +119,17 @@ impl Optimization for Strategy23 {
         opts: Rc<dyn CompilerOpts>,
         mut to_optimize: StartOfCodegenOptimization,
     ) -> Result<StartOfCodegenOptimization, CompileErr> {
+        let indent = Indent::default();
         let new_helpers: Vec<HelperForm> = to_optimize
             .program
             .helpers
+            .clone()
             .iter()
             .map(|h| {
+                eprintln!("{indent}optimize helper {}", h.to_sexp());
                 if let HelperForm::Defun(inline, defun) = h {
                     let new_body =
-                        if to_optimize.allowed.is_empty() || to_optimize.allowed.iter().any(|v| {
-                            if let SExp::Atom(_, n) = v.borrow() {
-                                *n == defun.name
-                            } else {
-                                false
-                            }
-                        }) {
+                        if get_can_optimize(opts.clone(), &defun.name) {
                             optimize_expr(
                                 allocator,
                                 opts.clone(),
