@@ -111,7 +111,7 @@ fn namespace_helper(name: &ImportLongName, value: &HelperForm) -> HelperFormResu
     }
 }
 
-pub fn tour_helpers(helpers: &[HelperForm]) -> TourNamespaces {
+pub fn tour_helpers(helpers: &[HelperForm]) -> TourNamespaces<'_> {
     TourNamespaces {
         helpers,
         look_stack: vec![FindNamespaceLookingAtHelpers {

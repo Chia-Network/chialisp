@@ -11,7 +11,7 @@ pub mod strategy;
 use num_bigint::ToBigInt;
 
 use std::borrow::Borrow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use clvm_rs::allocator::Allocator;
@@ -35,6 +35,10 @@ use crate::compiler::evaluate::{
 };
 use crate::compiler::optimize::above22::Strategy23;
 use crate::compiler::optimize::strategy::ExistingStrategy;
+use crate::compiler::optimize::depgraph::{
+    DepgraphOptions,
+    FunctionDependencyGraph
+};
 use crate::compiler::runtypes::RunFailure;
 #[cfg(test)]
 use crate::compiler::sexp::parse_sexp;
@@ -299,7 +303,11 @@ fn constant_fun_result(
             }
 
             let compiled_body = {
-                let to_compile = CompileForm {
+                // Filter helpers to just things that are directly depended on
+                // by this function.  Nothing else is needed.  Any constant
+                // observation of functions in the tree is handled at the
+                // module phase layer.
+                let mut to_compile = CompileForm {
                     loc: call_spec.loc.clone(),
                     include_forms: Vec::new(),
                     helpers: compiler.original_helpers.clone(),
@@ -322,6 +330,21 @@ fn constant_fun_result(
                         None,
                     )),
                 };
+                let depgraph = FunctionDependencyGraph::new_with_options(
+                    &to_compile,
+                    DepgraphOptions {
+                        with_constants: true,
+                    },
+                );
+                let mut depended_on = HashSet::default();
+                depgraph.get_full_depends_on(
+                    &mut depended_on,
+                    &call_spec.name,
+                );
+                to_compile.helpers =
+                    compiler.original_helpers.iter().filter(|h| {
+                       depended_on.contains(h.name())
+                    }).cloned().collect();
                 let optimizer = if let Ok(res) = get_optimizer(&call_spec.loc, opts.clone()) {
                     res
                 } else {
