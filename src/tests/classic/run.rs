@@ -2621,3 +2621,30 @@ fn test_keccak_opversion() {
     ]);
     assert_eq!(program.trim(), "FAIL: unimplemented operator 62");
 }
+
+#[test]
+fn test_reproduce_variable_repr_bug_deinline() {
+    let source_program = "(mod (A) (include *standard-cl-24*) (defun F (X Y Z)
+    (assign Q X R Q (list R Y Z))) (F &rest A))";
+
+    let compile = |p: &str| do_basic_run(&vec!["run".to_string(), p.to_string()]);
+
+    let mut output = compile(&source_program);
+    // Produce the same program 30 times.  Demonstrates that this program didn't
+    // produce a stable output (otherwise we wouldn't know the bug was fixed).
+    let mut different = false;
+    for _ in 0..30 {
+        different |= output != compile(&source_program);
+    }
+
+    assert!(different);
+
+    // Bump sigil
+    let new_program = &source_program.replace("cl-24", "cl-25");
+
+    let mut output = compile(&new_program);
+    // Produce the same program 30 times.  The output should not be unstable.
+    for _ in 0..30 {
+        assert_eq!(output, compile(&new_program));
+    }
+}
