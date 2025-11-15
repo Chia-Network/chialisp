@@ -30,7 +30,7 @@ tempfile = "3.22.0"
 clvmr = { version = "0.16.2", features = ["pre-eval"] }
 binascii = "0.1.4"
 yaml-rust2 = "0.10.3"
-hashlink = "0.10.0"
+hashlink = "0.11.0"
 serde = { version = "1.0", features = ["derive", "rc"] }
 regex = "1.11.2"
 rand = { version = "0.9.2", optional = true }
