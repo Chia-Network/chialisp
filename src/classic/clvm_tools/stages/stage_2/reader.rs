@@ -1,8 +1,8 @@
 use std::fs;
 use std::rc::Rc;
 
+use clvm_rs::error::EvalErr;
 use clvmr::allocator::{Allocator, NodePtr, SExp};
-use clvmr::reduction::EvalErr;
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, Stream, UnvalidatedBytesFromType};
 use crate::classic::clvm::serialize::{sexp_from_stream, SimpleCreateCLVMObject};
@@ -32,7 +32,7 @@ pub fn convert_hex_to_sexp(
     let content_bytes = Bytes::new_validated(Some(UnvalidatedBytesFromType::Hex(decode_string(
         file_data,
     ))))
-    .map_err(|e| EvalErr(NodePtr::NIL, e.to_string()))?;
+    .map_err(|e| EvalErr::InternalError(NodePtr::NIL, e.to_string()))?;
     let mut reader_stream = Stream::new(Some(content_bytes));
     Ok(sexp_from_stream(
         allocator,
@@ -57,7 +57,9 @@ pub fn read_file(
     let full_path = full_path_for_filename(parent_sexp, filename, &search_paths)?;
 
     fs::read(full_path.clone())
-        .map_err(|x| EvalErr(parent_sexp, format!("error reading {full_path}: {x:?}")))
+        .map_err(|x| {
+            EvalErr::InternalError(parent_sexp, format!("error reading {full_path}: {x:?}"))
+        })
         .map(|data| PresentFile {
             data,
             full_path,
@@ -84,7 +86,7 @@ pub fn process_embed_file(
     let rest_of_decl = rest(allocator, declaration_sexp)?;
     if let Some(l) = proper_list(allocator, rest_of_decl, true) {
         if l.len() != 3 {
-            return Err(EvalErr(
+            return Err(EvalErr::InternalError(
                 declaration_sexp,
                 "must have a type and a name".to_string(),
             ));
@@ -128,18 +130,21 @@ pub fn process_embed_file(
                 )?;
                 assemble(allocator, &decode_string(&file.data))?
             } else {
-                return Err(EvalErr(declaration_sexp, "no such embed kind".to_string()));
+                return Err(EvalErr::InternalError(
+                    declaration_sexp,
+                    "no such embed kind".to_string(),
+                ));
             };
 
             Ok((name_buf.to_vec(), quote(allocator, file_data)?))
         } else {
-            Err(EvalErr(
+            Err(EvalErr::InternalError(
                 declaration_sexp,
                 "malformed embed-file".to_string(),
             ))
         }
     } else {
-        Err(EvalErr(
+        Err(EvalErr::InternalError(
             declaration_sexp,
             "must be a proper list".to_string(),
         ))

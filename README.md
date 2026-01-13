@@ -1,49 +1,49 @@
-clvm_tools_rs
+chialisp
 =
-![GitHub](https://img.shields.io/github/license/Chia-Network/clvm_tools_rs?logo=Github)
-[![Coverage Status](https://coveralls.io/repos/github/Chia-Network/clvm_tools_rs/badge.svg?branch=base)](https://coveralls.io/github/Chia-Network/clvm_tools_rs?branch=base)
-![Build Crate](https://github.com/Chia-Network/clvm_tools_rs/actions/workflows/build-crate.yml/badge.svg)
-![Build Wheels](https://github.com/Chia-Network/clvm_tools_rs/actions/workflows/build-test.yml/badge.svg)
+![GitHub](https://img.shields.io/github/license/Chia-Network/chialisp?logo=Github)
+[![Coverage Status](https://coveralls.io/repos/github/Chia-Network/chialisp/badge.svg?branch=base)](https://coveralls.io/github/Chia-Network/clvm_tools_rs?branch=base)
+![Build Crate](https://github.com/Chia-Network/chialisp/actions/workflows/build-crate.yml/badge.svg)
+![Build Wheels](https://github.com/Chia-Network/chialisp/actions/workflows/build-test.yml/badge.svg)
 
-![PyPI](https://img.shields.io/pypi/v/clvm_tools_rs?logo=pypi)
-[![Crates.io](https://img.shields.io/crates/v/clvm_tools_rs.svg)](https://crates.io/crates/clvm_tools_rs)
+![PyPI](https://img.shields.io/pypi/v/chialisp?logo=pypi)
+[![Crates.io](https://img.shields.io/crates/v/chialisp.svg)](https://crates.io/crates/clvm_tools_rs)
 
 Theory of operation of the modern compiler: ./HOW_CHIALISP_IS_COMPILED.md
 -
 This repo can be installed via cargo
 
-    cargo install clvm_tools_rs
+    cargo install chialisp
 
 or via pip
 
-    pip install clvm_tools_rs@git+https://github.com/Chia-Network/clvm_tools_rs.git@e17412032aa7d3b8b1d1f931893fb5802eee626a
+    pip install chialisp@git+https://github.com/Chia-Network/clvm_tools_rs.git@e17412032aa7d3b8b1d1f931893fb5802eee626a
 
 Note: `pip` installs a subset of the tools installed by `cargo`, including `brun`, `run`, `opc` and `opd`.
 
 
 The most current version of the language is in the nightly branch:
 
-    [nightly](https://github.com/Chia-Network/clvm_tools_rs/tree/nightly)
+    [nightly](https://github.com/Chia-Network/chialisp/tree/nightly)
 
 To install from a specific branch:
 
-    cargo install --no-default-features --git 'https://github.com/Chia-Network/clvm_tools_rs' --branch nightly
+    cargo install --no-default-features --git 'https://github.com/Chia-Network/chialisp' --branch nightly
     
 To install a git checkout into your current python environment (must be in some kind of venv or conda environment):
 
-    git clone https://github.com/Chia-Network/clvm_tools_rs
-    cd clvm_tools_rs
+    git clone https://github.com/Chia-Network/chialisp
+    cd chialisp
     maturin develop
 
 Install from PYPI:
 
-    pip install -i https://pypi.chia.net/nightlies/ clvm_tools_rs
+    pip install -i https://pypi.chia.net/nightlies/ chialisp
     
 Most people still compile chialisp via python.  One way to set up compilation
 in that way is like this:
 
     import json
-    from clvm_tools_rs import compile_clvm
+    from chialisp import compile_clvm
 
     def compile_module_with_symbols(include_paths,source):
         path_obj = Path(source)

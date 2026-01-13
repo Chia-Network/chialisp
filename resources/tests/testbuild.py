@@ -3,7 +3,7 @@ from pathlib import Path
 import binascii
 import json
 from clvm_tools.binutils import assemble, disassemble
-from clvm_tools_rs import start_clvm_program, compose_run_function, compile_clvm
+from chialisp import start_clvm_program, compose_run_function, compile_clvm
 from chia_rs import run_chia_program, tree_hash
 
 def compute_output_file_names(source):

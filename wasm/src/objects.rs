@@ -8,17 +8,18 @@ use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
-use clvm_tools_rs::classic::clvm::__type_compatibility__::{
+use chialisp::classic::clvm::__type_compatibility__::{
     bi_one, Bytes, Stream, UnvalidatedBytesFromType,
 };
-use clvm_tools_rs::classic::clvm::serialize::{
+use chialisp::classic::clvm::serialize::{
     sexp_from_stream, sexp_to_stream, SimpleCreateCLVMObject,
 };
-use clvm_tools_rs::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
-use clvm_tools_rs::compiler::clvm::{convert_from_clvm_rs, convert_to_clvm_rs, sha256tree};
-use clvm_tools_rs::compiler::prims::{primapply, primcons, primquote};
-use clvm_tools_rs::compiler::sexp::SExp;
-use clvm_tools_rs::compiler::srcloc::Srcloc;
+use chialisp::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
+use chialisp::compiler::clvm::{convert_from_clvm_rs, convert_to_clvm_rs, sha256tree};
+use chialisp::compiler::prims::{primapply, primcons, primquote};
+use chialisp::compiler::sexp::SExp;
+use chialisp::compiler::srcloc::Srcloc;
+use clvmr::error::EvalErr;
 use clvmr::Allocator;
 
 use crate::api::{create_clvm_runner_err, get_next_id};
@@ -647,8 +648,11 @@ impl Program {
         let run_result = runner
             .run_program(&mut allocator, prog_classic, arg_classic, None)
             .map_err(|e| {
-                let err_str: &str = &e.1;
-                let err: JsValue = JsString::from(err_str).into();
+                let err_str = match e {
+                    EvalErr::InternalError(_, e) => e.to_string(),
+                    _ => e.to_string(),
+                };
+                let err: JsValue = JsString::from(err_str.as_str()).into();
                 err
             })?;
         let modern_result = convert_from_clvm_rs(&mut allocator, get_srcloc(), run_result.1)

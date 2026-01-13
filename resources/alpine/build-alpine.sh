@@ -1,7 +1,7 @@
 #!/bin/sh
 
 . $HOME/.cargo/env
-cd /root/clvm_tools_rs
+cd /root/chialisp
 python3 -m venv venv
 source ./venv/bin/activate
 pip install maturin[patchelf]

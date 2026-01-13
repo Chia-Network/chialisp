@@ -9,10 +9,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::str::FromStr;
 
-use clvm_tools_rs::classic::clvm::__type_compatibility__::{bi_zero, Bytes, BytesFromType};
-use clvm_tools_rs::compiler::sexp::SExp;
-use clvm_tools_rs::compiler::srcloc::{Srcloc, Until};
-use clvm_tools_rs::util::Number;
+use chialisp::classic::clvm::__type_compatibility__::{bi_zero, Bytes, BytesFromType};
+use chialisp::compiler::sexp::SExp;
+use chialisp::compiler::srcloc::{Srcloc, Until};
+use chialisp::util::Number;
 
 use wasm_bindgen::prelude::*;
 
@@ -244,7 +244,7 @@ pub fn read_string_to_string_map(
                 result.insert(key, val);
             }
             _ => {
-                return Err(format!("key {} wasn't string", key));
+                return Err(format!("key {key} wasn't string"));
             }
         }
     }

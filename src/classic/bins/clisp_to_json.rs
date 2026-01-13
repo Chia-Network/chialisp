@@ -3,12 +3,12 @@ extern crate clvmr as clvm_rs;
 use std::env;
 use std::rc::Rc;
 
-use clvm_tools_rs::compiler::compiler::DefaultCompilerOpts;
-use clvm_tools_rs::compiler::frontend::frontend;
-use clvm_tools_rs::compiler::sexp::parse_sexp;
-use clvm_tools_rs::compiler::srcloc::Srcloc;
+use chialisp::compiler::compiler::DefaultCompilerOpts;
+use chialisp::compiler::frontend::frontend;
+use chialisp::compiler::sexp::parse_sexp;
+use chialisp::compiler::srcloc::Srcloc;
 
-use clvm_tools_rs::util::ErrInto;
+use chialisp::util::ErrInto;
 
 fn main() {
     let opts = Rc::new(DefaultCompilerOpts::new("*program*"));

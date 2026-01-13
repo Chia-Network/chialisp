@@ -1,4 +1,4 @@
-# clvm_tools_rs Changelog
+# chialisp Changelog
 
 ## 0.1.42
 ### Fixed

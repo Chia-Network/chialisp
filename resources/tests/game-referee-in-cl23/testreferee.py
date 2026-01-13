@@ -6,7 +6,7 @@ from pathlib import Path
 from clvm.casts import int_to_bytes, int_from_bytes
 
 from clvm_rs import Program
-from clvm_tools_rs import compile_clvm
+from chialisp import compile_clvm
 from clvm_tools.binutils import disassemble
 
 from clvm.EvalError import EvalError

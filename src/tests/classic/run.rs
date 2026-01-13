@@ -2231,7 +2231,7 @@ fn test_secp256k1_verify_modern_fail() {
     ])
     .trim()
     .to_string();
-    assert!(output.starts_with("FAIL: secp256k1_verify failed"));
+    assert!(output.starts_with("FAIL: Secp256 Verify Error: failed"));
 }
 
 #[test]
@@ -2259,7 +2259,7 @@ fn test_secp256k1_verify_classic_fail() {
     ])
     .trim()
     .to_string();
-    assert!(output.starts_with("FAIL: secp256k1_verify failed"));
+    assert!(output.starts_with("FAIL: Secp256 Verify Error: failed"));
 }
 
 #[test]
@@ -2288,7 +2288,7 @@ fn test_secp256k1_verify_modern_int_fail() {
     ])
     .trim()
     .to_string();
-    assert!(output.starts_with("FAIL: secp256k1_verify failed"));
+    assert!(output.starts_with("FAIL: Secp256 Verify Error: failed"));
 }
 
 #[test]
@@ -2316,7 +2316,7 @@ fn test_secp256r1_verify_modern_fail() {
     ])
     .trim()
     .to_string();
-    assert!(output.starts_with("FAIL: secp256r1_verify failed"));
+    assert!(output.starts_with("FAIL: Secp256 Verify Error: failed"));
 }
 
 #[test]
@@ -2344,7 +2344,7 @@ fn test_secp256r1_verify_classic_fail() {
     ])
     .trim()
     .to_string();
-    assert!(output.starts_with("FAIL: secp256r1_verify failed"));
+    assert!(output.starts_with("FAIL: Secp256 Verify Error: failed"));
 }
 
 #[test]
@@ -2677,4 +2677,37 @@ fn test_big_operator_list() {
         .trim()
         .to_string();
     assert_eq!(result, target_output);
+}
+
+const KECCAK_TEST_SIG: &str = "\"baz(uint32,bool)\"";
+const KECCAK_TEST_RESULT: &str =
+    "0xcdcd77c0992ec5bbfc459984220f8c45084cc24d9b6efed1fae540db8de801d2";
+
+#[test]
+fn test_keccak_compilation() {
+    for p in [
+        "(mod X (keccak256 X))",
+        "(mod X (include *standard-cl-24*) (keccak256 X))",
+    ]
+    .iter()
+    {
+        let program = do_basic_run(&vec!["run".to_string(), p.to_string()]);
+        let result = do_basic_brun(&vec![
+            "brun".to_string(),
+            program,
+            KECCAK_TEST_SIG.to_string(),
+        ]);
+        assert_eq!(result.trim(), KECCAK_TEST_RESULT,);
+    }
+}
+
+#[test]
+fn test_keccak_opversion() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "--operators-version".to_string(),
+        "1".to_string(),
+        "(mod () (keccak256 999))".to_string(),
+    ]);
+    assert_eq!(program.trim(), "FAIL: unimplemented operator 62");
 }

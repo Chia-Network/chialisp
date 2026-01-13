@@ -12,6 +12,10 @@ on:
     branches:
       - '**'
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   build_crate:
     name: Crate
@@ -20,7 +24,7 @@ jobs:
       fail-fast: false
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:
         fetch-depth: 0
 
@@ -56,11 +60,15 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: crate
-        path: ./target/package/clvm_tools_rs-*.crate
+        path: ./target/package/chialisp-*.crate
+
+    - uses: rust-lang/crates-io-auth-action@v1
+      if: startsWith(github.event.ref, 'refs/tags')
+      id: auth
 
     # this has not been tested, so probably needs to be debugged next time a tag is created
     - name: publish to crates.io if tagged
       if: startsWith(github.event.ref, 'refs/tags')
       env:
-        CARGO_REGISTRY_TOKEN: ${{ secrets.cargo_registry_token }}
+        CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
       run: cargo publish

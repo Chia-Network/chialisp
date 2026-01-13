@@ -7,12 +7,14 @@ use std::rc::Rc;
 use clvm_rs::allocator;
 use clvm_rs::allocator::{Allocator, NodePtr};
 
+use clvm_rs::error::EvalErr;
 use num_bigint::ToBigInt;
 
 use sha2::Digest;
 use sha2::Sha256;
 
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
+use crate::classic::clvm::OPERATORS_LATEST_VERSION;
 use crate::classic::clvm_tools::stages::stage_0::{RunProgramOption, TRunProgram};
 
 use crate::compiler::prims;
@@ -404,14 +406,20 @@ fn apply_op(
             converted_app,
             converted_args,
             Some(RunProgramOption {
-                new_operators: true,
+                operators_version: OPERATORS_LATEST_VERSION,
                 ..RunProgramOption::default()
             }),
         )
         .map_err(|e| {
             RunFailure::RunErr(
                 head.loc(),
-                format!("{} in {application} {wrapped_args}", e.1),
+                format!(
+                    "{} in {application} {wrapped_args}",
+                    match e {
+                        EvalErr::InternalError(_, e) => e.to_string(),
+                        _ => e.to_string(),
+                    }
+                ),
             )
         })
         .and_then(|v| convert_from_clvm_rs(allocator, head.loc(), v.1))

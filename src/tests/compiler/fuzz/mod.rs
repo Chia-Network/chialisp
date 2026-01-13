@@ -50,7 +50,7 @@ pub struct TestModuleCompilerOpts {
 impl TestModuleCompilerOpts {
     pub fn new(opts: Rc<dyn CompilerOpts>) -> Self {
         TestModuleCompilerOpts {
-            opts: opts,
+            opts,
             // Future use.
             // written_files: Rc::new(RefCell::new(HashMap::new())),
         }

@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 import json
-from clvm_tools_rs import start_clvm_program, compose_run_function
+from chialisp import start_clvm_program, compose_run_function
 
 def do_nothing(p):
     pass

@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
-use clvm_rs::reduction::EvalErr;
+use clvm_rs::error::EvalErr;
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, Record, Stream};
 use crate::classic::clvm::OPERATORS_LATEST_VERSION;
@@ -158,6 +158,6 @@ pub fn assemble(allocator: &mut Allocator, s: &str) -> Result<NodePtr, EvalErr> 
     let mut reader = IRReader::new(stream);
     reader
         .read_expr()
-        .map_err(|e| EvalErr(NodePtr::NIL, e.to_string()))
+        .map_err(|e| EvalErr::InternalError(NodePtr::NIL, e.to_string()))
         .and_then(|ir| assemble_from_ir(allocator, Rc::new(ir)))
 }

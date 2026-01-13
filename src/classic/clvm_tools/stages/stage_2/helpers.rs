@@ -1,5 +1,5 @@
 use clvm_rs::allocator::{Allocator, NodePtr};
-use clvm_rs::reduction::EvalErr;
+use clvm_rs::error::EvalErr;
 
 use crate::classic::clvm::sexp::enlist;
 use crate::classic::clvm_tools::node_path::NodePath;

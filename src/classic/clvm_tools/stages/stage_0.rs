@@ -1,24 +1,26 @@
 use clvm_rs::allocator::{Allocator, NodePtr};
-use clvm_rs::chia_dialect::{ChiaDialect, NO_UNKNOWN_OPS};
+use clvm_rs::chia_dialect::{ChiaDialect, ENABLE_KECCAK_OPS_OUTSIDE_GUARD, NO_UNKNOWN_OPS};
 use clvm_rs::core_ops::{op_cons, op_eq, op_first, op_if, op_listp, op_raise, op_rest};
 use clvm_rs::cost::Cost;
 use clvm_rs::dialect::{Dialect, OperatorSet};
-use clvm_rs::err_utils::err;
+use clvm_rs::error::EvalErr;
 use clvm_rs::more_ops::{
     op_add, op_all, op_any, op_ash, op_concat, op_div, op_divmod, op_gr, op_gr_bytes, op_logand,
     op_logior, op_lognot, op_logxor, op_lsh, op_multiply, op_not, op_point_add, op_pubkey_for_exp,
     op_sha256, op_strlen, op_substr, op_subtract, op_unknown,
 };
-use clvm_rs::reduction::{EvalErr, Reduction, Response};
+use clvm_rs::reduction::{Reduction, Response};
 
 use clvm_rs::run_program::{run_program_with_pre_eval, PreEval};
+
+use crate::classic::clvm::OPERATORS_LATEST_VERSION;
 
 #[derive(Default)]
 pub struct RunProgramOption {
     pub max_cost: Option<Cost>,
     pub pre_eval_f: Option<PreEval>,
     pub strict: bool,
-    pub new_operators: bool,
+    pub operators_version: usize,
 }
 
 pub trait TRunProgram {
@@ -64,7 +66,10 @@ fn unknown_operator(
     max_cost: Cost,
 ) -> Response {
     if (flags & NO_UNKNOWN_OPS) != 0 {
-        err(o, "unimplemented operator")
+        Err(EvalErr::InternalError(
+            o,
+            "unimplemented operator".to_string(),
+        ))
     } else {
         op_unknown(allocator, o, args, max_cost)
     }
@@ -174,26 +179,36 @@ impl TRunProgram for DefaultProgramRunner {
         option: Option<RunProgramOption>,
     ) -> Response {
         let max_cost = option.as_ref().and_then(|o| o.max_cost).unwrap_or(0);
-        let new_operators = option.as_ref().map(|o| o.new_operators).unwrap_or_default();
+        let operators_version = option
+            .as_ref()
+            .map(|o| o.operators_version)
+            .unwrap_or(OPERATORS_LATEST_VERSION);
 
-        if new_operators {
-            run_program_with_pre_eval_dialect(
-                allocator,
-                &ChiaDialect::new(NO_UNKNOWN_OPS),
-                program,
-                args,
-                max_cost,
-                option.and_then(|o| o.pre_eval_f),
-            )
-        } else {
-            run_program_with_pre_eval_dialect(
+        match operators_version {
+            0 => run_program_with_pre_eval_dialect(
                 allocator,
                 &OriginalDialect::new(NO_UNKNOWN_OPS),
                 program,
                 args,
                 max_cost,
                 option.and_then(|o| o.pre_eval_f),
-            )
+            ),
+            1 => run_program_with_pre_eval_dialect(
+                allocator,
+                &ChiaDialect::new(NO_UNKNOWN_OPS),
+                program,
+                args,
+                max_cost,
+                option.and_then(|o| o.pre_eval_f),
+            ),
+            _ => run_program_with_pre_eval_dialect(
+                allocator,
+                &ChiaDialect::new(NO_UNKNOWN_OPS | ENABLE_KECCAK_OPS_OUTSIDE_GUARD),
+                program,
+                args,
+                max_cost,
+                option.and_then(|o| o.pre_eval_f),
+            ),
         }
     }
 }

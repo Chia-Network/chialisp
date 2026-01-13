@@ -3,11 +3,12 @@ use std::collections::HashMap;
 use std::mem::swap;
 use std::rc::Rc;
 
+use clvm_rs::error::EvalErr;
 use num_bigint::ToBigInt;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::cost::Cost;
-use clvm_rs::reduction::{EvalErr, Reduction, Response};
+use clvm_rs::reduction::{Reduction, Response};
 
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
 use crate::classic::clvm::sexp::{
@@ -309,9 +310,9 @@ pub fn var_change_optimizer_cons_eval(
     match match_sexp(allocator, pattern, r, HashMap::new()).as_ref() {
         None => Ok(r),
         Some(t1) => {
-            let original_args = t1
-                .get("args")
-                .ok_or_else(|| EvalErr(r, "bad pattern match on args".to_string()))?;
+            let original_args = t1.get("args").ok_or_else(|| {
+                EvalErr::InternalError(r, "bad pattern match on args".to_string())
+            })?;
 
             if DIAG_OPTIMIZATIONS {
                 println!(
@@ -319,9 +320,9 @@ pub fn var_change_optimizer_cons_eval(
                     disassemble(allocator, *original_args, None)
                 );
             };
-            let original_call = t1
-                .get("sexp")
-                .ok_or_else(|| EvalErr(r, "bad pattern match on sexp".to_string()))?;
+            let original_call = t1.get("sexp").ok_or_else(|| {
+                EvalErr::InternalError(r, "bad pattern match on sexp".to_string())
+            })?;
 
             if DIAG_OPTIMIZATIONS {
                 println!(
@@ -386,7 +387,7 @@ pub fn var_change_optimizer_cons_eval(
                                     _ => 0,
                                 };
 
-                                Ok(acc + increment)
+                                Ok::<_, EvalErr>(acc + increment)
                             },
                             0,
                             &mut opt_operands.iter().copied(),

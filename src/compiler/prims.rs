@@ -196,6 +196,10 @@ pub fn prims() -> Vec<(Vec<u8>, SExp)> {
             SExp::Integer(primloc.clone(), 61_u32.to_bigint().unwrap()),
         ),
         (
+            "keccak256".as_bytes().to_vec(),
+            SExp::Integer(primloc.clone(), 62_u32.to_bigint().unwrap()),
+        ),
+        (
             "secp256k1_verify".as_bytes().to_vec(),
             SExp::Integer(primloc.clone(), 0x13d61f00.to_bigint().unwrap()),
         ),

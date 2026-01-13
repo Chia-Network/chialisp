@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
-use clvm_rs::reduction::EvalErr;
+use clvm_rs::error::EvalErr;
 
 use crate::classic::clvm::__type_compatibility__::{
     pybytes_repr, t, Bytes, Stream, UnvalidatedBytesFromType,
@@ -712,8 +712,7 @@ fn test_fancy_destructuring_type_language() {
     let code = assemble(&mut allocator, "(defconst X (+ 3 1))").expect("should assemble");
 
     // Empty match should succeed.
-    let () = <() as SelectNode<(), EvalErr>>::select_nodes(&(), &mut allocator, code)
-        .expect("should be found");
+    let () = <()>::select_nodes(&(), &mut allocator, code).expect("should be found");
 
     // We should not be able to destructure the keyword.
     assert_node_find_error(

@@ -29,11 +29,11 @@ pub fn cldb_main(args: Vec<String>) {
 
 /// A Python module implemented in Rust.
 pub fn create_cmds_module(py: Python) -> PyResult<Bound<'_, PyModule>> {
-    let m = PyModule::new_bound(py, "cmds")?;
-    m.add_function(wrap_pyfunction!(brun_main, m.clone())?)?;
-    m.add_function(wrap_pyfunction!(run_main, m.clone())?)?;
-    m.add_function(wrap_pyfunction!(opc_main, m.clone())?)?;
-    m.add_function(wrap_pyfunction!(opd_main, m.clone())?)?;
-    m.add_function(wrap_pyfunction!(cldb_main, m.clone())?)?;
+    let m = PyModule::new(py, "cmds")?;
+    m.add_function(wrap_pyfunction!(brun_main, &m)?)?;
+    m.add_function(wrap_pyfunction!(run_main, &m)?)?;
+    m.add_function(wrap_pyfunction!(opc_main, &m)?)?;
+    m.add_function(wrap_pyfunction!(opd_main, &m)?)?;
+    m.add_function(wrap_pyfunction!(cldb_main, &m)?)?;
     Ok(m)
 }

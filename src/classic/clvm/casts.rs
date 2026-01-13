@@ -1,7 +1,7 @@
 use clvm_rs::NodePtr;
 use num_bigint::ToBigInt;
 
-use clvm_rs::reduction::EvalErr;
+use clvm_rs::error::EvalErr;
 
 use crate::classic::clvm::__type_compatibility__::{
     bi_one, bi_zero, get_u32, Bytes, BytesFromType,
@@ -16,7 +16,7 @@ pub fn int_from_bytes(b: Bytes, option: Option<TConvertOption>) -> Result<u64, E
     if b.length() == 0 {
         return Ok(0);
     } else if b.length() * 8 > 64 {
-        return Err(EvalErr(
+        return Err(EvalErr::InternalError(
             NodePtr::NIL,
             "Cannot convert Bytes to Integer larger than 64bit. Use bigint_from_bytes instead."
                 .to_string(),

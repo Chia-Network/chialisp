@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
-use clvm_rs::reduction::EvalErr;
+use clvm_rs::error::EvalErr;
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
 use crate::classic::clvm::sexp::{
@@ -198,7 +198,7 @@ fn parse_include(
             None
         );
         match proper_list(allocator, assembled_sexp.1, true) {
-            None => { Err(EvalErr(name, "include returned malformed result".to_string())) },
+            None => { Err(EvalErr::InternalError(name, "include returned malformed result".to_string())) },
             Some(assembled) => {
                 for sexp in assembled {
                     parse_mod_sexp(
@@ -359,7 +359,7 @@ fn parse_mod_sexp(
         constants.insert(name, constant);
         Ok(())
     } else if namespace.contains(&name) {
-        Err(EvalErr(
+        Err(EvalErr::InternalError(
             declaration_sexp,
             format!(
                 "symbol \"{}\" redefined",
@@ -396,7 +396,7 @@ fn parse_mod_sexp(
             delayed_constants.insert(name, definition);
             Ok(())
         } else {
-            Err(EvalErr(
+            Err(EvalErr::InternalError(
                 declaration_sexp,
                 "expected defun, defmacro, defconst, compile-file or defconstant".to_string(),
             ))
@@ -421,10 +421,10 @@ fn compile_mod_stage_1(
 
         // eslint-disable-next-line no-constant-condition
         match proper_list(allocator, args, true) {
-            None => { Err(EvalErr(args, "miscompiled mod is not a proper list\n".to_string())) },
+            None => { Err(EvalErr::InternalError(args, "miscompiled mod is not a proper list\n".to_string())) },
             Some(alist) => {
                 if alist.is_empty() {
-                    return Err(EvalErr(args, "miscompiled mod is 0 size\n".to_string()));
+                    return Err(EvalErr::InternalError(args, "miscompiled mod is 0 size\n".to_string()));
                 }
 
                 let main_local_arguments = alist[0];
@@ -525,7 +525,7 @@ fn compile_mod_stage_1(
                     }
 
                     if !processed {
-                        return Err(EvalErr(NodePtr::NIL, "got stuck untangling defconst dependencies".to_string()));
+                        return Err(EvalErr::InternalError(NodePtr::NIL, "got stuck untangling defconst dependencies".to_string()));
                     }
                 }
 

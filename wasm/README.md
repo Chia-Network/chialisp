@@ -3,8 +3,8 @@ Build
 
 Clone GitHub repository
 ```bash
-git clone https://github.com/Chia-Network/clvm_tools_rs
-cd clvm_tools_rs/wasm
+git clone https://github.com/Chia-Network/chialisp
+cd chialisp/wasm
 ```
 
 Use `wasm-pack` to build the wasm `pkg` file used with npm. Install it with:
@@ -16,7 +16,7 @@ cargo install wasm-pack
 Then build with
 
 ```bash
-# Make sure you're at <clvm_tools_rs root>/wasm
+# Make sure you're at <chialisp root>/wasm
 wasm-pack build --release --target=nodejs
 ```
 
@@ -24,17 +24,17 @@ Test
 -----
 Prerequisite:
 - NodeJS >= 18
-- Wasm files built by `wasm-pack` command exist at `<clvm_tools_rs root>/wasm/pkg/`
+- Wasm files built by `wasm-pack` command exist at `<chialisp root>/wasm/pkg/`
 
 ```bash
-# Make sure you're at <clvm_tools_rs root>/wasm
+# Make sure you're at <chialisp root>/wasm
 node ./tests/index.js
 ```
 
 Program
 ===
 
-Program is exported by ```clvm_tools_rs``` and contains a ```to``` function
+Program is exported by ```chialisp``` and contains a ```to``` function
 among a few others.  Its use is very like Program.to in the python code and
 similar to chiaminejp's ```clvm_tools``` library.  It produces a value that
 can be used together with other such values, can be curried (and uncurried)

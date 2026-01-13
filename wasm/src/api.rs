@@ -17,26 +17,26 @@ use crate::jsval::{
     read_string_to_string_map, sexp_from_js_object,
 };
 use crate::objects::Program;
-use clvm_tools_rs::classic::clvm::__type_compatibility__::{
+use chialisp::classic::clvm::__type_compatibility__::{
     Bytes, Stream, UnvalidatedBytesFromType,
 };
-use clvm_tools_rs::classic::clvm::serialize::sexp_to_stream;
-use clvm_tools_rs::classic::clvm_tools::clvmc::compile_clvm_inner;
-use clvm_tools_rs::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
-use clvm_tools_rs::compiler::cldb::{
+use chialisp::classic::clvm::serialize::sexp_to_stream;
+use chialisp::classic::clvm_tools::clvmc::compile_clvm_inner;
+use chialisp::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
+use chialisp::compiler::cldb::{
     hex_to_modern_sexp, CldbOverrideBespokeCode, CldbRun, CldbRunEnv, CldbRunnable,
     CldbSingleBespokeOverride,
 };
-use clvm_tools_rs::compiler::clvm::{convert_to_clvm_rs, start_step};
-use clvm_tools_rs::compiler::compiler::{
+use chialisp::compiler::clvm::{convert_to_clvm_rs, start_step};
+use chialisp::compiler::compiler::{
     extract_program_and_env, path_to_function, rewrite_in_program, DefaultCompilerOpts,
 };
-use clvm_tools_rs::compiler::comptypes::{CompilerOpts, CompileErr};
-use clvm_tools_rs::compiler::prims;
-use clvm_tools_rs::compiler::repl::Repl;
-use clvm_tools_rs::compiler::runtypes::RunFailure;
-use clvm_tools_rs::compiler::sexp::SExp;
-use clvm_tools_rs::compiler::srcloc::Srcloc;
+use chialisp::compiler::comptypes::{CompileErr, CompilerOpts};
+use chialisp::compiler::prims;
+use chialisp::compiler::repl::Repl;
+use chialisp::compiler::runtypes::RunFailure;
+use chialisp::compiler::sexp::SExp;
+use chialisp::compiler::srcloc::Srcloc;
 
 extern crate alloc;
 
@@ -117,14 +117,14 @@ pub fn create_clvm_runner_err(error: String) -> JsValue {
 
 fn create_clvm_runner_run_failure(err: &RunFailure) -> JsValue {
     match err {
-        RunFailure::RunErr(l, e) => create_clvm_runner_err(format!("{}: Error {}", l, e)),
-        RunFailure::RunExn(l, e) => create_clvm_runner_err(format!("{}: Exn {}", l, e)),
+        RunFailure::RunErr(l, e) => create_clvm_runner_err(format!("{l}: Error {e}")),
+        RunFailure::RunExn(l, e) => create_clvm_runner_err(format!("{l}: Exn {e}")),
     }
 }
 
 fn create_clvm_compile_failure(err: &CompileErr) -> JsValue {
     match err {
-        CompileErr(l, e) => create_clvm_runner_err(format!("{}: Error {}", l, e)),
+        CompileErr(l, e) => create_clvm_runner_err(format!("{l}: Error {e}")),
     }
 }
 
@@ -199,7 +199,7 @@ pub fn create_clvm_runner(
         Err(e) => {
             return create_clvm_runner_run_failure(&RunFailure::RunErr(
                 args_srcloc.clone(),
-                format!("failed to read symbol table: {}", e),
+                format!("failed to read symbol table: {e}"),
             ));
         }
     };
@@ -356,7 +356,7 @@ pub fn compose_run_function(
         _ => {
             return create_clvm_compile_failure(&CompileErr(
                 loc.clone(),
-                format!("function not found in symbols: {}", function_name),
+                format!("function not found in symbols: {function_name}"),
             ));
         }
     };
@@ -389,8 +389,7 @@ pub fn compose_run_function(
             return create_clvm_compile_failure(&CompileErr(
                 program.loc(),
                 format!(
-                    "could not find function with hash from symbols: {}",
-                    function_name
+                    "could not find function with hash from symbols: {function_name}"
                 ),
             ));
         }

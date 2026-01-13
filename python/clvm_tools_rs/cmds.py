@@ -1,6 +1,6 @@
 import sys
 
-from clvm_tools_rs.clvm_tools_rs import cmds
+from chialisp.clvm_tools_rs import cmds
 
 
 # this dynamic bit of programming may look super-complicated,

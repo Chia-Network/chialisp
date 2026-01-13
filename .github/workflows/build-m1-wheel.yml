@@ -30,7 +30,7 @@ jobs:
     - uses: Chia-Network/actions/clean-workspace@main
 
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       with:
         fetch-depth: 0
 
@@ -63,11 +63,11 @@ jobs:
         maturin build -i python --release --strip
         cargo test
 
-    - name: Install clvm_tools_rs wheel
+    - name: Install chialisp wheel
       run: |
         . ./venv/bin/activate
         ls target/wheels/
-        pip install ./target/wheels/clvm_tools_rs*.whl
+        pip install ./target/wheels/chialisp*.whl
 
     - name: Install other wheels
       run: |
@@ -85,6 +85,9 @@ jobs:
         git clone https://github.com/Chia-Network/clvm_tools.git --branch=main --single-branch
         python -m pip install ./clvm_tools
 
+        # Install chialisp pkg as "clvm_tools_rs" for older test framework
+        pip install -e ./tmp
+
     - name: Ensure clvm, clvm_rs, clvm_tools are installed
       run: |
         . ./venv/bin/activate
@@ -92,6 +95,7 @@ jobs:
         python -c 'import clvm; print(clvm.__file__)'
         python -c 'import clvm_rs; print(clvm_rs.__file__)'
         python -c 'import clvm_tools; print(clvm_tools.__file__)'
+        python -c 'import chialisp; print(chialisp.__file__)'
         python -c 'import clvm_tools_rs; print(clvm_tools_rs.__file__)'
 
     - name: Install pytest
@@ -124,7 +128,7 @@ jobs:
     needs: build_wheels
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       with:
         fetch-depth: 0
 
@@ -139,7 +143,7 @@ jobs:
         python-version: "3.10"
 
     - name: Download artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v5
       with:
         name: wheels
         path: ./target/wheels/
