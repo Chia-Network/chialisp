@@ -14,6 +14,7 @@ pub mod number;
 pub mod op_utils;
 pub mod reduction;
 pub mod run_program;
+pub mod serde_nostd;
 pub mod traverse_path;
 
 // These modules require std for HashMap
@@ -39,6 +40,7 @@ pub use allocator::{Allocator, Atom, NodePtr, ObjectType, SExp};
 pub use chia_dialect::ChiaDialect;
 pub use crypto_handlers::{CryptoHandlers, OpHandler};
 pub use run_program::run_program;
+pub use serde_nostd::{node_from_bytes, node_to_bytes, node_to_bytes_limit};
 
 pub use chia_dialect::{ENABLE_KECCAK_OPS_OUTSIDE_GUARD, LIMIT_HEAP, MEMPOOL_MODE, NO_UNKNOWN_OPS};
 
