@@ -5,7 +5,7 @@
 
 pub mod methods;
 
-use risc0_zkvm::{default_prover, ExecutorEnv, ProverOpts, VerifierContext};
+use risc0_zkvm::{default_prover, ExecutorEnv};
 use serde::{Deserialize, Serialize};
 
 pub use methods::CLVM_RISC0_GUEST_ELF;
@@ -43,14 +43,9 @@ pub fn prove_clvm_execution(input: ClvmInput) -> Result<(ClvmOutput, Vec<u8>), S
     // Get the prover
     let prover = default_prover();
 
-    // Generate the proof
+    // Generate the proof (local proving, no GPU needed)
     let prove_info = prover
-        .prove_with_ctx(
-            env,
-            &VerifierContext::default(),
-            CLVM_RISC0_GUEST_ELF,
-            &ProverOpts::groth16(),
-        )
+        .prove(env, CLVM_RISC0_GUEST_ELF)
         .map_err(|e| format!("Proof generation failed: {}", e))?;
 
     // Extract the receipt
@@ -69,8 +64,8 @@ pub fn prove_clvm_execution(input: ClvmInput) -> Result<(ClvmOutput, Vec<u8>), S
     Ok((output, proof_bytes))
 }
 
-/// Run a CLVM program in dev mode (fast, no real proof)
-pub fn run_clvm_dev(input: ClvmInput) -> Result<ClvmOutput, String> {
+/// Run a CLVM program and generate a real proof (local, no GPU)
+pub fn run_clvm_with_proof(input: ClvmInput) -> Result<(ClvmOutput, risc0_zkvm::Receipt), String> {
     // Build executor environment with input
     let env = ExecutorEnv::builder()
         .write(&input)
@@ -81,24 +76,34 @@ pub fn run_clvm_dev(input: ClvmInput) -> Result<ClvmOutput, String> {
     // Get the prover
     let prover = default_prover();
 
-    // Run in dev mode (fast execution, fake proof)
+    // Generate real proof (local proving)
     let prove_info = prover
-        .prove_with_ctx(
-            env,
-            &VerifierContext::default(),
-            CLVM_RISC0_GUEST_ELF,
-            &ProverOpts::fast(),
-        )
-        .map_err(|e| format!("Execution failed: {}", e))?;
+        .prove(env, CLVM_RISC0_GUEST_ELF)
+        .map_err(|e| format!("Proving failed: {}", e))?;
+
+    let receipt = prove_info.receipt;
 
     // Decode the output
-    let output: ClvmOutput = prove_info
-        .receipt
+    let output: ClvmOutput = receipt
         .journal
         .decode()
         .map_err(|e| format!("Failed to decode output: {}", e))?;
 
-    Ok(output)
+    Ok((output, receipt))
+}
+
+/// Verify a CLVM execution proof
+pub fn verify_clvm_proof(receipt: &risc0_zkvm::Receipt) -> Result<ClvmOutput, String> {
+    // Verify the receipt against our guest ID
+    receipt
+        .verify(CLVM_RISC0_GUEST_ID)
+        .map_err(|e| format!("Verification failed: {}", e))?;
+
+    // Decode and return the output
+    receipt
+        .journal
+        .decode()
+        .map_err(|e| format!("Failed to decode output: {}", e))
 }
 
 #[cfg(test)]
@@ -106,53 +111,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_nil_program() {
+    fn test_nil_program_with_proof() {
         // nil program returns nil
-        // Program: 0x80 (nil)
-        // Args: 0x80 (nil)
-        
         let input = ClvmInput {
             program: vec![0x80], // nil
             args: vec![0x80],    // nil  
             max_cost: 1000000,
         };
 
-        let output = run_clvm_dev(input).expect("CLVM execution failed");
+        let (output, receipt) = run_clvm_with_proof(input).expect("CLVM proving failed");
         
-        // nil returns nil
+        // Verify the proof
+        let verified_output = verify_clvm_proof(&receipt).expect("Verification failed");
+        
         assert_eq!(output.result, vec![0x80]);
-        println!("nil test passed! Cost: {}", output.cost);
+        assert_eq!(verified_output.result, output.result);
+        println!("nil test PROVED and VERIFIED! Cost: {}", output.cost);
     }
 
     #[test]
-    fn test_quote_42() {
+    fn test_quote_42_with_proof() {
         // Program: (q . 42) - quote returns 42
-        // Serialized as: ff 01 2a
-        // 0xff = cons marker
-        // 0x01 = quote opcode (1)
-        // 0x2a = 42
-        
         let input = ClvmInput {
             program: vec![0xff, 0x01, 0x2a], // (q . 42)
             args: vec![0x80],                 // nil args
             max_cost: 1000000,
         };
 
-        let output = run_clvm_dev(input).expect("CLVM execution failed");
+        let (output, receipt) = run_clvm_with_proof(input).expect("CLVM proving failed");
         
-        // Should return 42
+        // Verify the proof
+        let verified_output = verify_clvm_proof(&receipt).expect("Verification failed");
+        
         assert_eq!(output.result, vec![0x2a]);
-        println!("quote 42 test passed! Result: {:?}, Cost: {}", output.result, output.cost);
+        assert_eq!(verified_output.result, output.result);
+        println!("quote 42 PROVED and VERIFIED! Result: {:?}, Cost: {}", output.result, output.cost);
     }
 
     #[test]
-    fn test_addition() {
+    fn test_addition_with_proof() {
         // Program: (+ (q . 2) (q . 3)) = 5
-        // Opcode for + is 16
-        // Serialized as nested cons:
-        // (16 . ((q . 2) . ((q . 3) . nil)))
-        // = ff 10 ff ff 01 02 ff ff 01 03 80
-        
         let input = ClvmInput {
             program: vec![
                 0xff, 0x10,       // (+ . 
@@ -161,17 +159,18 @@ mod tests {
                 0xff,             //     .
                 0xff, 0x01, 0x03, //     (q . 3)
                 0x80,             //     . nil
-                                  //   )
-                                  // )
             ],
             args: vec![0x80],     // nil args
             max_cost: 1000000,
         };
 
-        let output = run_clvm_dev(input).expect("CLVM execution failed");
+        let (output, receipt) = run_clvm_with_proof(input).expect("CLVM proving failed");
         
-        // Should return 5
+        // Verify the proof
+        let verified_output = verify_clvm_proof(&receipt).expect("Verification failed");
+        
         assert_eq!(output.result, vec![0x05]);
-        println!("Addition test passed! 2 + 3 = {:?}, Cost: {}", output.result, output.cost);
+        assert_eq!(verified_output.result, output.result);
+        println!("Addition PROVED and VERIFIED! 2 + 3 = {:?}, Cost: {}", output.result, output.cost);
     }
 }
