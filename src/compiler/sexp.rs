@@ -21,7 +21,12 @@ use crate::compiler::prims::prims;
 use crate::compiler::srcloc::Srcloc;
 use crate::util::{number_from_u8, u8_from_number, Number};
 
-// Random sexp generation removed for compilation-only build
+// Random sexp generation imports (test-only)
+#[cfg(test)]
+use rand::{Rng, distr::StandardUniform, prelude::Distribution};
+
+#[cfg(test)]
+const MAX_SEXP_COST: usize = 20;
 
 /// The compiler's view of SExp.
 ///

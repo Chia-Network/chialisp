@@ -23,7 +23,11 @@ pub use clvmr::{
     node_from_bytes, node_to_bytes, node_to_bytes_limit, run_program,
 };
 
+// Re-export veil adapter types
+pub use veil_adapter::{VeilEvaluator, Hasher, BlsVerifier, EcdsaVerifier};
+
 pub mod util;
+pub mod veil_adapter;
 
 pub mod classic;
 pub mod compiler;
