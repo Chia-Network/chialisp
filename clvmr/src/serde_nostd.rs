@@ -109,17 +109,25 @@ fn decode_size(first_byte: u8, reader: &mut ByteReader) -> Result<(usize, usize)
     }
     
     if (first_byte & 0xFC) == 0xF8 {
-        // 0b111110xx - 5 byte size
-        let b2 = reader.read_byte()?;
-        let b3 = reader.read_byte()?;
-        let b4 = reader.read_byte()?;
-        let b5 = reader.read_byte()?;
-        let size = (((first_byte & 0x03) as usize) << 32)
-                 | ((b2 as usize) << 24)
-                 | ((b3 as usize) << 16)
-                 | ((b4 as usize) << 8)
-                 | (b5 as usize);
-        return Ok((5, size));
+        // 0b111110xx - 5 byte size (only supported on 64-bit platforms)
+        #[cfg(target_pointer_width = "64")]
+        {
+            let b2 = reader.read_byte()?;
+            let b3 = reader.read_byte()?;
+            let b4 = reader.read_byte()?;
+            let b5 = reader.read_byte()?;
+            let size = (((first_byte & 0x03) as usize) << 32)
+                     | ((b2 as usize) << 24)
+                     | ((b3 as usize) << 16)
+                     | ((b4 as usize) << 8)
+                     | (b5 as usize);
+            return Ok((5, size));
+        }
+        #[cfg(not(target_pointer_width = "64"))]
+        {
+            // 5-byte sizes not supported on 32-bit platforms
+            return Err(EvalErr::SerializationError);
+        }
     }
     
     Err(EvalErr::SerializationError)
@@ -205,13 +213,21 @@ fn write_atom(output: &mut Vec<u8>, atom: &[u8]) -> Result<()> {
         output.push((len & 0xFF) as u8);
         output.extend_from_slice(atom);
     } else {
-        // 5-byte size prefix (very large atoms)
-        output.push(0xF8 | ((len >> 32) as u8));
-        output.push(((len >> 24) & 0xFF) as u8);
-        output.push(((len >> 16) & 0xFF) as u8);
-        output.push(((len >> 8) & 0xFF) as u8);
-        output.push((len & 0xFF) as u8);
-        output.extend_from_slice(atom);
+        // 5-byte size prefix (very large atoms, only on 64-bit platforms)
+        #[cfg(target_pointer_width = "64")]
+        {
+            output.push(0xF8 | ((len >> 32) as u8));
+            output.push(((len >> 24) & 0xFF) as u8);
+            output.push(((len >> 16) & 0xFF) as u8);
+            output.push(((len >> 8) & 0xFF) as u8);
+            output.push((len & 0xFF) as u8);
+            output.extend_from_slice(atom);
+        }
+        #[cfg(not(target_pointer_width = "64"))]
+        {
+            // Atoms this large not supported on 32-bit platforms
+            return Err(EvalErr::OutOfMemory);
+        }
     }
     
     Ok(())

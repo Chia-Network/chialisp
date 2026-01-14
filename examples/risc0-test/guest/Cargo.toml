@@ -1,0 +1,17 @@
+[package]
+name = "clvm-risc0-guest"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+risc0-zkvm = "3.0.3"
+
+# Use clvm_tools_rs in no_std mode (no default features)
+clvm_tools_rs = { path = "../../..", default-features = false }
+
+# Serialization
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+borsh = { version = "1.5.7", features = ["derive"] }
+
+# RISC0 accelerated SHA256
+sha2 = { git = "https://github.com/risc0/RustCrypto-hashes", tag = "sha2-v0.10.8-risczero.0" }

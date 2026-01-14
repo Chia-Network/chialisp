@@ -14,6 +14,15 @@ extern crate indoc;
 
 extern crate clvmr as clvm_rs;
 
+// Re-export clvmr for zkVM usage
+pub use clvmr;
+
+// Re-export key types for convenience
+pub use clvmr::{
+    Allocator, ChiaDialect, CryptoHandlers, NodePtr, OpHandler,
+    node_from_bytes, node_to_bytes, node_to_bytes_limit, run_program,
+};
+
 pub mod util;
 
 pub mod classic;
