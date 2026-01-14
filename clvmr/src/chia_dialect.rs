@@ -1,6 +1,7 @@
 use crate::allocator::{Allocator, NodePtr};
 use crate::core_ops::{op_cons, op_eq, op_first, op_if, op_listp, op_raise, op_rest};
 use crate::cost::Cost;
+use crate::crypto_handlers::CryptoHandlers;
 use crate::dialect::{Dialect, OperatorSet};
 use crate::error::EvalErr;
 use crate::more_ops::{
@@ -55,14 +56,53 @@ fn unknown_operator(
     }
 }
 
+/// The Chia dialect for CLVM execution.
+/// 
+/// Supports injectable crypto handlers for zkVM compatibility.
+/// When handlers are provided, they take precedence over native implementations.
 pub struct ChiaDialect {
     flags: u32,
+    /// Optional crypto handlers for injectable BLS/SECP operations
+    crypto_handlers: Option<CryptoHandlers>,
 }
 
 impl ChiaDialect {
+    /// Create a new ChiaDialect with default (native) crypto implementations.
     pub fn new(flags: u32) -> ChiaDialect {
-        ChiaDialect { flags }
+        ChiaDialect { 
+            flags,
+            crypto_handlers: None,
+        }
     }
+
+    /// Create a new ChiaDialect with custom crypto handlers.
+    /// 
+    /// This is useful for zkVM environments where native crypto libraries
+    /// aren't available, but precompiles are.
+    /// 
+    /// # Example
+    /// 
+    /// ```ignore
+    /// use clvmr::{ChiaDialect, CryptoHandlers};
+    /// 
+    /// let handlers = CryptoHandlers::new()
+    ///     .with_bls_verify(my_bls_precompile)
+    ///     .with_secp256k1_verify(my_secp_precompile);
+    /// 
+    /// let dialect = ChiaDialect::new_with_handlers(0, handlers);
+    /// ```
+    pub fn new_with_handlers(flags: u32, handlers: CryptoHandlers) -> ChiaDialect {
+        ChiaDialect {
+            flags,
+            crypto_handlers: Some(handlers),
+        }
+    }
+
+    /// Get the crypto handlers, if any.
+    pub fn crypto_handlers(&self) -> Option<&CryptoHandlers> {
+        self.crypto_handlers.as_ref()
+    }
+
 }
 
 impl Dialect for ChiaDialect {
@@ -76,35 +116,36 @@ impl Dialect for ChiaDialect {
     ) -> Response {
         let flags = self.flags
             | match extension {
-                // This is the default set of operators, so no special flags need to be added.
                 OperatorSet::Default => 0,
-
-                // Since BLS has been hardforked in universally, this has no effect.
                 OperatorSet::Bls => 0,
-
-                // Keccak is allowed as if it were a default operator, inside of the softfork guard.
                 OperatorSet::Keccak => ENABLE_KECCAK_OPS_OUTSIDE_GUARD,
             };
 
         let op_len = allocator.atom_len(o);
+        
+        // Handle 4-byte opcodes (SECP operations)
         if op_len == 4 {
-            // these are unknown operators with assigned cost
-            // the formula is:
-            // +---+---+---+------------+
-            // | multiplier|XX | XXXXXX |
-            // +---+---+---+---+--------+
-            //  ^           ^    ^
-            //  |           |    + 6 bits ignored when computing cost
-            // cost         |
-            // (3 bytes)    + 2 bits
-            //                cost_function
-
             let b = allocator.atom(o);
             let opcode = u32::from_be_bytes(b.as_ref().try_into().unwrap());
 
-            // the secp operators have a fixed cost of 1850000 and 1300000,
-            // which makes the multiplier 0x1c3a8f and 0x0cf84f (there is an
-            // implied +1) and cost function 0
+            // Check for injected SECP handlers first
+            if let Some(ref handlers) = self.crypto_handlers {
+                match opcode {
+                    0x13d61f00 => {
+                        if let Some(handler) = handlers.secp256k1_verify {
+                            return handler(allocator, argument_list, max_cost);
+                        }
+                    }
+                    0x1c3a8f00 => {
+                        if let Some(handler) = handlers.secp256r1_verify {
+                            return handler(allocator, argument_list, max_cost);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // Fall back to native SECP if feature enabled
             #[cfg(feature = "secp-ops")]
             {
                 let f = match opcode {
@@ -119,100 +160,219 @@ impl Dialect for ChiaDialect {
 
             #[cfg(not(feature = "secp-ops"))]
             {
-                // When secp-ops feature is disabled, treat these as unknown operators
-                let _ = opcode; // suppress unused variable warning
                 return unknown_operator(allocator, o, argument_list, flags, max_cost);
             }
         }
+        
         if op_len != 1 {
             return unknown_operator(allocator, o, argument_list, flags, max_cost);
         }
+        
         let Some(op) = allocator.small_number(o) else {
             return unknown_operator(allocator, o, argument_list, flags, max_cost);
         };
         
         // Core operators (always available)
-        let f = match op {
+        match op {
             // 1 = quote
             // 2 = apply
-            3 => op_if,
-            4 => op_cons,
-            5 => op_first,
-            6 => op_rest,
-            7 => op_listp,
-            8 => op_raise,
-            9 => op_eq,
-            10 => op_gr_bytes,
-            11 => op_sha256,
-            12 => op_substr,
-            13 => op_strlen,
-            14 => op_concat,
+            3 => return op_if(allocator, argument_list, max_cost),
+            4 => return op_cons(allocator, argument_list, max_cost),
+            5 => return op_first(allocator, argument_list, max_cost),
+            6 => return op_rest(allocator, argument_list, max_cost),
+            7 => return op_listp(allocator, argument_list, max_cost),
+            8 => return op_raise(allocator, argument_list, max_cost),
+            9 => return op_eq(allocator, argument_list, max_cost),
+            10 => return op_gr_bytes(allocator, argument_list, max_cost),
+            11 => return op_sha256(allocator, argument_list, max_cost),
+            12 => return op_substr(allocator, argument_list, max_cost),
+            13 => return op_strlen(allocator, argument_list, max_cost),
+            14 => return op_concat(allocator, argument_list, max_cost),
             // 15 ---
-            16 => op_add,
-            17 => op_subtract,
-            18 => op_multiply,
-            19 => op_div,
-            20 => op_divmod,
-            21 => op_gr,
-            22 => op_ash,
-            23 => op_lsh,
-            24 => op_logand,
-            25 => op_logior,
-            26 => op_logxor,
-            27 => op_lognot,
+            16 => return op_add(allocator, argument_list, max_cost),
+            17 => return op_subtract(allocator, argument_list, max_cost),
+            18 => return op_multiply(allocator, argument_list, max_cost),
+            19 => return op_div(allocator, argument_list, max_cost),
+            20 => return op_divmod(allocator, argument_list, max_cost),
+            21 => return op_gr(allocator, argument_list, max_cost),
+            22 => return op_ash(allocator, argument_list, max_cost),
+            23 => return op_lsh(allocator, argument_list, max_cost),
+            24 => return op_logand(allocator, argument_list, max_cost),
+            25 => return op_logior(allocator, argument_list, max_cost),
+            26 => return op_logxor(allocator, argument_list, max_cost),
+            27 => return op_lognot(allocator, argument_list, max_cost),
             // 28 ---
-            29 => op_point_add,
-            30 => op_pubkey_for_exp,
+            
+            // point_add (29) - check for injected handler
+            29 => {
+                if let Some(ref handlers) = self.crypto_handlers {
+                    if let Some(handler) = handlers.point_add {
+                        return handler(allocator, argument_list, max_cost);
+                    }
+                }
+                return op_point_add(allocator, argument_list, max_cost);
+            }
+            
+            // pubkey_for_exp (30) - check for injected handler
+            30 => {
+                if let Some(ref handlers) = self.crypto_handlers {
+                    if let Some(handler) = handlers.pubkey_for_exp {
+                        return handler(allocator, argument_list, max_cost);
+                    }
+                }
+                return op_pubkey_for_exp(allocator, argument_list, max_cost);
+            }
+            
             // 31 ---
-            32 => op_not,
-            33 => op_any,
-            34 => op_all,
+            32 => return op_not(allocator, argument_list, max_cost),
+            33 => return op_any(allocator, argument_list, max_cost),
+            34 => return op_all(allocator, argument_list, max_cost),
             // 35 ---
             // 36 = softfork
-            48 => op_coinid,
+            48 => return op_coinid(allocator, argument_list, max_cost),
             
-            // BLS operators (49-59) - only available with bls-ops feature
-            #[cfg(feature = "bls-ops")]
-            49 => op_bls_g1_subtract,
-            #[cfg(feature = "bls-ops")]
-            50 => op_bls_g1_multiply,
-            #[cfg(feature = "bls-ops")]
-            51 => op_bls_g1_negate,
-            #[cfg(feature = "bls-ops")]
-            52 => op_bls_g2_add,
-            #[cfg(feature = "bls-ops")]
-            53 => op_bls_g2_subtract,
-            #[cfg(feature = "bls-ops")]
-            54 => op_bls_g2_multiply,
-            #[cfg(feature = "bls-ops")]
-            55 => op_bls_g2_negate,
-            #[cfg(feature = "bls-ops")]
-            56 => op_bls_map_to_g1,
-            #[cfg(feature = "bls-ops")]
-            57 => op_bls_map_to_g2,
-            #[cfg(feature = "bls-ops")]
-            58 => op_bls_pairing_identity,
-            #[cfg(feature = "bls-ops")]
-            59 => op_bls_verify,
+            // BLS operators (49-59) - check for injected handlers first
+            49 => {
+                if let Some(ref handlers) = self.crypto_handlers {
+                    if let Some(handler) = handlers.bls_g1_subtract {
+                        return handler(allocator, argument_list, max_cost);
+                    }
+                }
+                #[cfg(feature = "bls-ops")]
+                return op_bls_g1_subtract(allocator, argument_list, max_cost);
+                #[cfg(not(feature = "bls-ops"))]
+                return Err(EvalErr::Unimplemented(o));
+            }
+            50 => {
+                if let Some(ref handlers) = self.crypto_handlers {
+                    if let Some(handler) = handlers.bls_g1_multiply {
+                        return handler(allocator, argument_list, max_cost);
+                    }
+                }
+                #[cfg(feature = "bls-ops")]
+                return op_bls_g1_multiply(allocator, argument_list, max_cost);
+                #[cfg(not(feature = "bls-ops"))]
+                return Err(EvalErr::Unimplemented(o));
+            }
+            51 => {
+                if let Some(ref handlers) = self.crypto_handlers {
+                    if let Some(handler) = handlers.bls_g1_negate {
+                        return handler(allocator, argument_list, max_cost);
+                    }
+                }
+                #[cfg(feature = "bls-ops")]
+                return op_bls_g1_negate(allocator, argument_list, max_cost);
+                #[cfg(not(feature = "bls-ops"))]
+                return Err(EvalErr::Unimplemented(o));
+            }
+            52 => {
+                if let Some(ref handlers) = self.crypto_handlers {
+                    if let Some(handler) = handlers.bls_g2_add {
+                        return handler(allocator, argument_list, max_cost);
+                    }
+                }
+                #[cfg(feature = "bls-ops")]
+                return op_bls_g2_add(allocator, argument_list, max_cost);
+                #[cfg(not(feature = "bls-ops"))]
+                return Err(EvalErr::Unimplemented(o));
+            }
+            53 => {
+                if let Some(ref handlers) = self.crypto_handlers {
+                    if let Some(handler) = handlers.bls_g2_subtract {
+                        return handler(allocator, argument_list, max_cost);
+                    }
+                }
+                #[cfg(feature = "bls-ops")]
+                return op_bls_g2_subtract(allocator, argument_list, max_cost);
+                #[cfg(not(feature = "bls-ops"))]
+                return Err(EvalErr::Unimplemented(o));
+            }
+            54 => {
+                if let Some(ref handlers) = self.crypto_handlers {
+                    if let Some(handler) = handlers.bls_g2_multiply {
+                        return handler(allocator, argument_list, max_cost);
+                    }
+                }
+                #[cfg(feature = "bls-ops")]
+                return op_bls_g2_multiply(allocator, argument_list, max_cost);
+                #[cfg(not(feature = "bls-ops"))]
+                return Err(EvalErr::Unimplemented(o));
+            }
+            55 => {
+                if let Some(ref handlers) = self.crypto_handlers {
+                    if let Some(handler) = handlers.bls_g2_negate {
+                        return handler(allocator, argument_list, max_cost);
+                    }
+                }
+                #[cfg(feature = "bls-ops")]
+                return op_bls_g2_negate(allocator, argument_list, max_cost);
+                #[cfg(not(feature = "bls-ops"))]
+                return Err(EvalErr::Unimplemented(o));
+            }
+            56 => {
+                if let Some(ref handlers) = self.crypto_handlers {
+                    if let Some(handler) = handlers.bls_map_to_g1 {
+                        return handler(allocator, argument_list, max_cost);
+                    }
+                }
+                #[cfg(feature = "bls-ops")]
+                return op_bls_map_to_g1(allocator, argument_list, max_cost);
+                #[cfg(not(feature = "bls-ops"))]
+                return Err(EvalErr::Unimplemented(o));
+            }
+            57 => {
+                if let Some(ref handlers) = self.crypto_handlers {
+                    if let Some(handler) = handlers.bls_map_to_g2 {
+                        return handler(allocator, argument_list, max_cost);
+                    }
+                }
+                #[cfg(feature = "bls-ops")]
+                return op_bls_map_to_g2(allocator, argument_list, max_cost);
+                #[cfg(not(feature = "bls-ops"))]
+                return Err(EvalErr::Unimplemented(o));
+            }
+            58 => {
+                if let Some(ref handlers) = self.crypto_handlers {
+                    if let Some(handler) = handlers.bls_pairing_identity {
+                        return handler(allocator, argument_list, max_cost);
+                    }
+                }
+                #[cfg(feature = "bls-ops")]
+                return op_bls_pairing_identity(allocator, argument_list, max_cost);
+                #[cfg(not(feature = "bls-ops"))]
+                return Err(EvalErr::Unimplemented(o));
+            }
+            59 => {
+                if let Some(ref handlers) = self.crypto_handlers {
+                    if let Some(handler) = handlers.bls_verify {
+                        return handler(allocator, argument_list, max_cost);
+                    }
+                }
+                #[cfg(feature = "bls-ops")]
+                return op_bls_verify(allocator, argument_list, max_cost);
+                #[cfg(not(feature = "bls-ops"))]
+                return Err(EvalErr::Unimplemented(o));
+            }
             
             60 => {
                 if (flags & DISABLE_OP) != 0 {
-                    return Err(EvalErr::Unimplemented(o))?;
+                    return Err(EvalErr::Unimplemented(o));
                 } else {
-                    op_modpow
+                    return op_modpow(allocator, argument_list, max_cost);
                 }
             }
-            61 => op_mod,
+            61 => return op_mod(allocator, argument_list, max_cost),
             
-            // Keccak256 (62) - only available with keccak-ops feature
+            // Keccak256 (62)
             #[cfg(feature = "keccak-ops")]
-            62 if (flags & ENABLE_KECCAK_OPS_OUTSIDE_GUARD) != 0 => op_keccak256,
-            
-            _ => {
-                return unknown_operator(allocator, o, argument_list, flags, max_cost);
+            62 if (flags & ENABLE_KECCAK_OPS_OUTSIDE_GUARD) != 0 => {
+                return op_keccak256(allocator, argument_list, max_cost);
             }
-        };
-        f(allocator, argument_list, max_cost)
+            
+            _ => {}
+        }
+        
+        unknown_operator(allocator, o, argument_list, flags, max_cost)
     }
 
     fn quote_kw(&self) -> u32 {
@@ -225,20 +385,10 @@ impl Dialect for ChiaDialect {
         36
     }
 
-    // interpret the extension argument passed to the softfork operator, and
-    // return the Operators it enables (or None) if we don't know what it means
     fn softfork_extension(&self, ext: u32) -> OperatorSet {
         match ext {
-            // Extension 0 is for the BLS operators, and is still valid.
-            // However, the extension doesn't add any addition opcodes,
-            // because the BLS operators were hardforked into the main set.
             0 => OperatorSet::Bls,
-
-            // Extension 1 is for the keccak256 operator.
             1 => OperatorSet::Keccak,
-
-            // Extensions 2 and beyond are considered invalid by the mempool.
-            // However, all future extensions are valid in consensus mode and reserved for future softforks.
             _ => OperatorSet::Default,
         }
     }

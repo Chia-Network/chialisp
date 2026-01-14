@@ -6,6 +6,7 @@ pub mod allocator;
 pub mod chia_dialect;
 pub mod core_ops;
 pub mod cost;
+pub mod crypto_handlers;
 pub mod dialect;
 pub mod error;
 pub mod more_ops;
@@ -36,6 +37,7 @@ pub mod keccak256_ops;
 
 pub use allocator::{Allocator, Atom, NodePtr, ObjectType, SExp};
 pub use chia_dialect::ChiaDialect;
+pub use crypto_handlers::{CryptoHandlers, OpHandler};
 pub use run_program::run_program;
 
 pub use chia_dialect::{ENABLE_KECCAK_OPS_OUTSIDE_GUARD, LIMIT_HEAP, MEMPOOL_MODE, NO_UNKNOWN_OPS};
