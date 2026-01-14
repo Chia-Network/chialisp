@@ -1,0 +1,15 @@
+name: Security audit
+on:
+  push:
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+jobs:
+  security_audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: install cargo audit
+        run: cargo install cargo-audit
+      - name: cargo audit
+        run: cargo audit --ignore RUSTSEC-2025-0020

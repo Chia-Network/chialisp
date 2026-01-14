@@ -1,0 +1,8 @@
+;(mod (tree)
+;    (defun pubkey-tree (tree)
+;        (if (l tree) (pubkey_for_exp (concat (pubkey-tree (f tree)) (pubkey-tree (r tree)))) (pubkey_for_exp tree))
+;    )
+;    (pubkey-tree tree)
+;)
+
+(a (q 2 2 (c 2 (c 5 (q)))) (c (q 2 (i (l 5) (q 30 (concat (a 2 (c 2 (c 9 (q)))) (a 2 (c 2 (c 13 (q)))))) (q 30 5)) 1) 1))

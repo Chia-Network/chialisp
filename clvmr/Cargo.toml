@@ -1,0 +1,95 @@
+[package]
+name = "clvmr"
+version = "0.16.3"
+authors = ["Richard Kiss <him@richardkiss.com>"]
+edition = "2024"
+license = "Apache-2.0"
+description = "Implementation of `clvm` for Chia Network's cryptocurrency"
+homepage = "https://github.com/Chia-Network/clvm_rs/"
+repository = "https://github.com/Chia-Network/clvm_rs/"
+readme = "README.md"
+
+[lib]
+name = "clvmr"
+crate-type = ["rlib"]
+bench = false
+
+[features]
+default = ["std"]
+
+# Standard library support (enabled by default)
+std = ["num-bigint/std", "num-traits/std", "num-integer/std", "hex/std", "sha2/std", "dep:rand", "dep:chia-sha2"]
+
+# Enable BLS cryptographic operations (requires std for now due to blst)
+bls-ops = ["dep:chia-bls", "dep:chia-sha2", "std"]
+
+# Enable SECP256k1/r1 signature verification
+secp-ops = ["k256", "p256"]
+
+# Enable keccak256 hash operation
+keccak-ops = ["sha3"]
+
+# Full crypto support (all crypto operations)
+full-crypto = ["bls-ops", "secp-ops", "keccak-ops"]
+
+# when enabling the "counters" features, the CLVM interpreter is instrumented to
+# collect counters about the programs it executes
+counters = []
+
+# when enabled, pre-eval and post-eval callbacks are enabled. This is useful for
+# debugging and tracing of programs.
+pre-eval = []
+
+# when enabled, NodePtr will contain additional metadata to assert that they are
+# used correctly (requires std for rand)
+allocator-debug = ["std", "dep:rand"]
+
+# On UNIX-based platforms, you may get a speed boost on `sha256` operations by building
+# with OpenSSL when enabled
+openssl = ["chia-sha2/openssl"]
+
+[dependencies]
+# Core dependencies (no_std compatible)
+num-bigint = { version = "0.4.6", default-features = false }
+num-traits = { version = "0.2.19", default-features = false }
+num-integer = { version = "0.1.46", default-features = false }
+hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
+hex-literal = "0.4.1"
+bitvec = { version = "1.0.1", default-features = false, features = ["alloc"] }
+bumpalo = { version = "3.19.0", default-features = false }
+sha2 = { version = "0.10.9", default-features = false }
+lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
+
+# Optional crypto dependencies
+chia-bls = { version = "0.28.1", optional = true }
+chia-sha2 = { version = "0.34.0", optional = true }
+k256 = { version = "0.13.4", features = ["ecdsa"], optional = true, default-features = false }
+p256 = { version = "0.13.2", features = ["ecdsa"], optional = true, default-features = false }
+sha3 = { version = "0.10.8", optional = true, default-features = false }
+
+# For std feature (serde uses rand for caching)
+rand = { version = "0.8.5", optional = true }
+
+# SHA1 is used for coinid (required for core ops)
+sha1 = { version = "0.10.6", default-features = false }
+
+[dev-dependencies]
+rstest = "0.21.0"
+criterion = "0.5.1"
+hex = "0.4.3"
+
+[[bench]]
+name = "run-program"
+harness = false
+
+[[bench]]
+name = "deserialize"
+harness = false
+
+[[bench]]
+name = "sha256_hash"
+harness = false
+
+[[bench]]
+name = "serialize"
+harness = false

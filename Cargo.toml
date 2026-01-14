@@ -20,13 +20,13 @@ num-bigint = { version = "0.4.0", features = ["serde"], default-features = false
 num-traits = { version = "0.2.14", default-features = false }
 num = { version = "0.4.3", default-features = false }
 sha2 = { version = "0.10.9", default-features = false }
-clvmr = { version = "0.16.2", features = ["pre-eval"], default-features = false }
+clvmr = { path = "./clvmr", features = ["pre-eval"], default-features = false }
 serde = { version = "1.0.226", features = ["derive", "rc", "alloc"], default-features = false }
 
 # Macro/compiler infrastructure  
-lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
+lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
 indoc = "2.0"
-do-notation = "0.1.3"
+# do-notation replaced with custom no_std compatible m! macro in src/macros.rs
 
 # REMOVED DEPENDENCIES (not needed for ChiaLisp compilation):
 # binascii = "0.1.4"             # Only used for dev tools
@@ -46,18 +46,15 @@ name = "clvm_tools_rs"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = []
+default = ["std"]
 
-# For now, clvmr doesn't have optional BLS - all builds include it
-# TODO: Create minimal CLVM runtime without BLS for true no_std
+# Standard library support - enabled by default for development
+std = ["clvmr/std"]
 
-[target.'cfg(target_family="wasm")'.dependencies]
+# Full crypto operations (requires std due to BLS)
+full-crypto = ["std", "clvmr/full-crypto"]
 
-
-getrandom = { version = "0.2", features = ["js"] }
-
-[target.'cfg(not(target_family="wasm"))'.dependencies]
-getrandom = { version = "0.2" }
+# Removed getrandom - not needed for no_std core compilation
 
 ## CLI binaries removed for no_std prep
 

@@ -1,0 +1,8 @@
+;(mod (tree)
+;    (defun hash (tree)
+;        (if (l tree) (sha256 (hash (f tree)) (hash (r tree))) tree)
+;    )
+;    (hash tree)
+;)
+
+(a (q 2 2 (c 2 (c 5 (q)))) (c (q 2 (i (l 5) (q 11 (a 2 (c 2 (c 9 (q)))) (a 2 (c 2 (c 13 (q))))) (q . 5)) 1) 1))

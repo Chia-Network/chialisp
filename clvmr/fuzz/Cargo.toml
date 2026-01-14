@@ -1,0 +1,123 @@
+[package]
+name = "clvm_rs-fuzz"
+version = "0.16.3"
+authors = ["Arvid Norberg <arvid@chia.net>"]
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = { workspace = true }
+clvmr = { workspace = true, features = ["counters"] }
+arbitrary = { workspace = true }
+clvm-fuzzing = { workspace = true }
+
+[[bin]]
+name = "fuzz_run_program"
+path = "fuzz_targets/run_program.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_serialized_length"
+path = "fuzz_targets/serialized_length.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_serialized_length_trusted"
+path = "fuzz_targets/serialized_length_trusted.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_deserialize"
+path = "fuzz_targets/deserialize.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_deserialize_br"
+path = "fuzz_targets/deserialize_br.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_tree_hash"
+path = "fuzz_targets/tree_hash.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_deserialize_br_rand_tree"
+path = "fuzz_targets/deserialize_br_rand_tree.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_parse_triples"
+path = "fuzz_targets/parse_triples.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "operators"
+path = "fuzz_targets/operators.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "allocator"
+path = "fuzz_targets/allocator.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "keccak"
+path = "fuzz_targets/keccak.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "object-cache"
+path = "fuzz_targets/object_cache.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "serializer"
+path = "fuzz_targets/serializer.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "incremental-serializer"
+path = "fuzz_targets/incremental_serializer.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "serializer-cmp"
+path = "fuzz_targets/serializer_cmp.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "tree-cache"
+path = "fuzz_targets/tree_cache.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "canonical-serialization"
+path = "fuzz_targets/canonical_serialization.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "canonical-serialization-br"
+path = "fuzz_targets/canonical_serialization_br.rs"
+test = false
+doc = false
