@@ -331,21 +331,25 @@ fn constant_fun_result(
                         None,
                     )),
                 };
-                let depgraph = FunctionDependencyGraph::new_with_options(
-                    &to_compile,
-                    DepgraphOptions {
-                        with_constants: true,
-                    },
-                );
-                let mut depended_on = HashSet::default();
-                depgraph.get_full_depends_on(
-                    &mut depended_on,
-                    &call_spec.name,
-                );
-                to_compile.helpers =
-                    compiler.original_helpers.iter().filter(|h| {
-                       depended_on.contains(h.name())
-                    }).cloned().collect();
+
+                if opts.module_phase().is_some() {
+                    let depgraph = FunctionDependencyGraph::new_with_options(
+                        &to_compile,
+                        DepgraphOptions {
+                            with_constants: true,
+                        },
+                    );
+                    let mut depended_on = HashSet::default();
+                    depgraph.get_full_depends_on(
+                        &mut depended_on,
+                        &call_spec.name,
+                    );
+                    to_compile.helpers =
+                        compiler.original_helpers.iter().filter(|h| {
+                            depended_on.contains(h.name())
+                        }).cloned().collect();
+                }
+
                 let optimizer = if let Ok(res) = get_optimizer(&call_spec.loc, opts.clone()) {
                     res
                 } else {
@@ -354,13 +358,9 @@ fn constant_fun_result(
 
                 let mut symbols = HashMap::new();
                 let mut includes = Vec::new();
-                let mut wrapper = CompileContextWrapper::new(
-                    allocator,
-                    runner.clone(),
-                    &mut symbols,
-                    optimizer,
-                    &mut includes,
-                );
+                let mut wrapper =
+                    CompileContextWrapper::new(allocator, runner.clone(), &mut symbols, optimizer, &mut includes);
+
                 if let Ok(code) = codegen(&mut wrapper.context, opts.clone(), &to_compile) {
                     code
                 } else {
