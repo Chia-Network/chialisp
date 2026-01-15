@@ -1309,7 +1309,7 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
                 NodePtr,
                 NodePtr,
             )
-                -> Result<Option<Box<(dyn Fn(&mut Allocator, Option<NodePtr>))>>, EvalErr>,
+                -> Result<Option<Box<dyn Fn(&mut Allocator, Option<NodePtr>)>>, EvalErr>,
         > = Box::new(move |allocator, sexp, args| {
             let pre_eval_clone = pre_eval_fn.clone();
             trace_pre_eval(

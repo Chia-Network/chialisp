@@ -17,16 +17,9 @@ crate-type = ["cdylib"]
 path = "src/mod.rs"
 
 [dependencies]
-<<<<<<< HEAD
-clvm_tools_rs = { path= "..", features = [] }
-clvmr = { version = "0.12.0", features = ["pre-eval"] }
-wasm-bindgen = "0.2.100"
-wasm-bindgen-test = "0.3.50"
-=======
 chialisp = { path= "..", features = [] }
 clvmr = { version = "0.16.0", features = ["pre-eval"] }
 wasm-bindgen = "=0.2.100"
->>>>>>> main
 js-sys = "0.3.60"
 num-bigint = "0.4.0"
 num-traits = "0.2.15"
