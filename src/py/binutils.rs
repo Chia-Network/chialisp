@@ -14,6 +14,7 @@ create_exception!(mymodule, ConvError, PyException);
 
 fn convert_to_external<'a>(
     allocator: &Allocator,
+    cons: Bound<'a, PyAny>,
     from_bytes: Bound<'a, PyAny>,
     root_node: NodePtr,
 ) -> PyResult<PyObject> {
@@ -104,7 +105,7 @@ pub fn disassemble_generic(program_bytes: Bound<'_, PyBytes>) -> PyResult<String
     Ok(disassembled)
 }
 
-pub fn create_binutils_module(py: Python) -> PyResult<Bound<'_, PyModule>> {
+pub fn create_binutils_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     let m = PyModule::new(py, "binutils")?;
     m.add_function(wrap_pyfunction!(assemble_generic, &m)?)?;
     m.add_function(wrap_pyfunction!(disassemble_generic, &m)?)?;

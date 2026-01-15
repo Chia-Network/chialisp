@@ -96,7 +96,7 @@ pub fn clvm_value_to_python(py: Python, val: Rc<SExp>) -> PyResult<Py<PyAny>> {
             PyList::new(py, &vallist)?.into_py_any(py)
         })
         .unwrap_or_else(|| match val.borrow() {
-            SExp::Cons(_, a, b) => PyTuple::new_bound(
+            SExp::Cons(_, a, b) => PyTuple::new(
                 py,
                 vec![
                     clvm_value_to_python(py, a.clone())?,
