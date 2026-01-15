@@ -938,10 +938,7 @@ impl Preprocessor {
 
     // Check for and apply preprocessor level macros.
     // This is maximally permissive.
-    fn expand_macros(
-        &mut self,
-        body: Rc<SExp>,
-    ) -> Result<Option<Rc<SExp>>, CompileErr> {
+    fn expand_macros(&mut self, body: Rc<SExp>) -> Result<Option<Rc<SExp>>, CompileErr> {
         if let SExp::Cons(_, _, _) = body.borrow() {
             // First expand inner macros.
             let mut rest_list = Vec::new();

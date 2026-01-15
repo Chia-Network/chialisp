@@ -35,11 +35,8 @@ use crate::compiler::evaluate::{
     build_reflex_captures, dequote, is_i_atom, is_not_atom, Evaluator, EVAL_STACK_LIMIT,
 };
 use crate::compiler::optimize::above22::Strategy23;
+use crate::compiler::optimize::depgraph::{DepgraphOptions, FunctionDependencyGraph};
 use crate::compiler::optimize::strategy::ExistingStrategy;
-use crate::compiler::optimize::depgraph::{
-    DepgraphOptions,
-    FunctionDependencyGraph
-};
 use crate::compiler::runtypes::RunFailure;
 #[cfg(test)]
 use crate::compiler::sexp::parse_sexp;
@@ -340,14 +337,13 @@ fn constant_fun_result(
                         },
                     );
                     let mut depended_on = HashSet::default();
-                    depgraph.get_full_depends_on(
-                        &mut depended_on,
-                        &call_spec.name,
-                    );
-                    to_compile.helpers =
-                        compiler.original_helpers.iter().filter(|h| {
-                            depended_on.contains(h.name())
-                        }).cloned().collect();
+                    depgraph.get_full_depends_on(&mut depended_on, &call_spec.name);
+                    to_compile.helpers = compiler
+                        .original_helpers
+                        .iter()
+                        .filter(|h| depended_on.contains(h.name()))
+                        .cloned()
+                        .collect();
                 }
 
                 let optimizer = if let Ok(res) = get_optimizer(&call_spec.loc, opts.clone()) {
@@ -358,8 +354,13 @@ fn constant_fun_result(
 
                 let mut symbols = HashMap::new();
                 let mut includes = Vec::new();
-                let mut wrapper =
-                    CompileContextWrapper::new(allocator, runner.clone(), &mut symbols, optimizer, &mut includes);
+                let mut wrapper = CompileContextWrapper::new(
+                    allocator,
+                    runner.clone(),
+                    &mut symbols,
+                    optimizer,
+                    &mut includes,
+                );
 
                 if let Ok(code) = codegen(&mut wrapper.context, opts.clone(), &to_compile) {
                     code
