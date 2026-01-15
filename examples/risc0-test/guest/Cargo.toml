@@ -15,3 +15,9 @@ borsh = { version = "1.5.7", features = ["derive"] }
 
 # RISC0 accelerated SHA256
 sha2 = { git = "https://github.com/risc0/RustCrypto-hashes", tag = "sha2-v0.10.8-risczero.0" }
+
+# BLS signature verification with RISC0 precompiles
+bls12_381 = { git = "https://github.com/risc0/zkcrypto-bls12_381.git", default-features = false, features = ["groups", "pairings", "experimental"] }
+
+# ECDSA signature verification
+k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
