@@ -107,7 +107,7 @@ fn namespace_helper(name: &ImportLongName, value: &HelperForm) -> HelperFormResu
             name: name.as_u8_vec(LongNameTranslation::Namespace),
             ..dm.clone()
         })]),
-        _ => HelperFormResult::new(&[value.clone()]),
+        _ => HelperFormResult::new(std::slice::from_ref(&value.clone())),
     }
 }
 
@@ -589,7 +589,7 @@ fn resolve_namespaces_in_helper(
                 }),
             )]))
         }
-        HelperForm::Defnsref(_) => Ok(HelperFormResult::new(&[helper.clone()])),
+        HelperForm::Defnsref(_) => Ok(HelperFormResult::new(std::slice::from_ref(&helper.clone()))),
         HelperForm::Defun(inline, dd) => {
             let mut in_scope = HashSet::new();
             capture_scope(&mut in_scope, dd.args.clone());

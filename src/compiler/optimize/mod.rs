@@ -337,7 +337,7 @@ fn constant_fun_result(
                         },
                     );
                     let mut depended_on = HashSet::default();
-                    depgraph.get_full_depends_on(&mut depended_on, &call_spec.name);
+                    depgraph.get_full_depends_on(&mut depended_on, call_spec.name);
                     to_compile.helpers = compiler
                         .original_helpers
                         .iter()
