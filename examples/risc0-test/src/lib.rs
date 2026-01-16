@@ -173,4 +173,39 @@ mod tests {
         assert_eq!(verified_output.result, output.result);
         println!("Addition PROVED and VERIFIED! 2 + 3 = {:?}, Cost: {}", output.result, output.cost);
     }
+
+    #[test]
+    fn test_sha256_with_proof() {
+        // Program: (sha256 (q . "test"))
+        // sha256 = opcode 11 (0x0b)
+        // "test" = 0x74657374
+        let input = ClvmInput {
+            program: vec![
+                0xff, 0x0b,                   // (sha256
+                0xff,                         //   (
+                0xff, 0x01,                   //     (q .
+                0x84, 0x74, 0x65, 0x73, 0x74, //       "test" = 4 bytes)
+                0x80,                         //   )
+            ],
+            args: vec![0x80],
+            max_cost: 1000000,
+        };
+
+        let (output, receipt) = run_clvm_with_proof(input).expect("CLVM proving failed");
+        
+        // Verify the proof
+        let verified_output = verify_clvm_proof(&receipt).expect("Verification failed");
+        
+        // SHA256("test") = 0x9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+        // Result is 32 bytes + 1 byte length prefix (0xa0 = 32 in CLVM serialization)
+        assert_eq!(output.result.len(), 33);
+        assert_eq!(output.result[0], 0xa0); // 32-byte atom prefix
+        assert_eq!(verified_output.result, output.result);
+        
+        // Verify it's the correct SHA256 hash
+        let expected_hash = hex::decode("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08").unwrap();
+        assert_eq!(&output.result[1..], expected_hash.as_slice());
+        
+        println!("SHA256 PROVED and VERIFIED! Hash: {:?}, Cost: {}", hex::encode(&output.result[1..]), output.cost);
+    }
 }

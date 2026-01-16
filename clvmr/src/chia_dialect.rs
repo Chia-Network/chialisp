@@ -1,7 +1,11 @@
-use crate::allocator::{Allocator, NodePtr};
+extern crate alloc;
+
+use alloc::vec::Vec;
+
+use crate::allocator::{Allocator, NodePtr, SExp};
 use crate::core_ops::{op_cons, op_eq, op_first, op_if, op_listp, op_raise, op_rest};
 use crate::cost::Cost;
-use crate::crypto_handlers::CryptoHandlers;
+use crate::crypto_handlers::{CryptoHandlers, Sha256Fn, VerifierFn};
 use crate::dialect::{Dialect, OperatorSet};
 use crate::error::EvalErr;
 use crate::more_ops::{
@@ -9,7 +13,7 @@ use crate::more_ops::{
     op_logand, op_logior, op_lognot, op_logxor, op_lsh, op_mod, op_modpow, op_multiply, op_not,
     op_point_add, op_pubkey_for_exp, op_sha256, op_strlen, op_substr, op_subtract, op_unknown,
 };
-use crate::reduction::Response;
+use crate::reduction::{Reduction, Response};
 
 #[cfg(feature = "bls-ops")]
 use crate::bls_ops::{
@@ -41,6 +45,102 @@ pub const DISABLE_OP: u32 = 0x200;
 // The default mode when running grnerators in mempool-mode (i.e. the stricter
 // mode)
 pub const MEMPOOL_MODE: u32 = NO_UNKNOWN_OPS | LIMIT_HEAP | DISABLE_OP;
+
+// Cost constants for SHA256 (matching more_ops.rs)
+const SHA256_BASE_COST: Cost = 87;
+const SHA256_COST_PER_ARG: Cost = 134;
+const SHA256_COST_PER_BYTE: Cost = 2;
+
+/// Extract three atoms from a CLVM list: (a b c)
+fn extract_three_atoms(allocator: &Allocator, args: NodePtr) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), EvalErr> {
+    let (first, rest1) = match allocator.sexp(args) {
+        SExp::Pair(f, r) => (f, r),
+        _ => return Err(EvalErr::Invalid(args)),
+    };
+    let (second, rest2) = match allocator.sexp(rest1) {
+        SExp::Pair(f, r) => (f, r),
+        _ => return Err(EvalErr::Invalid(args)),
+    };
+    let (third, _) = match allocator.sexp(rest2) {
+        SExp::Pair(f, r) => (f, r),
+        _ => return Err(EvalErr::Invalid(args)),
+    };
+
+    let a = match allocator.sexp(first) {
+        SExp::Atom => allocator.atom(first).as_ref().to_vec(),
+        _ => return Err(EvalErr::Invalid(args)),
+    };
+    let b = match allocator.sexp(second) {
+        SExp::Atom => allocator.atom(second).as_ref().to_vec(),
+        _ => return Err(EvalErr::Invalid(args)),
+    };
+    let c = match allocator.sexp(third) {
+        SExp::Atom => allocator.atom(third).as_ref().to_vec(),
+        _ => return Err(EvalErr::Invalid(args)),
+    };
+
+    Ok((a, b, c))
+}
+
+/// Run injected SHA256 hasher
+fn run_injected_sha256(
+    allocator: &mut Allocator,
+    args: NodePtr,
+    max_cost: Cost,
+    hasher: Sha256Fn,
+) -> Response {
+    let mut cost = SHA256_BASE_COST;
+    let mut data = Vec::new();
+    let mut current = args;
+
+    while let SExp::Pair(first, rest) = allocator.sexp(current) {
+        cost += SHA256_COST_PER_ARG;
+        match allocator.sexp(first) {
+            SExp::Atom => {
+                let bytes = allocator.atom(first);
+                cost += bytes.as_ref().len() as Cost * SHA256_COST_PER_BYTE;
+                if cost > max_cost {
+                    return Err(EvalErr::CostExceeded);
+                }
+                data.extend_from_slice(bytes.as_ref());
+            }
+            _ => return Err(EvalErr::Invalid(args)),
+        };
+        current = rest;
+    }
+
+    let hash = hasher(&data);
+    let result = allocator.new_atom(&hash).map_err(|_| EvalErr::Invalid(args))?;
+    Ok(Reduction(cost, result))
+}
+
+/// Run injected signature verifier (BLS or ECDSA)
+fn run_injected_verifier(
+    allocator: &mut Allocator,
+    args: NodePtr,
+    verifier: VerifierFn,
+    is_bls: bool,
+) -> Response {
+    let (pk, msg, sig) = extract_three_atoms(allocator, args)?;
+    
+    match verifier(&pk, &msg, &sig) {
+        Ok(true) => Ok(Reduction(0, allocator.nil())),
+        Ok(false) => {
+            if is_bls {
+                Err(EvalErr::BLSVerifyFailed(args))
+            } else {
+                Err(EvalErr::Secp256Failed(args))
+            }
+        }
+        Err(_) => {
+            if is_bls {
+                Err(EvalErr::BLSVerifyFailed(args))
+            } else {
+                Err(EvalErr::Secp256Failed(args))
+            }
+        }
+    }
+}
 
 fn unknown_operator(
     allocator: &mut Allocator,
@@ -132,13 +232,13 @@ impl Dialect for ChiaDialect {
             if let Some(ref handlers) = self.crypto_handlers {
                 match opcode {
                     0x13d61f00 => {
-                        if let Some(handler) = handlers.secp256k1_verify {
-                            return handler(allocator, argument_list, max_cost);
+                        if let Some(verifier) = handlers.secp256k1_verify {
+                            return run_injected_verifier(allocator, argument_list, verifier, false);
                         }
                     }
                     0x1c3a8f00 => {
-                        if let Some(handler) = handlers.secp256r1_verify {
-                            return handler(allocator, argument_list, max_cost);
+                        if let Some(verifier) = handlers.secp256r1_verify {
+                            return run_injected_verifier(allocator, argument_list, verifier, false);
                         }
                     }
                     _ => {}
@@ -184,7 +284,15 @@ impl Dialect for ChiaDialect {
             8 => return op_raise(allocator, argument_list, max_cost),
             9 => return op_eq(allocator, argument_list, max_cost),
             10 => return op_gr_bytes(allocator, argument_list, max_cost),
-            11 => return op_sha256(allocator, argument_list, max_cost),
+            // sha256 (11) - check for injected hasher
+            11 => {
+                if let Some(ref handlers) = self.crypto_handlers {
+                    if let Some(hasher) = handlers.sha256 {
+                        return run_injected_sha256(allocator, argument_list, max_cost, hasher);
+                    }
+                }
+                return op_sha256(allocator, argument_list, max_cost);
+            }
             12 => return op_substr(allocator, argument_list, max_cost),
             13 => return op_strlen(allocator, argument_list, max_cost),
             14 => return op_concat(allocator, argument_list, max_cost),
@@ -344,8 +452,8 @@ impl Dialect for ChiaDialect {
             }
             59 => {
                 if let Some(ref handlers) = self.crypto_handlers {
-                    if let Some(handler) = handlers.bls_verify {
-                        return handler(allocator, argument_list, max_cost);
+                    if let Some(verifier) = handlers.bls_verify {
+                        return run_injected_verifier(allocator, argument_list, verifier, true);
                     }
                 }
                 #[cfg(feature = "bls-ops")]

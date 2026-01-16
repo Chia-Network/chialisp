@@ -144,6 +144,38 @@ Mac M1
 Use ```cargo build --no-default-features``` due to differences in how mac m1 and
 other platforms handle python extensions.
 
+no_std Support
+===
+
+This crate supports `no_std` environments for use in zkVM targets (RISC Zero, SP1, etc.).
+
+**Feature Flags:**
+
+- `std` (default) - Standard library support for development and CLI tools
+- `full-crypto` - Full BLS/ECDSA crypto operations (requires std)
+
+For `no_std` builds:
+
+    cargo build --no-default-features
+
+VeilEvaluator Adapter
+===
+
+The `VeilEvaluator` provides a bridge between Veil's `clvm_zk_core` interface and the clvmr runtime. This allows zkVM guests to use clvmr with injectable crypto handlers for precompile acceleration.
+
+```rust
+use clvm_tools_rs::veil_adapter::{VeilEvaluator, Hasher, BlsVerifier, EcdsaVerifier};
+
+fn my_hasher(data: &[u8]) -> [u8; 32] { /* ... */ }
+fn my_bls_verify(pk: &[u8], msg: &[u8], sig: &[u8]) -> Result<bool, &'static str> { /* ... */ }
+fn my_ecdsa_verify(pk: &[u8], msg: &[u8], sig: &[u8]) -> Result<bool, &'static str> { /* ... */ }
+
+let evaluator = VeilEvaluator::new(my_hasher, my_bls_verify, my_ecdsa_verify);
+let (result_bytes, cost) = evaluator.run_program(&program_bytes, &args_bytes, max_cost)?;
+```
+
+See `examples/risc0-test/` for a complete RISC Zero integration example.
+
 Use with chia-blockchain
 ===
 

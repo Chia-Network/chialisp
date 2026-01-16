@@ -22,11 +22,8 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use crate::clvmr::{
-    Allocator, ChiaDialect, CryptoHandlers, NodePtr,
+    Allocator, ChiaDialect, CryptoHandlers,
     node_from_bytes, node_to_bytes, run_program,
-    cost::Cost,
-    reduction::{Response, Reduction},
-    error::EvalErr,
 };
 
 /// Hasher function type (matches Veil's clvm_zk_core)
@@ -37,11 +34,6 @@ pub type BlsVerifier = fn(&[u8], &[u8], &[u8]) -> Result<bool, &'static str>;
 
 /// ECDSA verifier function type (matches Veil's clvm_zk_core)
 pub type EcdsaVerifier = fn(&[u8], &[u8], &[u8]) -> Result<bool, &'static str>;
-
-// For zkVM (single-threaded), we use a simple static to pass crypto callbacks
-// to OpHandler functions (which are fn pointers that can't capture state)
-static mut CURRENT_BLS_VERIFIER: Option<BlsVerifier> = None;
-static mut CURRENT_ECDSA_VERIFIER: Option<EcdsaVerifier> = None;
 
 /// Veil-compatible CLVM evaluator backed by clvmr
 pub struct VeilEvaluator {
@@ -76,13 +68,6 @@ impl VeilEvaluator {
         args: &[u8],
         max_cost: u64,
     ) -> Result<(Vec<u8>, u64), &'static str> {
-        // Store verifiers in thread-local for OpHandler access
-        // SAFETY: zkVM is single-threaded
-        unsafe {
-            CURRENT_BLS_VERIFIER = Some(self.bls_verifier);
-            CURRENT_ECDSA_VERIFIER = Some(self.ecdsa_verifier);
-        }
-
         let mut allocator = Allocator::new();
 
         // Deserialize program and args
@@ -91,10 +76,11 @@ impl VeilEvaluator {
         let args_node = node_from_bytes(&mut allocator, args)
             .map_err(|_| "failed to deserialize args")?;
 
-        // Create dialect with crypto handlers
+        // Create dialect with crypto handlers - functions passed directly!
         let handlers = CryptoHandlers::new()
-            .with_bls_verify(bls_verify_handler)
-            .with_secp256k1_verify(ecdsa_verify_handler);
+            .with_sha256(self.hasher)
+            .with_bls_verify(self.bls_verifier)
+            .with_secp256k1_verify(self.ecdsa_verifier);
 
         let dialect = ChiaDialect::new_with_handlers(0, handlers);
 
@@ -106,12 +92,6 @@ impl VeilEvaluator {
         let result_bytes = node_to_bytes(&allocator, reduction.1)
             .map_err(|_| "failed to serialize result")?;
 
-        // Clear verifiers
-        unsafe {
-            CURRENT_BLS_VERIFIER = None;
-            CURRENT_ECDSA_VERIFIER = None;
-        }
-
         Ok((result_bytes, reduction.0))
     }
 
@@ -119,111 +99,6 @@ impl VeilEvaluator {
     pub fn hasher(&self) -> Hasher {
         self.hasher
     }
-}
-
-/// OpHandler wrapper for BLS verification (opcode 59)
-///
-/// Extracts (pubkey, message, signature) from CLVM args and calls the injected verifier
-fn bls_verify_handler(
-    allocator: &mut Allocator,
-    args: NodePtr,
-    _max_cost: Cost,
-) -> Response {
-    // Get the verifier
-    let verifier = unsafe {
-        CURRENT_BLS_VERIFIER.ok_or(EvalErr::Unimplemented(args))?
-    };
-
-    // Extract arguments: (pubkey message signature)
-    let (pk, msg, sig) = extract_three_atoms(allocator, args)?;
-
-    // Call verifier
-    match verifier(&pk, &msg, &sig) {
-        Ok(true) => {
-            // Return nil on success (standard CLVM convention)
-            Ok(Reduction(0, allocator.nil()))
-        }
-        Ok(false) => {
-            // Verification failed
-            Err(EvalErr::BLSVerifyFailed(args))
-        }
-        Err(_) => {
-            Err(EvalErr::BLSVerifyFailed(args))
-        }
-    }
-}
-
-/// OpHandler wrapper for ECDSA verification (secp256k1)
-///
-/// Extracts (pubkey, message, signature) from CLVM args and calls the injected verifier
-fn ecdsa_verify_handler(
-    allocator: &mut Allocator,
-    args: NodePtr,
-    _max_cost: Cost,
-) -> Response {
-    // Get the verifier
-    let verifier = unsafe {
-        CURRENT_ECDSA_VERIFIER.ok_or(EvalErr::Unimplemented(args))?
-    };
-
-    // Extract arguments: (pubkey message signature)
-    let (pk, msg, sig) = extract_three_atoms(allocator, args)?;
-
-    // Call verifier
-    match verifier(&pk, &msg, &sig) {
-        Ok(true) => {
-            // Return nil on success
-            Ok(Reduction(0, allocator.nil()))
-        }
-        Ok(false) => {
-            Err(EvalErr::Secp256Failed(args))
-        }
-        Err(_) => {
-            Err(EvalErr::Secp256Failed(args))
-        }
-    }
-}
-
-/// Extract three atom arguments from a CLVM list
-fn extract_three_atoms(
-    allocator: &Allocator,
-    args: NodePtr,
-) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), EvalErr> {
-    use crate::clvmr::SExp;
-
-    // args should be (pk . (msg . (sig . nil)))
-    let (first, rest1) = match allocator.sexp(args) {
-        SExp::Pair(f, r) => (f, r),
-        _ => return Err(EvalErr::Invalid(args)),
-    };
-
-    let (second, rest2) = match allocator.sexp(rest1) {
-        SExp::Pair(f, r) => (f, r),
-        _ => return Err(EvalErr::Invalid(args)),
-    };
-
-    let (third, _) = match allocator.sexp(rest2) {
-        SExp::Pair(f, r) => (f, r),
-        _ => return Err(EvalErr::Invalid(args)),
-    };
-
-    // Extract bytes from atoms
-    let pk = match allocator.sexp(first) {
-        SExp::Atom => allocator.atom(first).as_ref().to_vec(),
-        _ => return Err(EvalErr::Invalid(args)),
-    };
-
-    let msg = match allocator.sexp(second) {
-        SExp::Atom => allocator.atom(second).as_ref().to_vec(),
-        _ => return Err(EvalErr::Invalid(args)),
-    };
-
-    let sig = match allocator.sexp(third) {
-        SExp::Atom => allocator.atom(third).as_ref().to_vec(),
-        _ => return Err(EvalErr::Invalid(args)),
-    };
-
-    Ok((pk, msg, sig))
 }
 
 #[cfg(test)]
@@ -281,5 +156,132 @@ mod tests {
 
         assert_eq!(result, vec![0x05]);
         println!("VeilEvaluator addition test passed! 2+3={:?}, Cost: {}", result, cost);
+    }
+
+    #[test]
+    fn test_sha256_uses_injected_hasher() {
+        // Custom hasher that returns a predictable result
+        fn custom_hasher(data: &[u8]) -> [u8; 32] {
+            let mut result = [0xABu8; 32];
+            // Put input length in first byte to verify we got the right data
+            result[0] = data.len() as u8;
+            if !data.is_empty() {
+                result[1] = data[0];
+            }
+            result
+        }
+
+        let evaluator = VeilEvaluator::new(custom_hasher, dummy_bls_verify, dummy_ecdsa_verify);
+
+        // Program: (sha256 (q . "hi"))
+        // sha256 = opcode 11 (0x0b)
+        // "hi" = 0x6869
+        let program = vec![
+            0xff, 0x0b,             // (sha256
+            0xff,                   //   (
+            0xff, 0x01,             //     (q .
+            0x82, 0x68, 0x69,       //       "hi")  -- 0x82 = 2-byte atom
+            0x80,                   //   )
+        ];
+        let args = vec![0x80];
+
+        let (result, cost) = evaluator.run_program(&program, &args, 1000000).unwrap();
+
+        // Result should be 32 bytes with our custom pattern
+        assert_eq!(result.len(), 33); // 32 bytes + 1 byte length prefix in CLVM serialization
+        // The actual atom is result[1..] since result[0] is the length indicator
+        assert_eq!(result[1], 2);     // data length was 2 ("hi")
+        assert_eq!(result[2], 0x68);  // first byte of "hi"
+        assert_eq!(result[3], 0xAB);  // rest filled with 0xAB
+        println!("SHA256 injected hasher test passed! Cost: {}", cost);
+    }
+
+    // Static flags to track if handlers were called
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static BLS_HANDLER_CALLED: AtomicBool = AtomicBool::new(false);
+    static ECDSA_HANDLER_CALLED: AtomicBool = AtomicBool::new(false);
+
+    #[test]
+    fn test_bls_verify_uses_injected_handler() {
+        BLS_HANDLER_CALLED.store(false, Ordering::SeqCst);
+
+        // Custom BLS verifier that tracks calls
+        fn tracking_bls_verify(pk: &[u8], msg: &[u8], sig: &[u8]) -> Result<bool, &'static str> {
+            BLS_HANDLER_CALLED.store(true, Ordering::SeqCst);
+            // Verify we received the expected arguments
+            assert_eq!(pk, &[0x01, 0x02, 0x03]); // pubkey
+            assert_eq!(msg, &[0x04, 0x05]);       // message
+            assert_eq!(sig, &[0x06, 0x07, 0x08]); // signature
+            Ok(true)
+        }
+
+        let evaluator = VeilEvaluator::new(dummy_hasher, tracking_bls_verify, dummy_ecdsa_verify);
+
+        // Program: (bls_verify (q . <pk>) (q . <msg>) (q . <sig>))
+        // bls_verify = opcode 59 (0x3b)
+        // We need: (59 (q . pk) (q . msg) (q . sig))
+        let program = vec![
+            0xff, 0x3b,                   // (bls_verify
+            0xff,                         //   (
+            0xff, 0x01,                   //     (q .
+            0x83, 0x01, 0x02, 0x03,       //       pk = 3 bytes)
+            0xff,                         //     .
+            0xff, 0x01,                   //     (q .
+            0x82, 0x04, 0x05,             //       msg = 2 bytes)
+            0xff,                         //     .
+            0xff, 0x01,                   //     (q .
+            0x83, 0x06, 0x07, 0x08,       //       sig = 3 bytes)
+            0x80,                         //     . nil
+        ];
+        let args = vec![0x80];
+
+        let result = evaluator.run_program(&program, &args, 1000000);
+        
+        // Verify the handler was called
+        assert!(BLS_HANDLER_CALLED.load(Ordering::SeqCst), "BLS handler was not called!");
+        assert!(result.is_ok(), "BLS verify should succeed");
+        println!("BLS verify injected handler test passed!");
+    }
+
+    #[test]
+    fn test_ecdsa_verify_uses_injected_handler() {
+        ECDSA_HANDLER_CALLED.store(false, Ordering::SeqCst);
+
+        // Custom ECDSA verifier that tracks calls
+        fn tracking_ecdsa_verify(pk: &[u8], msg: &[u8], sig: &[u8]) -> Result<bool, &'static str> {
+            ECDSA_HANDLER_CALLED.store(true, Ordering::SeqCst);
+            // Verify we received the expected arguments
+            assert_eq!(pk, &[0x02, 0xAA, 0xBB]); // pubkey
+            assert_eq!(msg, &[0xCC, 0xDD]);       // message  
+            assert_eq!(sig, &[0xEE, 0xFF]);       // signature
+            Ok(true)
+        }
+
+        let evaluator = VeilEvaluator::new(dummy_hasher, dummy_bls_verify, tracking_ecdsa_verify);
+
+        // Program: (secp256k1_verify (q . <pk>) (q . <msg>) (q . <sig>))
+        // secp256k1_verify = 4-byte opcode 0x13d61f00
+        let program = vec![
+            0xff,                               // (
+            0x84, 0x13, 0xd6, 0x1f, 0x00,       // secp256k1_verify opcode (4 bytes, 0x84 prefix)
+            0xff,                               //   (
+            0xff, 0x01,                         //     (q .
+            0x83, 0x02, 0xAA, 0xBB,             //       pk = 3 bytes)
+            0xff,                               //     .
+            0xff, 0x01,                         //     (q .
+            0x82, 0xCC, 0xDD,                   //       msg = 2 bytes)
+            0xff,                               //     .
+            0xff, 0x01,                         //     (q .
+            0x82, 0xEE, 0xFF,                   //       sig = 2 bytes)
+            0x80,                               //     . nil
+        ];
+        let args = vec![0x80];
+
+        let result = evaluator.run_program(&program, &args, 1000000);
+        
+        // Verify the handler was called
+        assert!(ECDSA_HANDLER_CALLED.load(Ordering::SeqCst), "ECDSA handler was not called!");
+        assert!(result.is_ok(), "ECDSA verify should succeed");
+        println!("ECDSA verify injected handler test passed!");
     }
 }
