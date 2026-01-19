@@ -174,8 +174,6 @@ let evaluator = VeilEvaluator::new(my_hasher, my_bls_verify, my_ecdsa_verify);
 let (result_bytes, cost) = evaluator.run_program(&program_bytes, &args_bytes, max_cost)?;
 ```
 
-See `examples/risc0-test/` for a complete RISC Zero integration example.
-
 Use with chia-blockchain
 ===
 

@@ -43,7 +43,7 @@ lfsr = "0.3.0"
 
 [lib]
 name = "clvm_tools_rs"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [features]
 default = ["std"]

@@ -104,6 +104,8 @@ impl VeilEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
+    use core::sync::atomic::{AtomicBool, Ordering};
 
     fn dummy_hasher(data: &[u8]) -> [u8; 32] {
         let mut result = [0u8; 32];
@@ -130,11 +132,10 @@ mod tests {
         // Args: nil
         let args = vec![0x80];
 
-        let (result, cost) = evaluator.run_program(&program, &args, 1000000).unwrap();
+        let (result, _cost) = evaluator.run_program(&program, &args, 1000000).unwrap();
 
         // Should return 42
         assert_eq!(result, vec![0x2a]);
-        println!("VeilEvaluator test passed! Result: {:?}, Cost: {}", result, cost);
     }
 
     #[test]
@@ -152,10 +153,9 @@ mod tests {
         ];
         let args = vec![0x80];
 
-        let (result, cost) = evaluator.run_program(&program, &args, 1000000).unwrap();
+        let (result, _cost) = evaluator.run_program(&program, &args, 1000000).unwrap();
 
         assert_eq!(result, vec![0x05]);
-        println!("VeilEvaluator addition test passed! 2+3={:?}, Cost: {}", result, cost);
     }
 
     #[test]
@@ -185,7 +185,7 @@ mod tests {
         ];
         let args = vec![0x80];
 
-        let (result, cost) = evaluator.run_program(&program, &args, 1000000).unwrap();
+        let (result, _cost) = evaluator.run_program(&program, &args, 1000000).unwrap();
 
         // Result should be 32 bytes with our custom pattern
         assert_eq!(result.len(), 33); // 32 bytes + 1 byte length prefix in CLVM serialization
@@ -193,11 +193,9 @@ mod tests {
         assert_eq!(result[1], 2);     // data length was 2 ("hi")
         assert_eq!(result[2], 0x68);  // first byte of "hi"
         assert_eq!(result[3], 0xAB);  // rest filled with 0xAB
-        println!("SHA256 injected hasher test passed! Cost: {}", cost);
     }
 
     // Static flags to track if handlers were called
-    use std::sync::atomic::{AtomicBool, Ordering};
     static BLS_HANDLER_CALLED: AtomicBool = AtomicBool::new(false);
     static ECDSA_HANDLER_CALLED: AtomicBool = AtomicBool::new(false);
 
@@ -236,11 +234,10 @@ mod tests {
         let args = vec![0x80];
 
         let result = evaluator.run_program(&program, &args, 1000000);
-        
+
         // Verify the handler was called
         assert!(BLS_HANDLER_CALLED.load(Ordering::SeqCst), "BLS handler was not called!");
         assert!(result.is_ok(), "BLS verify should succeed");
-        println!("BLS verify injected handler test passed!");
     }
 
     #[test]
@@ -252,7 +249,7 @@ mod tests {
             ECDSA_HANDLER_CALLED.store(true, Ordering::SeqCst);
             // Verify we received the expected arguments
             assert_eq!(pk, &[0x02, 0xAA, 0xBB]); // pubkey
-            assert_eq!(msg, &[0xCC, 0xDD]);       // message  
+            assert_eq!(msg, &[0xCC, 0xDD]);       // message
             assert_eq!(sig, &[0xEE, 0xFF]);       // signature
             Ok(true)
         }
@@ -278,10 +275,9 @@ mod tests {
         let args = vec![0x80];
 
         let result = evaluator.run_program(&program, &args, 1000000);
-        
+
         // Verify the handler was called
         assert!(ECDSA_HANDLER_CALLED.load(Ordering::SeqCst), "ECDSA handler was not called!");
         assert!(result.is_ok(), "ECDSA verify should succeed");
-        println!("ECDSA verify injected handler test passed!");
     }
 }
