@@ -7,24 +7,34 @@
 //! # Usage
 //!
 //! ```ignore
-//! use clvm_tools_rs::veil_adapter::{VeilEvaluator, Hasher, BlsVerifier, EcdsaVerifier};
+//! use clvm_tools_rs::veil_adapter::{VeilEvaluator, Hasher, BlsVerifier, EcdsaVerifier, compile_chialisp};
 //!
 //! fn my_hasher(data: &[u8]) -> [u8; 32] { ... }
 //! fn my_bls_verify(pk: &[u8], msg: &[u8], sig: &[u8]) -> Result<bool, &'static str> { ... }
 //! fn my_ecdsa_verify(pk: &[u8], msg: &[u8], sig: &[u8]) -> Result<bool, &'static str> { ... }
 //!
+//! // Compile chialisp source to CLVM bytecode
+//! let bytecode = compile_chialisp("(mod (x) (* x 2))").unwrap();
+//!
+//! // Run the compiled program
 //! let evaluator = VeilEvaluator::new(my_hasher, my_bls_verify, my_ecdsa_verify);
-//! let (result_bytes, cost) = evaluator.run_program(&program_bytes, &args_bytes, max_cost)?;
+//! let (result_bytes, cost) = evaluator.run_program(&bytecode, &args_bytes, max_cost)?;
 //! ```
 
 extern crate alloc;
 
+use alloc::collections::BTreeMap;
+use alloc::rc::Rc;
 use alloc::vec::Vec;
 
 use crate::clvmr::{
     Allocator, ChiaDialect, CryptoHandlers,
     node_from_bytes, node_to_bytes, run_program,
 };
+
+use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
+use crate::compiler::compiler::{compile_file, DefaultCompilerOpts};
+use crate::compiler::clvm::convert_to_clvm_rs;
 
 /// Hasher function type (matches Veil's clvm_zk_core)
 pub type Hasher = fn(&[u8]) -> [u8; 32];
@@ -34,6 +44,41 @@ pub type BlsVerifier = fn(&[u8], &[u8], &[u8]) -> Result<bool, &'static str>;
 
 /// ECDSA verifier function type (matches Veil's clvm_zk_core)
 pub type EcdsaVerifier = fn(&[u8], &[u8], &[u8]) -> Result<bool, &'static str>;
+
+/// Compile chialisp source code to CLVM bytecode
+///
+/// This uses the full clvm_tools_rs compiler with support for:
+/// - defun (user-defined functions with recursion support)
+/// - defmacro (compile-time macros)
+/// - if/list and other standard macros
+/// - Full chialisp language features
+///
+/// # Arguments
+/// * `source` - Chialisp source code (e.g., "(mod (x) (* x 2))")
+///
+/// # Returns
+/// * `Ok(Vec<u8>)` - Serialized CLVM bytecode
+/// * `Err(&'static str)` - Error message if compilation fails
+pub fn compile_chialisp(source: &str) -> Result<Vec<u8>, &'static str> {
+    let mut allocator = Allocator::new();
+    let runner = Rc::new(DefaultProgramRunner::new());
+    let mut symbol_table = BTreeMap::new();
+
+    // Create compiler options with standard settings
+    let opts = Rc::new(DefaultCompilerOpts::new("*veil*"));
+
+    // Compile the source
+    let compiled_sexp = compile_file(&mut allocator, runner, opts, source, &mut symbol_table)
+        .map_err(|_| "chialisp compilation failed")?;
+
+    // Convert SExp to NodePtr
+    let node = convert_to_clvm_rs(&mut allocator, Rc::new(compiled_sexp))
+        .map_err(|_| "failed to convert compiled program to clvm")?;
+
+    // Serialize to bytes
+    node_to_bytes(&allocator, node)
+        .map_err(|_| "failed to serialize compiled program")
+}
 
 /// Veil-compatible CLVM evaluator backed by clvmr
 pub struct VeilEvaluator {
@@ -279,5 +324,90 @@ mod tests {
         // Verify the handler was called
         assert!(ECDSA_HANDLER_CALLED.load(Ordering::SeqCst), "ECDSA handler was not called!");
         assert!(result.is_ok(), "ECDSA verify should succeed");
+    }
+
+    #[test]
+    fn test_compile_simple_program() {
+        // Compile a simple multiplication program
+        let bytecode = compile_chialisp("(mod (x) (* x 2))").unwrap();
+        assert!(!bytecode.is_empty());
+
+        // Run the compiled program with x=5
+        let evaluator = VeilEvaluator::new(dummy_hasher, dummy_bls_verify, dummy_ecdsa_verify);
+
+        // Args: (5) - a list with single element 5
+        let args = vec![0xff, 0x05, 0x80]; // cons(5, nil)
+
+        let (result, _cost) = evaluator.run_program(&bytecode, &args, 1000000).unwrap();
+
+        // Should return 10 (5 * 2)
+        assert_eq!(result, vec![0x0a]);
+    }
+
+    #[test]
+    fn test_compile_with_defun() {
+        // Compile a program with user-defined function
+        let source = r#"
+            (mod (x)
+                (defun double (n) (* n 2))
+                (double x))
+        "#;
+
+        let bytecode = compile_chialisp(source).unwrap();
+        assert!(!bytecode.is_empty());
+
+        // Run with x=7
+        let evaluator = VeilEvaluator::new(dummy_hasher, dummy_bls_verify, dummy_ecdsa_verify);
+        let args = vec![0xff, 0x07, 0x80]; // cons(7, nil)
+
+        let (result, _cost) = evaluator.run_program(&bytecode, &args, 1000000).unwrap();
+
+        // Should return 14 (7 * 2)
+        assert_eq!(result, vec![0x0e]);
+    }
+
+    #[test]
+    fn test_compile_with_recursion() {
+        // Compile a recursive factorial program
+        let source = r#"
+            (mod (n)
+                (defun factorial (x)
+                    (if (= x 0)
+                        1
+                        (* x (factorial (- x 1)))))
+                (factorial n))
+        "#;
+
+        let bytecode = compile_chialisp(source).unwrap();
+        assert!(!bytecode.is_empty());
+
+        // Run with n=5
+        let evaluator = VeilEvaluator::new(dummy_hasher, dummy_bls_verify, dummy_ecdsa_verify);
+        let args = vec![0xff, 0x05, 0x80]; // cons(5, nil)
+
+        let (result, _cost) = evaluator.run_program(&bytecode, &args, 1000000).unwrap();
+
+        // Should return 120 (5! = 120 = 0x78)
+        assert_eq!(result, vec![0x78]);
+    }
+
+    #[test]
+    fn test_compile_with_if_macro() {
+        // Test that standard macros like 'if' work
+        let source = "(mod (x) (if (> x 5) 100 0))";
+
+        let bytecode = compile_chialisp(source).unwrap();
+
+        let evaluator = VeilEvaluator::new(dummy_hasher, dummy_bls_verify, dummy_ecdsa_verify);
+
+        // Test with x=10 (> 5, should return 100)
+        let args = vec![0xff, 0x0a, 0x80]; // cons(10, nil)
+        let (result, _cost) = evaluator.run_program(&bytecode, &args, 1000000).unwrap();
+        assert_eq!(result, vec![0x64]); // 100
+
+        // Test with x=3 (<= 5, should return 0)
+        let args = vec![0xff, 0x03, 0x80]; // cons(3, nil)
+        let (result, _cost) = evaluator.run_program(&bytecode, &args, 1000000).unwrap();
+        assert_eq!(result, vec![0x80]); // nil/0
     }
 }

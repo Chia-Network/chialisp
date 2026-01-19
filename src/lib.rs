@@ -24,7 +24,7 @@ pub use clvmr::{
 };
 
 // Re-export veil adapter types
-pub use veil_adapter::{VeilEvaluator, Hasher, BlsVerifier, EcdsaVerifier};
+pub use veil_adapter::{VeilEvaluator, Hasher, BlsVerifier, EcdsaVerifier, compile_chialisp};
 
 pub mod util;
 pub mod veil_adapter;
