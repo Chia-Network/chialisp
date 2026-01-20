@@ -86,10 +86,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "tuesday"
-<<<<<<< HEAD
-=======
     cooldown:
       default-days: 7
->>>>>>> chia/main
     open-pull-requests-limit: 10
     rebase-strategy: auto

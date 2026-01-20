@@ -23,11 +23,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-<<<<<<< HEAD
-      uses: actions/checkout@v5
-=======
       uses: actions/checkout@v6
->>>>>>> chia/main
       with:
         fetch-depth: 1
 

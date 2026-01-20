@@ -22,11 +22,7 @@ jobs:
 
     steps:
       - name: Checkout Code
-<<<<<<< HEAD
-        uses: actions/checkout@v5
-=======
         uses: actions/checkout@v6
->>>>>>> chia/main
         with:
           fetch-depth: 0
 

@@ -24,11 +24,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-<<<<<<< HEAD
-      uses: actions/checkout@v5
-=======
       uses: actions/checkout@v6
->>>>>>> chia/main
       with:
         fetch-depth: 1
 
@@ -64,11 +60,7 @@ jobs:
     needs: build_wheels
     steps:
     - name: Fetch wheels from previous job
-<<<<<<< HEAD
-      uses: actions/download-artifact@v5
-=======
       uses: actions/download-artifact@v7
->>>>>>> chia/main
       with:
         name: wheels
         path: target/wheels/

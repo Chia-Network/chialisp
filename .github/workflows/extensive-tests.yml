@@ -20,11 +20,7 @@ jobs:
       fail-fast: false
 
     steps:
-<<<<<<< HEAD
-    - uses: actions/checkout@v5
-=======
     - uses: actions/checkout@v6
->>>>>>> chia/main
       with:
         fetch-depth: 0
 
@@ -63,32 +59,7 @@ jobs:
 
     - name: Build Linux in manylinux_2_28 with maturin on Python ${{ matrix.python }}
       run: |
-<<<<<<< HEAD
-        podman run --rm=true \
-          -v ${{ github.workspace }}:/ws:rw --workdir=/ws \
-          ghcr.io/chia-network/build-images/centos-pypa-rust-x86_64 \
-          bash -exc '\
-            yum -y install libc6 openssl-devel && \
-            source $HOME/.cargo/env && \
-            rustup target add x86_64-unknown-linux-musl && \
-            rm -rf venv && \
-            PY_VERSION=${{ matrix.python }}
-            PY_VERSION=${PY_VERSION/.} && \
-            echo "Python version with dot removed is $PY_VERSION" && \
-            if [ "$PY_VERSION" = "37" ]; \
-            then export SCND_VERSION="${PY_VERSION}m"; \
-            else export SCND_VERSION="$PY_VERSION"; fi && \
-            echo "Exporting path /opt/python/cp$PY_VERSION-cp$SCND_VERSION/bin" && \
-            export PATH=/opt/python/cp$PY_VERSION-cp$SCND_VERSION/bin/:$PATH && \
-            /opt/python/cp38-cp38/bin/python -m venv venv && \
-            if [ ! -f "activate" ]; then ln -s venv/bin/activate; fi && \
-            . ./activate && \
-            pip install --upgrade pip
-          '
-        docker run --rm -v $(pwd):/io ghcr.io/pyo3/maturin:v1.8.3 build --release --strip --manylinux 2_28
-=======
         docker run --rm -v $(pwd):/io ghcr.io/pyo3/maturin:v1.10.2 build --release --strip --manylinux 2_28
->>>>>>> chia/main
         # Refresh in case any ownerships changed.
         mv target target.docker && cp -r target.docker target
         # Ensure an empty .cargo-lock file exists.
@@ -100,11 +71,7 @@ jobs:
         ls target/wheels/
         # this mess puts the name of the `.whl` file into `$WHEEL_PATH`
         # remove the dot, use the `glob` lib to grab the file from the directory
-<<<<<<< HEAD
-        export WHEEL_PATH=$(echo ${{ matrix.python }} | python -c 'DOTLESS=input().replace(".", ""); import glob; print(" ".join(filter(lambda x: "musl" not in x, glob.glob("target/wheels/chialisp-*-cp*-*.whl"))))' )
-=======
         export WHEEL_PATH=$(echo "3.10" | python -c 'DOTLESS=input().replace(".", ""); import glob; print(" ".join(filter(lambda x: "musl" not in x, glob.glob("target/wheels/chialisp-*-cp*-*.whl"))))' )
->>>>>>> chia/main
         echo ${WHEEL_PATH}
         pip install ${WHEEL_PATH}
 

@@ -23,19 +23,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-<<<<<<< HEAD
         os: [macos-14, macos-15-intel, ubuntu-latest, windows-latest]
         python: ['3.10', 3.11, 3.12]
 
     steps:
-    - uses: actions/checkout@v5
-=======
-        os: [macos-15-intel, ubuntu-latest, windows-latest]
-        python: ['3.10', 3.11, 3.12]
-
-    steps:
     - uses: actions/checkout@v6
->>>>>>> chia/main
       with:
         fetch-depth: 0
 
@@ -71,11 +63,7 @@ jobs:
     - name: Build Linux in manylinux_2_28 with maturin on Python ${{ matrix.python }}
       if: startsWith(matrix.os, 'ubuntu')
       run: |
-<<<<<<< HEAD
-        docker run --rm -v $(pwd):/io ghcr.io/pyo3/maturin:v1.8.3 build --release --strip --manylinux 2_28 --sdist
-=======
         docker run --rm -v $(pwd):/io ghcr.io/pyo3/maturin:v1.10.2 build --release --strip --manylinux 2_28 --sdist
->>>>>>> chia/main
         # Refresh in case any ownerships changed.
         mv target target.docker && cp -r target.docker target
         # Ensure an empty .cargo-lock file exists.
@@ -176,11 +164,7 @@ jobs:
         # chia_puzzles_py/manage_clvm.py while being in ./chia_puzzles.
         cp support/install_deps.sh support/verify_compiler_version.sh chia_puzzles
         (cd chia_puzzles && python -m venv .venv && . .venv/bin/activate && pip install --upgrade pip && \
-<<<<<<< HEAD
-        python -m pip install maturin==1.7.0 && \
-=======
         python -m pip install maturin==1.10.2 && \
->>>>>>> chia/main
         cd .. && \
         pip install --no-index --find-links target/wheels/ chialisp && \
         cd chia_puzzles && \
@@ -270,11 +254,7 @@ jobs:
     needs: build_wheels
     steps:
     - name: Checkout code
-<<<<<<< HEAD
-      uses: actions/checkout@v5
-=======
       uses: actions/checkout@v6
->>>>>>> chia/main
       with:
         fetch-depth: 0
 
@@ -289,11 +269,7 @@ jobs:
         python-version: "3.12"
 
     - name: Download artifacts
-<<<<<<< HEAD
-      uses: actions/download-artifact@v5
-=======
       uses: actions/download-artifact@v7
->>>>>>> chia/main
       with:
         merge-multiple: true
         pattern: wheels-*-py-3.12
@@ -359,11 +335,7 @@ jobs:
     runs-on: ubuntu-22.04
     name: clippy
     steps:
-<<<<<<< HEAD
-      - uses: actions/checkout@v5
-=======
       - uses: actions/checkout@v6
->>>>>>> chia/main
         with:
           fetch-depth: 1
       - name: Install rust
@@ -382,11 +354,7 @@ jobs:
     runs-on: ubuntu-22.04
     name: cargo fmt
     steps:
-<<<<<<< HEAD
-      - uses: actions/checkout@v5
-=======
       - uses: actions/checkout@v6
->>>>>>> chia/main
         with:
           fetch-depth: 1
       - name: Install rust
@@ -401,11 +369,7 @@ jobs:
     runs-on: ubuntu-22.04
     name: Unit tests
     steps:
-<<<<<<< HEAD
-      - uses: actions/checkout@v5
-=======
       - uses: actions/checkout@v6
->>>>>>> chia/main
         with:
           fetch-depth: 1
       - name: Install rust
@@ -419,11 +383,7 @@ jobs:
   coverage:
     runs-on: ubuntu-22.04
     steps:
-<<<<<<< HEAD
-      - uses: actions/checkout@v5
-=======
       - uses: actions/checkout@v6
->>>>>>> chia/main
       - uses: actions-rs/toolchain@v1
         with:
             toolchain: stable
@@ -452,11 +412,7 @@ jobs:
       - name: install maturin & pytest
         run: |
           source venv/bin/activate
-<<<<<<< HEAD
-          python -m pip install maturin==1.7.0
-=======
           python -m pip install maturin==1.10.2
->>>>>>> chia/main
           pip install pytest
       - name: Build maturin interface
         run: |
