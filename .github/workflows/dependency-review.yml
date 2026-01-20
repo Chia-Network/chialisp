@@ -17,7 +17,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: "Checkout Repository"
+<<<<<<< HEAD
         uses: actions/checkout@v5
+=======
+        uses: actions/checkout@v6
+>>>>>>> chia/main
 
       - name: "Dependency Review"
         uses: actions/dependency-review-action@v4

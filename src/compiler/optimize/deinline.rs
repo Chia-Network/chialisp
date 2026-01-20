@@ -34,6 +34,15 @@ fn find_roots(
     }
 }
 
+fn stepping_over_24(opts: Rc<dyn CompilerOpts>) -> bool {
+    if let Some(s) = &opts.dialect().stepping {
+        return *s > 24;
+    }
+    false
+}
+
+type VecOfRootSetTree<'a> = Vec<(&'a BTreeSet<Vec<u8>>, Vec<&'a Vec<u8>>)>;
+
 // Should take a desugared program.
 pub fn deinline_opt(
     context: &mut BasicCompileContext,
@@ -180,6 +189,25 @@ pub fn deinline_opt(
         })
         .collect();
 
+    let mut root_set_to_inline_tree_vec: VecOfRootSetTree<'_> = root_set_to_inline_tree
+        .iter()
+        .map(|(k, function_set)| {
+            let mut fset_vec: Vec<&Vec<u8>> = function_set.iter().collect();
+
+            // Sort which normalizes order.
+            if stepping_over_24(opts.clone()) {
+                fset_vec.sort();
+            }
+
+            (k, fset_vec)
+        })
+        .collect();
+
+    // Sort which normalizes order.
+    if stepping_over_24(opts.clone()) {
+        root_set_to_inline_tree_vec.sort();
+    }
+
     if root_set_to_inline_tree.is_empty() {
         return Ok(best_compileform);
     }
@@ -187,13 +215,13 @@ pub fn deinline_opt(
     let generated_program = codegen(context, opts.clone(), &best_compileform)?;
     let mut metric = sexp_scale(&generated_program);
 
-    for (_, function_set) in root_set_to_inline_tree.iter() {
+    for (_, function_set) in root_set_to_inline_tree_vec.iter() {
         loop {
             let start_metric = metric;
 
             for f in function_set.iter() {
                 // Get index of helper identified by this leaf name.
-                let i = if let Some(i) = helper_to_index.get(f) {
+                let i = if let Some(i) = helper_to_index.get(*f) {
                     *i
                 } else {
                     return Err(CompileErr(

@@ -8,7 +8,11 @@ jobs:
   security_audit:
     runs-on: ubuntu-latest
     steps:
+<<<<<<< HEAD
       - uses: actions/checkout@v5
+=======
+      - uses: actions/checkout@v6
+>>>>>>> chia/main
       - name: install cargo audit
         run: cargo install cargo-audit
       - name: cargo audit
