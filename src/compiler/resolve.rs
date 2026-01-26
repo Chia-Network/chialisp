@@ -10,7 +10,6 @@ use crate::compiler::comptypes::{
     DefmacData, DefunData, HelperForm, ImportLongName, LambdaData, LetData, LetFormKind,
     LongNameTranslation, ModuleImportListedName, ModuleImportSpec, NamespaceData,
 };
-use crate::compiler::frontend::HelperFormResult;
 use crate::compiler::rename::rename_args_helperform;
 use crate::compiler::sexp::{decode_string, SExp};
 
@@ -88,26 +87,24 @@ impl<'a> Iterator for TourNamespaces<'a> {
     }
 }
 
-fn namespace_helper(name: &ImportLongName, value: &HelperForm) -> HelperFormResult {
+fn namespace_helper(name: &ImportLongName, value: &HelperForm) -> HelperForm {
     match value {
-        HelperForm::Defun(inline, dd) => HelperFormResult::new(&[HelperForm::Defun(
+        HelperForm::Defun(inline, dd) => HelperForm::Defun(
             *inline,
             Box::new(DefunData {
                 name: name.as_u8_vec(LongNameTranslation::Namespace),
                 ..*dd.clone()
             }),
-        )]),
-        HelperForm::Defconstant(dc) => {
-            HelperFormResult::new(&[HelperForm::Defconstant(DefconstData {
-                name: name.as_u8_vec(LongNameTranslation::Namespace),
-                ..dc.clone()
-            })])
-        }
-        HelperForm::Defmacro(dm) => HelperFormResult::new(&[HelperForm::Defmacro(DefmacData {
+        ),
+        HelperForm::Defconstant(dc) => HelperForm::Defconstant(DefconstData {
+            name: name.as_u8_vec(LongNameTranslation::Namespace),
+            ..dc.clone()
+        }),
+        HelperForm::Defmacro(dm) => HelperForm::Defmacro(DefmacData {
             name: name.as_u8_vec(LongNameTranslation::Namespace),
             ..dm.clone()
-        })]),
-        _ => HelperFormResult::new(std::slice::from_ref(&value.clone())),
+        }),
+        _ => value.clone(),
     }
 }
 
@@ -315,7 +312,7 @@ fn add_binding_names(bindings: &mut HashSet<Vec<u8>>, pattern: &BindingPattern) 
 }
 
 fn resolve_namespaces_in_expr(
-    resolved_helpers: &mut BTreeMap<ImportLongName, HelperFormResult>,
+    resolved_helpers: &mut BTreeMap<ImportLongName, HelperForm>,
     opts: Rc<dyn CompilerOpts>,
     program: &CompileForm,
     parent_ns: Option<&ImportLongName>,
@@ -392,11 +389,6 @@ fn resolve_namespaces_in_expr(
                     }
                 }
 
-                eprintln!(
-                    "could not find helper {} in {}",
-                    decode_string(name),
-                    display_namespace(parent_ns)
-                );
                 return Err(CompileErr(
                     expr.loc(),
                     format!(
@@ -409,7 +401,7 @@ fn resolve_namespaces_in_expr(
 
             resolved_helpers.insert(
                 target_full_name.clone(),
-                HelperFormResult::new(&[rename_args_helperform(&target_helper)?]),
+                rename_args_helperform(&target_helper)?,
             );
             Ok(Rc::new(BodyForm::Value(SExp::Atom(
                 nl.clone(),
@@ -555,12 +547,12 @@ fn resolve_namespaces_in_expr(
 }
 
 fn resolve_namespaces_in_helper(
-    resolved_helpers: &mut BTreeMap<ImportLongName, HelperFormResult>,
+    resolved_helpers: &mut BTreeMap<ImportLongName, HelperForm>,
     opts: Rc<dyn CompilerOpts>,
     program: &CompileForm,
     parent_ns: Option<&ImportLongName>,
     helper: &HelperForm,
-) -> Result<HelperFormResult, CompileErr> {
+) -> Result<HelperForm, CompileErr> {
     match helper {
         HelperForm::Defnamespace(ns) => {
             let combined_ns = if let Some(p) = parent_ns {
@@ -579,17 +571,15 @@ fn resolve_namespaces_in_helper(
                     Some(&combined_ns),
                     h,
                 )?;
-                result_helpers.extend(newly_created.new_helpers);
+                result_helpers.push(newly_created);
             }
 
-            Ok(HelperFormResult::new(&[HelperForm::Defnamespace(
-                Box::new(NamespaceData {
-                    helpers: result_helpers,
-                    ..*ns.clone()
-                }),
-            )]))
+            Ok(HelperForm::Defnamespace(Box::new(NamespaceData {
+                helpers: result_helpers,
+                ..*ns.clone()
+            })))
         }
-        HelperForm::Defnsref(_) => Ok(HelperFormResult::new(std::slice::from_ref(&helper.clone()))),
+        HelperForm::Defnsref(_) => Ok(helper.clone()),
         HelperForm::Defun(inline, dd) => {
             let mut in_scope = HashSet::new();
             capture_scope(&mut in_scope, dd.args.clone());
@@ -607,7 +597,7 @@ fn resolve_namespaces_in_helper(
                     ..*dd.clone()
                 }),
             );
-            Ok(HelperFormResult::new(&[new_defun]))
+            Ok(new_defun)
         }
         HelperForm::Defconstant(dc) => {
             let in_scope = HashSet::new();
@@ -622,7 +612,7 @@ fn resolve_namespaces_in_helper(
                 )?,
                 ..dc.clone()
             });
-            Ok(HelperFormResult::new(&[new_defconst]))
+            Ok(new_defconst)
         }
         HelperForm::Defmacro(_) => Err(CompileErr(
             helper.loc(),
@@ -635,8 +625,8 @@ pub fn resolve_namespaces(
     opts: Rc<dyn CompilerOpts>,
     program: &CompileForm,
 ) -> Result<CompileForm, CompileErr> {
-    let mut resolved_helpers: BTreeMap<ImportLongName, HelperFormResult> = BTreeMap::new();
-    let mut new_resolved_helpers: BTreeMap<ImportLongName, HelperFormResult> = BTreeMap::new();
+    let mut resolved_helpers: BTreeMap<ImportLongName, HelperForm> = BTreeMap::new();
+    let mut new_resolved_helpers: BTreeMap<ImportLongName, HelperForm> = BTreeMap::new();
 
     // The main expression is in the scope of the program arguments.
     let mut program_scope = HashSet::new();
@@ -655,50 +645,41 @@ pub fn resolve_namespaces(
     // to do it definitely by visiting every reachable helper from the main
     // expression.
     while !new_resolved_helpers.is_empty() {
-        let mut round_resolved_helpers: BTreeMap<ImportLongName, HelperFormResult> =
-            BTreeMap::new();
-        for (name, helpers) in new_resolved_helpers.iter() {
+        let mut round_resolved_helpers: BTreeMap<ImportLongName, HelperForm> = BTreeMap::new();
+        for (name, helper) in new_resolved_helpers.iter() {
             if resolved_helpers.contains_key(name) {
                 continue;
             }
 
             let (parent, _) = name.parent_and_name();
 
-            for helper in helpers.new_helpers.iter() {
-                let mut result_helpers = Vec::new();
-                let mut renamed_helpers = namespace_helper(name, helper);
+            let renamed_helper = namespace_helper(name, helper);
 
-                // This is ugly but working: if we have phantom type helpers, we
-                // add their individual names as well with no outputs.  This allows
-                // the type to be fully expanded each time and each helper to
-                // individally ensure that it's only emitted once.
-                for h in renamed_helpers.new_helpers.iter() {
-                    let full_name = if let Some(p) = parent.as_ref() {
-                        p.with_child(h.name())
-                    } else {
-                        let (_, parsed) = ImportLongName::parse(h.name());
-                        parsed
-                    };
+            // This is ugly but working: if we have phantom type helpers, we
+            // add their individual names as well with no outputs.  This allows
+            // the type to be fully expanded each time and each helper to
+            // individally ensure that it's only emitted once.
+            let full_name = if let Some(p) = parent.as_ref() {
+                p.with_child(renamed_helper.name())
+            } else {
+                let (_, parsed) = ImportLongName::parse(renamed_helper.name());
+                parsed
+            };
 
-                    if resolved_helpers.contains_key(&full_name) {
-                        continue;
-                    }
-
-                    let results = resolve_namespaces_in_helper(
-                        &mut round_resolved_helpers,
-                        opts.clone(),
-                        program,
-                        parent.as_ref(),
-                        h,
-                    )?;
-
-                    result_helpers.extend(results.new_helpers.clone());
-                    resolved_helpers.insert(full_name, HelperFormResult::new(&[]));
-                }
-
-                renamed_helpers.new_helpers = result_helpers;
-                resolved_helpers.insert(name.clone(), renamed_helpers.clone());
+            if resolved_helpers.contains_key(&full_name) {
+                continue;
             }
+
+            let result = resolve_namespaces_in_helper(
+                &mut round_resolved_helpers,
+                opts.clone(),
+                program,
+                parent.as_ref(),
+                &renamed_helper,
+            )?;
+
+            resolved_helpers.remove(&full_name);
+            resolved_helpers.insert(name.clone(), result.clone());
         }
         swap(&mut new_resolved_helpers, &mut round_resolved_helpers);
     }
@@ -706,7 +687,7 @@ pub fn resolve_namespaces(
     // The set of helpers is the set of helpers in resolved_helpers al
     let mut all_helpers = Vec::new();
     for v in resolved_helpers.into_values() {
-        all_helpers.extend(v.new_helpers);
+        all_helpers.push(v);
     }
     Ok(CompileForm {
         helpers: all_helpers,
