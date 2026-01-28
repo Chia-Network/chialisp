@@ -22,7 +22,7 @@ use crate::compiler::comptypes::{
     ModuleImportSpec, NamespaceData, NamespaceRefData, QualifiedModuleInfo,
 };
 use crate::compiler::dialect::{detect_modern, AcceptedDialect, KNOWN_DIALECTS};
-use crate::compiler::frontend::{compile_helperform, compile_nsref, frontend};
+use crate::compiler::frontend::{compile_helperform, compile_namespace, compile_nsref, frontend};
 use crate::compiler::optimize::get_optimizer;
 use crate::compiler::preprocessor::macros::PreprocessorExtension;
 use crate::compiler::rename::rename_args_helperform;
@@ -570,6 +570,43 @@ impl Preprocessor {
         }
     }
 
+    fn import_new_module_content(
+        &mut self,
+        loc: Srcloc,
+        includes: &mut Vec<IncludeDesc>,
+        import_name: &ImportLongName,
+        parsed: &[SExp],
+    ) -> Result<Vec<Rc<SExp>>, CompileErr> {
+        let mut out_forms = vec![];
+
+        if self.opts.stdenv() {
+            out_forms.push(
+                make_namespace_ref(
+                    &loc,
+                    &loc,
+                    &loc,
+                    &ImportLongName::parse(b"std.prelude").1,
+                    &ModuleImportSpec::Hiding(loc.clone(), vec![]),
+                )
+                .to_sexp(),
+            );
+        }
+
+        self.namespace_stack.push(ImportNameMap {
+            name: Some(import_name.clone()),
+        });
+
+        for p in parsed.iter() {
+            for form in self.process_pp_form(includes, Rc::new(p.clone()))? {
+                out_forms.push(form.clone());
+            }
+        }
+
+        self.namespace_stack.pop();
+
+        Ok(out_forms)
+    }
+
     fn import_new_module(
         &mut self,
         loc: Srcloc,
@@ -602,35 +639,16 @@ impl Preprocessor {
             .opts
             .read_new_file(self.opts.filename(), filename_clinc)?;
 
-        let parsed = parse_sexp(Srcloc::start(&full_name), content.iter().copied())
-            .map_err(|e| CompileErr(e.0, e.1))?;
+        let parsed: Vec<SExp> = parse_sexp(Srcloc::start(&full_name), content.iter().copied())
+            .map_err(|e| CompileErr(e.0, e.1))?
+            .iter()
+            .map(|r| {
+                let re: &SExp = r.borrow();
+                re.clone()
+            })
+            .collect();
 
-        let mut out_forms = vec![];
-
-        if self.opts.stdenv() {
-            out_forms.push(
-                make_namespace_ref(
-                    &loc,
-                    &loc,
-                    &loc,
-                    &ImportLongName::parse(b"std.prelude").1,
-                    &ModuleImportSpec::Hiding(loc.clone(), vec![]),
-                )
-                .to_sexp(),
-            );
-        }
-
-        self.namespace_stack.push(ImportNameMap {
-            name: Some(import_name.clone()),
-        });
-
-        for p in parsed.iter() {
-            for form in self.process_pp_form(includes, p.clone())? {
-                out_forms.push(form.clone());
-            }
-        }
-
-        self.namespace_stack.pop();
+        let res = self.import_new_module_content(loc, includes, import_name, &parsed)?;
 
         includes.push(IncludeDesc {
             kw: kw.clone(),
@@ -639,7 +657,7 @@ impl Preprocessor {
             kind: Some(IncludeProcessType::Module(Box::new(kind.clone()))),
         });
 
-        Ok(out_forms)
+        Ok(res)
     }
 
     fn import_module(
@@ -1059,18 +1077,20 @@ impl Preprocessor {
             return Ok(None);
         }
 
-        let import = if let SExp::Atom(_, name) = &form[0] {
-            if name != b"import" {
-                return Ok(None);
-            }
-
-            if let HelperForm::Defnsref(import) = compile_nsref(loc.clone(), form)? {
-                import
-            } else {
-                return Err(CompileErr(loc, "asked to parse import".to_string()));
-            }
+        let name = if let SExp::Atom(_, name) = &form[0] {
+            name
         } else {
             return Ok(None);
+        };
+
+        if name != b"import" {
+            return Ok(None);
+        }
+
+        let import = if let HelperForm::Defnsref(import) = compile_nsref(loc.clone(), form)? {
+            import
+        } else {
+            return Err(CompileErr(loc, "asked to parse import".to_string()));
         };
 
         let mod_kind = IncludeProcessType::Module(Box::new(import.specification.clone()));
@@ -1086,6 +1106,41 @@ impl Preprocessor {
             mod_kind,
             fname.clone(),
         )))
+    }
+
+    fn parse_namespace(
+        &mut self,
+        loc: Srcloc,
+        includes: &mut Vec<IncludeDesc>,
+        form: &[SExp],
+    ) -> Result<Option<()>, CompileErr> {
+        if form.is_empty() {
+            return Ok(None);
+        }
+
+        let name = if let SExp::Atom(_, name) = &form[0] {
+            name
+        } else {
+            return Ok(None);
+        };
+
+        if name != b"namespace" {
+            return Ok(None);
+        }
+
+        let ns_helper = compile_namespace(self.opts.clone(), loc.clone(), form)?;
+        if let HelperForm::Defnamespace(namespace) = &ns_helper {
+            self.imported_modules.insert(namespace.longname.clone());
+            self.import_new_module_content(
+                ns_helper.loc(),
+                includes,
+                &namespace.longname,
+                &form[2..],
+            )?;
+            return Ok(Some(()));
+        }
+
+        Err(CompileErr(loc, "asked to parse namespace".to_string()))
     }
 
     fn parse_include(&mut self, form: &[SExp]) -> Result<Option<IncludeType>, CompileErr> {
@@ -1225,6 +1280,11 @@ impl Preprocessor {
         let included: Option<IncludeType> = if let Some(x) = as_list.as_ref() {
             if let Some(res) = self.parse_import(unexpanded_body.loc(), x)? {
                 Some(res)
+            } else if self
+                .parse_namespace(unexpanded_body.loc(), includes, x)?
+                .is_some()
+            {
+                None
             } else if let Some(res) = self.parse_include(x)? {
                 Some(res)
             } else if let Some(res) = self.parse_embed(body.clone(), x)? {
