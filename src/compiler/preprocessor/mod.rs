@@ -1280,7 +1280,7 @@ impl Preprocessor {
         let included: Option<IncludeType> = if let Some(x) = as_list.as_ref() {
             if let Some(res) = self.parse_import(unexpanded_body.loc(), x)? {
                 Some(res)
-            } else if let Some(_) = self.parse_namespace(unexpanded_body.loc(), includes, x)? {
+            } else if self.parse_namespace(unexpanded_body.loc(), includes, x)?.is_some() {
                 None
             } else if let Some(res) = self.parse_include(x)? {
                 Some(res)
