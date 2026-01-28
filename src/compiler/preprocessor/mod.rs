@@ -1140,7 +1140,7 @@ impl Preprocessor {
             return Ok(Some(()));
         }
 
-        return Err(CompileErr(loc, "asked to parse namespace".to_string()));
+        Err(CompileErr(loc, "asked to parse namespace".to_string()))
     }
 
     fn parse_include(&mut self, form: &[SExp]) -> Result<Option<IncludeType>, CompileErr> {
