@@ -84,8 +84,6 @@ pub fn collect_used_names_bodyform(body: &BodyForm) -> Vec<Vec<u8>> {
 
 fn collect_used_names_helperform(body: &HelperForm) -> Vec<Vec<u8>> {
     match body {
-        HelperForm::Defnamespace(_ns) => Vec::new(),
-        HelperForm::Defnsref(_ns) => Vec::new(),
         HelperForm::Defconstant(defc) => collect_used_names_bodyform(defc.body.borrow()),
         HelperForm::Defmacro(mac) => {
             let mut res = collect_used_names_compileform(mac.program.borrow());
@@ -95,6 +93,8 @@ fn collect_used_names_helperform(body: &HelperForm) -> Vec<Vec<u8>> {
             res
         }
         HelperForm::Defun(_, defun) => collect_used_names_bodyform(&defun.body),
+        HelperForm::Defnamespace(_ns) => Vec::new(),
+        HelperForm::Defnsref(_ns) => Vec::new(),
     }
 }
 
@@ -1025,6 +1025,10 @@ fn frontend_start(
     }
 }
 
+fn is_namespace_decl(h: &HelperForm) -> bool {
+    matches!(h, HelperForm::Defnamespace(_) | HelperForm::Defnsref(_))
+}
+
 /// Given the available helper list and the main expression, compute the list of
 /// reachable helpers.
 pub fn compute_live_helpers(
@@ -1047,7 +1051,9 @@ pub fn compute_live_helpers(
 
     helper_list
         .iter()
-        .filter(|h| !opts.frontend_check_live() || helper_names.contains(h.name()))
+        .filter(|h| {
+            !opts.frontend_check_live() || is_namespace_decl(h) || helper_names.contains(h.name())
+        })
         .cloned()
         .collect()
 }
