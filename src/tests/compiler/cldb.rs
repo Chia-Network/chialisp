@@ -98,7 +98,6 @@ fn test_run_clvm_in_cldb() {
     let runner = Rc::new(DefaultProgramRunner::new());
     let opts = Rc::new(DefaultCompilerOpts::new(program_name));
     let mut symbols = HashMap::new();
-    let mut includes = Vec::new();
     let args = parse_sexp(Srcloc::start("*args*"), "(5)".bytes()).expect("should parse")[0].clone();
 
     let program = compile_file(
@@ -107,7 +106,6 @@ fn test_run_clvm_in_cldb() {
         opts,
         &program_code,
         &mut symbols,
-        &mut includes,
     )
     .expect("should compile");
 
@@ -184,7 +182,6 @@ fn compile_and_run_program_with_tree(
         .set_search_paths(search_paths);
 
     let mut use_symbol_table = HashMap::new();
-    let mut includes = Vec::new();
 
     let program = compile_file(
         &mut allocator,
@@ -192,7 +189,6 @@ fn compile_and_run_program_with_tree(
         opts.clone(),
         &input_program_text,
         &mut use_symbol_table,
-        &mut includes,
     )
     .expect("should compile");
     let args = parse_sexp(program.loc(), args_text.as_bytes().iter().copied())

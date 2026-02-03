@@ -8,8 +8,10 @@ use crate::compiler::compiler::DefaultCompilerOpts;
 use crate::compiler::comptypes::{CompileErr, CompilerOpts};
 use crate::compiler::evaluate::{Evaluator, EVAL_STACK_LIMIT};
 use crate::compiler::frontend::{from_clvm, frontend};
+use crate::compiler::optimize::get_optimizer;
 use crate::compiler::sexp::{parse_sexp, SExp};
 use crate::compiler::srcloc::Srcloc;
+use crate::compiler::BasicCompileContext;
 
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 use crate::util::ErrInto;
@@ -17,22 +19,28 @@ use crate::util::ErrInto;
 use crate::tests::compiler::compiler::squash_name_differences;
 
 fn shrink_expr_from_string(s: String) -> Result<String, CompileErr> {
-    let mut allocator = Allocator::new();
     let runner = Rc::new(DefaultProgramRunner::new());
     let opts = Rc::new(DefaultCompilerOpts::new(&"*program*".to_string()));
     let loc = Srcloc::start(&"*program*".to_string());
+    let mut context = BasicCompileContext {
+        allocator: Allocator::new(),
+        runner: runner.clone(),
+        symbols: HashMap::new(),
+        optimizer: get_optimizer(&loc, opts.clone()).unwrap(),
+    };
     let result = parse_sexp(loc.clone(), s.bytes())
         .err_into()
         .and_then(|parsed_program| {
             return frontend(opts.clone(), &parsed_program);
         })
+        .map(|p| p.compileform().clone())
         .and_then(|program| {
-            let e = Evaluator::new(opts.clone(), runner, program.compileform().helpers.clone());
+            let e = Evaluator::new(opts.clone(), runner, program.helpers.clone());
             return e.shrink_bodyform(
-                &mut allocator,
-                program.compileform().args.clone(),
+                &mut context,
+                program.args.clone(),
                 &HashMap::new(),
-                program.compileform().exp.clone(),
+                program.exp.clone(),
                 false,
                 Some(EVAL_STACK_LIMIT),
             );
@@ -113,15 +121,8 @@ fn compile_with_fe_opt(s: String) -> Result<String, CompileErr> {
     let mut opts: Rc<dyn CompilerOpts> =
         Rc::new(DefaultCompilerOpts::new(&"*program*".to_string()));
     opts = opts.set_frontend_opt(true);
-    compile_file(
-        &mut allocator,
-        runner,
-        opts,
-        &s,
-        &mut HashMap::new(),
-        &mut Vec::new(),
-    )
-    .map(|r| r.to_sexp().to_string())
+    compile_file(&mut allocator, runner, opts, &s, &mut HashMap::new())
+        .map(|r| r.to_sexp().to_string())
 }
 
 #[test]

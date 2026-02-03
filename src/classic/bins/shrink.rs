@@ -9,16 +9,30 @@ use clvm_rs::allocator::Allocator;
 use chialisp::compiler::compiler::DefaultCompilerOpts;
 use chialisp::compiler::evaluate::{Evaluator, EVAL_STACK_LIMIT};
 use chialisp::compiler::frontend::frontend;
+use chialisp::compiler::optimize::get_optimizer;
 use chialisp::compiler::sexp::parse_sexp;
 use chialisp::compiler::srcloc::Srcloc;
+use chialisp::compiler::BasicCompileContext;
 
 use chialisp::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 use chialisp::util::ErrInto;
 
 fn main() {
-    let mut allocator = Allocator::new();
     let runner = Rc::new(DefaultProgramRunner::new());
     let opts = Rc::new(DefaultCompilerOpts::new("*program*"));
+    let optimizer = match get_optimizer(&Srcloc::start("*repl*"), opts.clone()) {
+        Ok(o) => o,
+        Err(e) => {
+            print!("failed to get optimizer {e:?}");
+            return;
+        }
+    };
+    let mut context = BasicCompileContext {
+        allocator: Allocator::new(),
+        runner: runner.clone(),
+        symbols: HashMap::new(),
+        optimizer,
+    };
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         println!("give a chialisp program to minify");
@@ -36,7 +50,7 @@ fn main() {
                 program.compileform().helpers.clone(),
             );
             e.shrink_bodyform(
-                &mut allocator,
+                &mut context,
                 program.compileform().args.clone(),
                 &HashMap::new(),
                 program.compileform().exp.clone(),

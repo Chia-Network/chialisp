@@ -120,7 +120,6 @@ pub fn compile_clvm_text_maybe_opt(
             opts.clone(),
             text,
             symbol_table,
-            includes,
         )?;
         let res = maybe_finalize_program_via_classic_optimizer(
             allocator,

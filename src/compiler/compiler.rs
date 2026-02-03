@@ -867,7 +867,6 @@ pub fn compile_file(
     opts: Rc<dyn CompilerOpts>,
     content: &str,
     symbol_table: &mut HashMap<String, String>,
-    includes: &mut Vec<IncludeDesc>,
 ) -> Result<CompilerOutput, CompileErr> {
     let _int_conversion_bug = NewStyleIntConversion::new(opts.dialect().int_fix);
     let srcloc = Srcloc::start(&opts.filename());
@@ -877,7 +876,6 @@ pub fn compile_file(
         runner,
         symbol_table,
         get_optimizer(&srcloc, opts.clone())?,
-        includes,
     );
 
     compile_pre_forms(&mut context_wrapper.context, opts, &pre_forms)

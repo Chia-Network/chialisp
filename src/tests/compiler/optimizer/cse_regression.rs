@@ -126,33 +126,24 @@ fn test_cse_merge_regression() {
                 .set_frontend_opt(false)
                 .set_diag_flags(old_flags);
         let runner = Rc::new(DefaultProgramRunner::new());
-        let opt_err_loc = Srcloc::start(&new_opts.filename());
-        let new_compiled = {
-            let mut context = BasicCompileContext::new(
-                Allocator::new(),
-                runner.clone(),
-                HashMap::new(),
-                get_optimizer(&opt_err_loc, new_opts.clone()).unwrap(),
-                Vec::new(),
-            );
-            new_opts
-                .compile_program(&mut context, program_sexp.clone())
-                .expect("should compile (new)")
+        let mut new_context = BasicCompileContext {
+            allocator: Allocator::new(),
+            runner: runner.clone(),
+            symbols: HashMap::new(),
+            optimizer: get_optimizer(&program_sexp.loc(), new_opts.clone()).unwrap(),
         };
-
-        let old_compiled = {
-            let mut context = BasicCompileContext::new(
-                Allocator::new(),
-                runner,
-                HashMap::new(),
-                get_optimizer(&opt_err_loc, new_opts.clone()).unwrap(),
-                Vec::new(),
-            );
-            old_opts
-                .compile_program(&mut context, program_sexp)
-                .expect("should compile (old)")
+        let new_compiled = new_opts
+            .compile_program(&mut new_context, program_sexp.clone())
+            .expect("should compile (new)");
+        let mut old_context = BasicCompileContext {
+            allocator: Allocator::new(),
+            runner: runner.clone(),
+            symbols: HashMap::new(),
+            optimizer: get_optimizer(&program_sexp.loc(), old_opts.clone()).unwrap(),
         };
-
+        let old_compiled = old_opts
+            .compile_program(&mut old_context, program_sexp)
+            .expect("should compile (old)");
         assert_eq!(new_compiled.to_sexp(), old_compiled.to_sexp());
     }
 }

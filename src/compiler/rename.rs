@@ -405,8 +405,6 @@ fn rename_in_helperform(
     h: &HelperForm,
 ) -> Result<HelperForm, CompileErr> {
     match h {
-        HelperForm::Defnamespace(_ns) => todo!(),
-        HelperForm::Defnsref(_ns) => todo!(),
         HelperForm::Defconstant(defc) => Ok(HelperForm::Defconstant(DefconstData {
             body: Rc::new(rename_in_bodyform(namemap, defc.body.clone())?),
             ..defc.clone()
@@ -422,19 +420,13 @@ fn rename_in_helperform(
                 ..*defun.clone()
             }),
         )),
+        HelperForm::Defnamespace(_ns) => todo!(),
+        HelperForm::Defnsref(_ns) => todo!(),
     }
 }
 
 pub fn rename_args_helperform(h: &HelperForm) -> Result<HelperForm, CompileErr> {
     match h {
-        HelperForm::Defnamespace(ns) => {
-            let renamed = map_m(rename_args_helperform, &ns.helpers)?;
-            Ok(HelperForm::Defnamespace(Box::new(NamespaceData {
-                helpers: renamed,
-                ..*ns.clone()
-            })))
-        }
-        HelperForm::Defnsref(_) => Ok(h.clone()),
         HelperForm::Defconstant(defc) => Ok(HelperForm::Defconstant(DefconstData {
             body: Rc::new(rename_args_bodyform(defc.body.borrow())?),
             ..defc.clone()
@@ -479,6 +471,14 @@ pub fn rename_args_helperform(h: &HelperForm) -> Result<HelperForm, CompileErr> 
                 }),
             ))
         }
+        HelperForm::Defnamespace(ns) => {
+            let renamed = map_m(rename_args_helperform, &ns.helpers)?;
+            Ok(HelperForm::Defnamespace(Box::new(NamespaceData {
+                helpers: renamed,
+                ..*ns.clone()
+            })))
+        }
+        HelperForm::Defnsref(_) => Ok(h.clone()),
     }
 }
 
@@ -521,7 +521,7 @@ pub fn rename_args_compileform(c: &CompileForm) -> Result<CompileForm, CompileEr
     let local_renamed_arg = rename_in_cons(&local_namemap, c.args.clone(), true);
     let local_renamed_helpers: Vec<HelperForm> = map_m(&rename_args_helperform, &c.helpers)?;
     let local_renamed_body = rename_args_bodyform(c.exp.borrow())?;
-    Ok(CompileForm {
+    let renamed_cf = CompileForm {
         loc: c.loc(),
         args: local_renamed_arg,
         include_forms: c.include_forms.clone(),
@@ -533,5 +533,6 @@ pub fn rename_args_compileform(c: &CompileForm) -> Result<CompileForm, CompileEr
             &local_namemap,
             Rc::new(local_renamed_body),
         )?),
-    })
+    };
+    Ok(renamed_cf)
 }

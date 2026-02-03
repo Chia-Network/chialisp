@@ -42,6 +42,7 @@ use crate::compiler::runtypes::RunFailure;
 use crate::compiler::sexp::parse_sexp;
 use crate::compiler::sexp::{AtomValue, NodeSel, SExp, SelectNode, ThisNode};
 use crate::compiler::srcloc::Srcloc;
+use crate::compiler::BasicCompileContext;
 use crate::compiler::CompileContextWrapper;
 use crate::compiler::StartOfCodegenOptimization;
 use crate::util::u8_from_number;
@@ -353,13 +354,11 @@ fn constant_fun_result(
                 };
 
                 let mut symbols = HashMap::new();
-                let mut includes = Vec::new();
                 let mut wrapper = CompileContextWrapper::new(
                     allocator,
                     runner.clone(),
                     &mut symbols,
                     optimizer,
-                    &mut includes,
                 );
 
                 if let Ok(code) = codegen(&mut wrapper.context, opts.clone(), &to_compile) {
@@ -554,14 +553,12 @@ pub fn optimize_expr(
             if let Some(stepping) = opts.dialect().stepping {
                 if stepping >= 23 {
                     let mut throwaway_symbols = HashMap::new();
-                    let mut includes = Vec::new();
                     if let Ok(optimizer) = get_optimizer(l, opts.clone()) {
                         let mut wrapper = CompileContextWrapper::new(
                             allocator,
                             runner,
                             &mut throwaway_symbols,
                             optimizer,
-                            &mut includes,
                         );
                         if let Ok(compiled) = do_mod_codegen(&mut wrapper.context, opts.clone(), cf)
                         {
@@ -647,11 +644,11 @@ fn test_null_optimization_ok_not_doing_anything() {
 }
 
 fn fe_opt(
-    allocator: &mut Allocator,
-    runner: Rc<dyn TRunProgram>,
+    context: &mut BasicCompileContext,
     opts: Rc<dyn CompilerOpts>,
     compileform: CompileForm,
 ) -> Result<CompileForm, CompileErr> {
+    let runner = context.runner();
     let evaluator = Evaluator::new(opts.clone(), runner.clone(), compileform.helpers.clone());
     let mut optimized_helpers: Vec<HelperForm> = Vec::new();
     for h in compileform.helpers.iter() {
@@ -660,7 +657,7 @@ fn fe_opt(
                 let mut env = HashMap::new();
                 build_reflex_captures(&mut env, defun.args.clone());
                 let body_rc = evaluator.shrink_bodyform(
-                    allocator,
+                    context,
                     defun.args.clone(),
                     &env,
                     defun.body.clone(),
@@ -684,7 +681,7 @@ fn fe_opt(
     let new_evaluator = Evaluator::new(opts.clone(), runner.clone(), optimized_helpers.clone());
 
     let shrunk = new_evaluator.shrink_bodyform(
-        allocator,
+        context,
         Rc::new(SExp::Nil(compileform.args.loc())),
         &HashMap::new(),
         compileform.exp.clone(),

@@ -27,15 +27,8 @@ fn compile_string(content: &String) -> Result<String, CompileErr> {
     let runner = Rc::new(DefaultProgramRunner::new());
     let opts = Rc::new(DefaultCompilerOpts::new(&"*test*".to_string()));
 
-    compile_file(
-        &mut allocator,
-        runner,
-        opts,
-        &content,
-        &mut HashMap::new(),
-        &mut Vec::new(),
-    )
-    .map(|x| x.to_sexp().to_string())
+    compile_file(&mut allocator, runner, opts, &content, &mut HashMap::new())
+        .map(|x| x.to_sexp().to_string())
 }
 
 fn run_string_maybe_opt(
@@ -68,7 +61,6 @@ fn run_string_maybe_opt(
         opts,
         &content,
         &mut HashMap::new(),
-        &mut Vec::new(),
     )
     .and_then(|x| {
         run(
@@ -2395,7 +2387,9 @@ fn test_rename_in_compileform_simple() {
     let desired_outcome = "(defun F overridden_$_A (let ((overridden_$_B (* 3 (f overridden_$_A))) (y_$_C (f (r overridden_$_A))) (z_$_D (f (r (r overridden_$_A))))) (+ overridden_$_B z_$_D y_$_C)))";
     let parsed = parse_sexp(Srcloc::start("*test*"), prog.bytes()).expect("should parse");
     let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(&"*test*".to_string()));
-    let compiled = frontend(opts, &parsed).expect("should compile");
+    let compiled = frontend(opts, &parsed)
+        .expect("should compile")
+        .clone();
     let helper_f: Vec<_> = compiled
         .compileform()
         .helpers
@@ -2497,23 +2491,19 @@ fn test_handle_explicit_empty_atom() {
             Rc::new(SExp::Integer(srcloc.clone(), bi_one())),
         ]),
     ]);
-    let allocator = Allocator::new();
-    let symbols = HashMap::new();
-    let includes = Vec::new();
     let runner = Rc::new(DefaultProgramRunner::new());
 
-    let mut context = BasicCompileContext::new(
-        allocator,
-        runner.clone(),
-        symbols,
-        get_optimizer(&Srcloc::start(&opts.filename()), opts.clone()).unwrap(),
-        includes,
-    );
+    let mut context = BasicCompileContext {
+        allocator: Allocator::new(),
+        runner: runner.clone(),
+        symbols: HashMap::new(),
+        optimizer: get_optimizer(&program.loc(), opts.clone()).unwrap(),
+    };
     let compiled = opts
         .compile_program(&mut context, program)
         .expect("should compile");
     let outcome = run(
-        &mut context.allocator(),
+        &mut context.allocator,
         runner,
         opts.prim_map(),
         Rc::new(compiled.to_sexp()),
@@ -2595,9 +2585,14 @@ fn test_exhaustive_chars() {
                 runner.clone(),
                 HashMap::new(),
                 get_optimizer(&Srcloc::start("*test*"), opts.clone()).expect("should get"),
-                Vec::new(),
             );
 
+            let mut context = BasicCompileContext {
+                allocator: Allocator::new(),
+                runner: runner.clone(),
+                symbols: HashMap::new(),
+                optimizer: get_optimizer(&sub_qe.loc(), opts.clone()).unwrap(),
+            };
             let compiled = opts
                 .compile_program(&mut context, make_test_program(sub_qe))
                 .expect("should compile");

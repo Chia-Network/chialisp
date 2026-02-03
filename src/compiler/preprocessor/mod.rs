@@ -22,7 +22,7 @@ use crate::compiler::comptypes::{
     ModuleImportSpec, NamespaceData, NamespaceRefData, QualifiedModuleInfo,
 };
 use crate::compiler::dialect::{detect_modern, AcceptedDialect, KNOWN_DIALECTS};
-use crate::compiler::frontend::{compile_helperform, compile_nsref, frontend};
+use crate::compiler::frontend::{compile_helperform, compile_namespace, compile_nsref, frontend};
 use crate::compiler::optimize::get_optimizer;
 use crate::compiler::preprocessor::macros::PreprocessorExtension;
 use crate::compiler::rename::rename_args_helperform;
@@ -504,6 +504,7 @@ impl Preprocessor {
 
         if !have_module {
             let dialect = detect_modern(&mut allocator, classic_parse);
+            let mut includes = Vec::new();
             if dialect.stepping.is_none() {
                 // Classic compile.
                 let newly_compiled = compile_clvm_text_maybe_opt(
@@ -511,7 +512,7 @@ impl Preprocessor {
                     self.subcompile_opts.optimize(),
                     self.subcompile_opts.clone(),
                     &mut symbol_table,
-                    includes,
+                    &mut includes,
                     &program_text,
                     filename,
                     true,
@@ -539,7 +540,6 @@ impl Preprocessor {
             runner,
             &mut symbol_table,
             get_optimizer(&srcloc, opts.clone())?,
-            includes,
         );
 
         match compile_pre_forms(&mut context_wrapper.context, opts.clone(), &pre_forms)? {
@@ -568,6 +568,43 @@ impl Preprocessor {
                 ),
             ]),
         }
+    }
+
+    fn import_new_module_content(
+        &mut self,
+        loc: Srcloc,
+        includes: &mut Vec<IncludeDesc>,
+        import_name: &ImportLongName,
+        parsed: &[SExp],
+    ) -> Result<Vec<Rc<SExp>>, CompileErr> {
+        let mut out_forms = vec![];
+
+        if self.opts.stdenv() {
+            out_forms.push(
+                make_namespace_ref(
+                    &loc,
+                    &loc,
+                    &loc,
+                    &ImportLongName::parse(b"std.prelude").1,
+                    &ModuleImportSpec::Hiding(loc.clone(), vec![]),
+                )
+                .to_sexp(),
+            );
+        }
+
+        self.namespace_stack.push(ImportNameMap {
+            name: Some(import_name.clone()),
+        });
+
+        for p in parsed.iter() {
+            for form in self.process_pp_form(includes, Rc::new(p.clone()))? {
+                out_forms.push(form.clone());
+            }
+        }
+
+        self.namespace_stack.pop();
+
+        Ok(out_forms)
     }
 
     fn import_new_module(
@@ -602,35 +639,16 @@ impl Preprocessor {
             .opts
             .read_new_file(self.opts.filename(), filename_clinc)?;
 
-        let parsed = parse_sexp(Srcloc::start(&full_name), content.iter().copied())
-            .map_err(|e| CompileErr(e.0, e.1))?;
+        let parsed: Vec<SExp> = parse_sexp(Srcloc::start(&full_name), content.iter().copied())
+            .map_err(|e| CompileErr(e.0, e.1))?
+            .iter()
+            .map(|r| {
+                let re: &SExp = r.borrow();
+                re.clone()
+            })
+            .collect();
 
-        let mut out_forms = vec![];
-
-        if self.opts.stdenv() {
-            out_forms.push(
-                make_namespace_ref(
-                    &loc,
-                    &loc,
-                    &loc,
-                    &ImportLongName::parse(b"std.prelude").1,
-                    &ModuleImportSpec::Hiding(loc.clone(), vec![]),
-                )
-                .to_sexp(),
-            );
-        }
-
-        self.namespace_stack.push(ImportNameMap {
-            name: Some(import_name.clone()),
-        });
-
-        for p in parsed.iter() {
-            for form in self.process_pp_form(includes, p.clone())? {
-                out_forms.push(form.clone());
-            }
-        }
-
-        self.namespace_stack.pop();
+        let res = self.import_new_module_content(loc, includes, import_name, &parsed)?;
 
         includes.push(IncludeDesc {
             kw: kw.clone(),
@@ -639,7 +657,7 @@ impl Preprocessor {
             kind: Some(IncludeProcessType::Module(Box::new(kind.clone()))),
         });
 
-        Ok(out_forms)
+        Ok(res)
     }
 
     fn import_module(
@@ -719,13 +737,13 @@ impl Preprocessor {
         } else if let IncludeProcessType::Compiled = &kind {
             let decoded_content = decode_string(&content);
             let mut symtab = HashMap::new();
-            let mut includes = Vec::new();
+            let mut included = Vec::new();
             let newly_compiled = compile_clvm_text_maybe_opt(
                 &mut allocator,
                 self.subcompile_opts.optimize(),
                 self.subcompile_opts.clone(),
                 &mut symtab,
-                &mut includes,
+                &mut included,
                 &decoded_content,
                 &full_name,
                 true,
@@ -876,13 +894,11 @@ impl Preprocessor {
         // as inline defuns because they're closest to that semantically.
         let optimizer = get_optimizer(&loc, self.opts.clone())?;
         let mut symbol_table = HashMap::new();
-        let mut includes = Vec::new();
         let mut wrapper = CompileContextWrapper::new(
             &mut allocator,
             self.runner.clone(),
             &mut symbol_table,
             optimizer,
-            &mut includes,
         );
 
         let mut main_helpers: Vec<HelperForm> = self.prototype_program.clone();
@@ -924,11 +940,8 @@ impl Preprocessor {
 
         let new_program = resolve_namespaces(self.opts.clone(), &starting_program)?;
 
-        let compiled_program = compile_from_compileform(
-            &mut wrapper.context,
-            self.opts.set_module_phase(None),
-            new_program,
-        )?;
+        let compiled_program =
+            compile_from_compileform(&mut wrapper.context, self.opts.clone(), new_program)?;
         self.stored_macros.insert(
             found_name.clone(),
             StoredMacro::Compiled(Rc::new(compiled_program.clone())),
@@ -1059,18 +1072,20 @@ impl Preprocessor {
             return Ok(None);
         }
 
-        let import = if let SExp::Atom(_, name) = &form[0] {
-            if name != b"import" {
-                return Ok(None);
-            }
-
-            if let HelperForm::Defnsref(import) = compile_nsref(loc.clone(), form)? {
-                import
-            } else {
-                return Err(CompileErr(loc, "asked to parse import".to_string()));
-            }
+        let name = if let SExp::Atom(_, name) = &form[0] {
+            name
         } else {
             return Ok(None);
+        };
+
+        if name != b"import" {
+            return Ok(None);
+        }
+
+        let import = if let HelperForm::Defnsref(import) = compile_nsref(loc.clone(), form)? {
+            import
+        } else {
+            return Err(CompileErr(loc, "asked to parse import".to_string()));
         };
 
         let mod_kind = IncludeProcessType::Module(Box::new(import.specification.clone()));
@@ -1088,7 +1103,45 @@ impl Preprocessor {
         )))
     }
 
+    fn parse_namespace(
+        &mut self,
+        loc: Srcloc,
+        includes: &mut Vec<IncludeDesc>,
+        form: &[SExp],
+    ) -> Result<Option<()>, CompileErr> {
+        if form.is_empty() {
+            return Ok(None);
+        }
+
+        let name = if let SExp::Atom(_, name) = &form[0] {
+            name
+        } else {
+            return Ok(None);
+        };
+
+        if name != b"namespace" {
+            return Ok(None);
+        }
+
+        let ns_helper = compile_namespace(self.opts.clone(), loc.clone(), form)?;
+        if let HelperForm::Defnamespace(namespace) = &ns_helper {
+            self.imported_modules.insert(namespace.longname.clone());
+            self.import_new_module_content(
+                ns_helper.loc(),
+                includes,
+                &namespace.longname,
+                &form[2..],
+            )?;
+            return Ok(Some(()));
+        }
+
+        Err(CompileErr(loc, "asked to parse namespace".to_string()))
+    }
+
     fn parse_include(&mut self, form: &[SExp]) -> Result<Option<IncludeType>, CompileErr> {
+        for f in form.iter() {
+            eprintln!("parse_include {f} {f:?}");
+        }
         if let [SExp::Atom(kw, include_kw), include_name] = form {
             if include_kw != b"include" {
                 return Ok(None);
@@ -1225,6 +1278,11 @@ impl Preprocessor {
         let included: Option<IncludeType> = if let Some(x) = as_list.as_ref() {
             if let Some(res) = self.parse_import(unexpanded_body.loc(), x)? {
                 Some(res)
+            } else if self
+                .parse_namespace(unexpanded_body.loc(), includes, x)?
+                .is_some()
+            {
+                None
             } else if let Some(res) = self.parse_include(x)? {
                 Some(res)
             } else if let Some(res) = self.parse_embed(body.clone(), x)? {

@@ -460,57 +460,6 @@ pub enum ModuleImportSpec {
     Hiding(Srcloc, Vec<ModuleImportListedName>),
 }
 
-pub fn match_as_named(loc: Srcloc, lst: &[SExp], offset: usize) -> Option<ExportFunctionDesc> {
-    let name_offset = offset;
-    let small = 1 + offset;
-    let as_kw = 1 + offset;
-    let as_name_offset = 2 + offset;
-    let large = 3 + offset;
-
-    if lst.len() != small && lst.len() != large {
-        return None;
-    }
-
-    let (_from_loc, from_name) = if let SExp::Atom(from_loc, from_name) = lst[name_offset].borrow()
-    {
-        (from_loc.clone(), from_name.clone())
-    } else {
-        return None;
-    };
-
-    let mut result = ExportFunctionDesc {
-        loc,
-        kw_loc: Some(lst[0].loc()),
-        name: NameAndLoc {
-            value: from_name,
-            loc: Some(lst[name_offset].loc()),
-        },
-        as_loc: None,
-        as_name: None,
-    };
-
-    if lst.len() == large {
-        if let SExp::Atom(as_loc, as_atom) = lst[as_kw].borrow() {
-            // Not 'as'
-            if as_atom != b"as" {
-                return None;
-            }
-            result.as_loc = Some(as_loc.clone());
-        } else {
-            return None;
-        }
-
-        if let SExp::Atom(as_name_loc, as_name) = lst[as_name_offset].borrow() {
-            result.as_name = Some(NameAndLoc {
-                value: as_name.clone(),
-                loc: Some(as_name_loc.clone()),
-            });
-        }
-    };
-
-    Some(result)
-}
-
 impl ModuleImportSpec {
     pub fn name_loc(&self) -> Srcloc {
         match self {
@@ -711,6 +660,57 @@ pub struct NamespaceRefData {
     pub specification: ModuleImportSpec,
 }
 
+pub fn match_as_named(loc: Srcloc, lst: &[SExp], offset: usize) -> Option<ExportFunctionDesc> {
+    let name_offset = offset;
+    let small = 1 + offset;
+    let as_kw = 1 + offset;
+    let as_name_offset = 2 + offset;
+    let large = 3 + offset;
+
+    if lst.len() != small && lst.len() != large {
+        return None;
+    }
+
+    let (_from_loc, from_name) = if let SExp::Atom(from_loc, from_name) = lst[name_offset].borrow()
+    {
+        (from_loc.clone(), from_name.clone())
+    } else {
+        return None;
+    };
+
+    let mut result = ExportFunctionDesc {
+        loc,
+        kw_loc: Some(lst[0].loc()),
+        name: NameAndLoc {
+            value: from_name,
+            loc: Some(lst[name_offset].loc()),
+        },
+        as_loc: None,
+        as_name: None,
+    };
+
+    if lst.len() == large {
+        if let SExp::Atom(as_loc, as_atom) = lst[as_kw].borrow() {
+            // Not 'as'
+            if as_atom != b"as" {
+                return None;
+            }
+            result.as_loc = Some(as_loc.clone());
+        } else {
+            return None;
+        }
+
+        if let SExp::Atom(as_name_loc, as_name) = lst[as_name_offset].borrow() {
+            result.as_name = Some(NameAndLoc {
+                value: as_name.clone(),
+                loc: Some(as_name_loc.clone()),
+            });
+        }
+    };
+
+    Some(result)
+}
+
 /// HelperForm is a toplevel binding of some kind.
 /// Helpers are the (defconst ...) (defun ...) (defun-inline ...) (defmacro ...)
 /// forms from the source code and "help" the program do its job.  They're
@@ -744,7 +744,7 @@ fn test_helperform_import_qualified_0() {
                 loc: srcloc.clone(),
                 nl: srcloc.clone(),
                 kw: srcloc.clone(),
-                name: name,
+                name,
                 target: None,
             }))
         }))
@@ -771,7 +771,7 @@ fn test_helperform_import_qualified_1() {
                 loc: srcloc.clone(),
                 nl: srcloc.clone(),
                 kw: srcloc.clone(),
-                name: name,
+                name,
                 target: Some(QualifiedModuleInfoTarget {
                     kw: srcloc.clone(),
                     nl: srcloc.clone(),
@@ -1130,15 +1130,15 @@ pub trait HasCompilerOptsDelegation {
     ) -> Result<(String, Vec<u8>), CompileErr> {
         self.compiler_opts().read_new_file(inc_from, filename)
     }
+    fn override_get_file_mod_date(&self, loc: &Srcloc, filename: &str) -> Result<u64, CompileErr> {
+        self.compiler_opts().get_file_mod_date(loc, filename)
+    }
     fn override_compile_program(
         &self,
         context: &mut BasicCompileContext,
         sexp: Rc<SExp>,
     ) -> Result<CompilerOutput, CompileErr> {
         self.compiler_opts().compile_program(context, sexp)
-    }
-    fn override_get_file_mod_date(&self, loc: &Srcloc, filename: &str) -> Result<u64, CompileErr> {
-        self.compiler_opts().get_file_mod_date(loc, filename)
     }
     /// Fully write a file to the filesystem.
     fn override_write_new_file(&self, target_path: &str, content: &[u8]) -> Result<(), CompileErr> {
@@ -1192,14 +1192,9 @@ impl<T: HasCompilerOptsDelegation> CompilerOpts for T {
         self.override_module_phase()
     }
 
-    fn set_filename(&self, new_filename: &str) -> Rc<dyn CompilerOpts> {
-        self.override_set_filename(new_filename)
-    }
-
     fn set_module_phase(&self, module_phase: Option<ModulePhase>) -> Rc<dyn CompilerOpts> {
         self.override_set_module_phase(module_phase)
     }
-
     fn set_dialect(&self, dialect: AcceptedDialect) -> Rc<dyn CompilerOpts> {
         self.override_set_dialect(dialect)
     }
@@ -1239,6 +1234,9 @@ impl<T: HasCompilerOptsDelegation> CompilerOpts for T {
     fn get_file_mod_date(&self, loc: &Srcloc, filename: &str) -> Result<u64, CompileErr> {
         self.override_get_file_mod_date(loc, filename)
     }
+    fn set_filename(&self, filename: &str) -> Rc<dyn CompilerOpts> {
+        self.override_set_filename(filename)
+    }
     fn read_new_file(
         &self,
         inc_from: String,
@@ -1246,15 +1244,15 @@ impl<T: HasCompilerOptsDelegation> CompilerOpts for T {
     ) -> Result<(String, Vec<u8>), CompileErr> {
         self.override_read_new_file(inc_from, filename)
     }
+    fn write_new_file(&self, target: &str, content: &[u8]) -> Result<(), CompileErr> {
+        self.override_write_new_file(target, content)
+    }
     fn compile_program(
         &self,
         context: &mut BasicCompileContext,
         sexp: Rc<SExp>,
     ) -> Result<CompilerOutput, CompileErr> {
         self.override_compile_program(context, sexp)
-    }
-    fn write_new_file(&self, target_path: &str, content: &[u8]) -> Result<(), CompileErr> {
-        self.override_write_new_file(target_path, content)
     }
 }
 
@@ -1434,33 +1432,33 @@ impl HelperForm {
     /// Get a reference to the HelperForm's name.
     pub fn name(&self) -> &Vec<u8> {
         match self {
-            HelperForm::Defnamespace(defn) => &defn.rendered_name,
-            HelperForm::Defnsref(defr) => &defr.rendered_name,
             HelperForm::Defconstant(defc) => &defc.name,
             HelperForm::Defmacro(mac) => &mac.name,
             HelperForm::Defun(_, defun) => &defun.name,
+            HelperForm::Defnamespace(defn) => &defn.rendered_name,
+            HelperForm::Defnsref(defr) => &defr.rendered_name,
         }
     }
 
     /// Get the location of the HelperForm's name.
     pub fn name_loc(&self) -> &Srcloc {
         match self {
-            HelperForm::Defnamespace(defn) => &defn.nl,
-            HelperForm::Defnsref(defr) => &defr.nl,
             HelperForm::Defconstant(defc) => &defc.nl,
             HelperForm::Defmacro(mac) => &mac.nl,
             HelperForm::Defun(_, defun) => &defun.nl,
+            HelperForm::Defnamespace(defn) => &defn.nl,
+            HelperForm::Defnsref(defr) => &defr.nl,
         }
     }
 
     /// Return a general location for the whole HelperForm.
     pub fn loc(&self) -> Srcloc {
         match self {
-            HelperForm::Defnamespace(defn) => defn.loc.clone(),
-            HelperForm::Defnsref(defr) => defr.loc.clone(),
             HelperForm::Defconstant(defc) => defc.loc.clone(),
             HelperForm::Defmacro(mac) => mac.loc.clone(),
             HelperForm::Defun(_, defun) => defun.loc.clone(),
+            HelperForm::Defnamespace(defn) => defn.loc.clone(),
+            HelperForm::Defnsref(defr) => defr.loc.clone(),
         }
     }
 
@@ -1468,30 +1466,6 @@ impl HelperForm {
     /// be re-parsed if needed.
     pub fn to_sexp(&self) -> Rc<SExp> {
         match self {
-            HelperForm::Defnamespace(defn) => {
-                let mut result_vec = vec![
-                    Rc::new(SExp::atom_from_string(defn.kw.clone(), "namespace")),
-                    Rc::new(SExp::Atom(defn.nl.clone(), defn.rendered_name.clone())),
-                ];
-                let helpers_vec: Vec<Rc<SExp>> = defn.helpers.iter().map(|h| h.to_sexp()).collect();
-                result_vec.extend(helpers_vec);
-                Rc::new(list_to_cons(defn.loc.clone(), &result_vec))
-            }
-            HelperForm::Defnsref(defr) => {
-                let tail = match &defr.specification {
-                    ModuleImportSpec::Qualified(_q) => defr.specification.to_sexp(),
-                    _ => Rc::new(SExp::Cons(
-                        defr.loc.clone(),
-                        Rc::new(SExp::Atom(defr.nl.clone(), defr.rendered_name.clone())),
-                        defr.specification.to_sexp(),
-                    )),
-                };
-                Rc::new(SExp::Cons(
-                    defr.loc.clone(),
-                    Rc::new(SExp::Atom(defr.loc.clone(), b"import".to_vec())),
-                    tail,
-                ))
-            }
             HelperForm::Defconstant(defc) => {
                 let dc_kw = match defc.kind {
                     ConstantKind::Simple => "defconstant",
@@ -1522,6 +1496,30 @@ impl HelperForm {
                         defun.args.clone(),
                         defun.body.to_sexp(),
                     ],
+                ))
+            }
+            HelperForm::Defnamespace(defn) => {
+                let mut result_vec = vec![
+                    Rc::new(SExp::atom_from_string(defn.kw.clone(), "namespace")),
+                    Rc::new(SExp::Atom(defn.nl.clone(), defn.rendered_name.clone())),
+                ];
+                let helpers_vec: Vec<Rc<SExp>> = defn.helpers.iter().map(|h| h.to_sexp()).collect();
+                result_vec.extend(helpers_vec);
+                Rc::new(list_to_cons(defn.loc.clone(), &result_vec))
+            }
+            HelperForm::Defnsref(defr) => {
+                let tail = match &defr.specification {
+                    ModuleImportSpec::Qualified(_q) => defr.specification.to_sexp(),
+                    _ => Rc::new(SExp::Cons(
+                        defr.loc.clone(),
+                        Rc::new(SExp::Atom(defr.nl.clone(), defr.rendered_name.clone())),
+                        defr.specification.to_sexp(),
+                    )),
+                };
+                Rc::new(SExp::Cons(
+                    defr.loc.clone(),
+                    Rc::new(SExp::Atom(defr.loc.clone(), b"import".to_vec())),
+                    tail,
                 ))
             }
         }

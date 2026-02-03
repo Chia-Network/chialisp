@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use clvm_rs::allocator::Allocator;
@@ -5,7 +6,10 @@ use clvm_rs::allocator::Allocator;
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 use crate::compiler::compiler::DefaultCompilerOpts;
 use crate::compiler::comptypes::CompileErr;
+use crate::compiler::optimize::get_optimizer;
 use crate::compiler::repl::Repl;
+use crate::compiler::srcloc::Srcloc;
+use crate::compiler::BasicCompileContext;
 
 fn test_repl_outcome_with_stack_limit<S>(
     inputs: Vec<S>,
@@ -14,18 +18,23 @@ fn test_repl_outcome_with_stack_limit<S>(
 where
     S: ToString,
 {
-    let mut allocator = Allocator::new();
     let mut res = Ok(None);
     let opts = Rc::new(DefaultCompilerOpts::new(&"*repl-test*".to_string()));
     let runner = Rc::new(DefaultProgramRunner::new());
-    let mut repl = Repl::new(opts, runner);
+    let mut repl = Repl::new(opts.clone(), runner.clone());
 
     if let Some(limit) = limit {
         repl.set_stack_limit(Some(limit));
     }
 
+    let mut context = BasicCompileContext {
+        allocator: Allocator::new(),
+        runner: runner.clone(),
+        symbols: HashMap::new(),
+        optimizer: get_optimizer(&Srcloc::start("*test*"), opts.clone()).unwrap(),
+    };
     for i in inputs.iter() {
-        res = res.and_then(|_| repl.process_line(&mut allocator, i.to_string()));
+        res = res.and_then(|_| repl.process_line(&mut context, i.to_string()));
     }
 
     res.map(|r| r.map(|r| r.to_sexp().to_string()))

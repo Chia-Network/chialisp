@@ -92,13 +92,11 @@ impl Optimization for Strategy23 {
         cf: CompileForm,
     ) -> Result<CompileForm, CompileErr> {
         let mut symbols = HashMap::new();
-        let mut includes = Vec::new();
         let mut wrapper = CompileContextWrapper::new(
             allocator,
             runner,
             &mut symbols,
             self.duplicate(),
-            &mut includes,
         );
         if matches!(opts.module_phase(), Some(ModulePhase::StandalonePhase(_))) {
             return Ok(cf);

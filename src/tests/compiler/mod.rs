@@ -15,6 +15,7 @@ mod modules;
 mod optimizer;
 mod preprocessor;
 mod repl;
+mod resolve;
 mod restargs;
 mod runtypes;
 mod singleton;

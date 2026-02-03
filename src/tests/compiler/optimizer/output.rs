@@ -99,14 +99,12 @@ fn run_string_get_program_and_output_dialect(
     let sexp_args =
         parse_sexp(srcloc.clone(), args.bytes()).map_err(|e| CompileErr(e.0, e.1))?[0].clone();
 
-    let mut included = Vec::new();
     compile_file(
         &mut allocator,
         runner.clone(),
         opts,
         &content,
         &mut HashMap::new(),
-        &mut included,
     )
     .and_then(|program| {
         run_with_cost(

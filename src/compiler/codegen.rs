@@ -1832,7 +1832,7 @@ fn generate_complex_constant_body(
         program.helpers.clone(),
     );
     let constant_result = evaluator.shrink_bodyform(
-        context.allocator(),
+        context,
         Rc::new(SExp::Nil(defc.loc.clone())),
         &HashMap::new(),
         defc.body.clone(),

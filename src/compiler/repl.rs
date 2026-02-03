@@ -5,14 +5,13 @@ use std::env;
 use std::mem::swap;
 use std::rc::Rc;
 
-use clvm_rs::allocator::Allocator;
-
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 use crate::compiler::comptypes::{BodyForm, CompileErr, CompilerOpts};
 use crate::compiler::evaluate::{first_of_alist, second_of_alist, Evaluator, EVAL_STACK_LIMIT};
 use crate::compiler::frontend::frontend;
 use crate::compiler::sexp::{parse_sexp, SExp};
 use crate::compiler::srcloc::Srcloc;
+use crate::compiler::BasicCompileContext;
 use crate::util::ErrInto;
 
 /// An object implementing a full repl for the language of chialisp toplevel forms
@@ -119,12 +118,11 @@ impl Repl {
                 )),
             )),
         );
-        let start_program_fe = frontend(opts.clone(), &[starter_empty_program]).unwrap();
-        let evaluator = Evaluator::new(
-            opts.clone(),
-            runner.clone(),
-            start_program_fe.compileform().helpers.clone(),
-        );
+        let start_program_fe = frontend(opts.clone(), &[starter_empty_program])
+            .unwrap()
+            .compileform()
+            .clone();
+        let evaluator = Evaluator::new(opts.clone(), runner.clone(), start_program_fe.helpers);
 
         Repl {
             depth: 0,
@@ -153,7 +151,7 @@ impl Repl {
     /// as an expression.
     pub fn process_line(
         &mut self,
-        allocator: &mut Allocator,
+        context: &mut BasicCompileContext,
         line: String,
     ) -> Result<Option<Rc<BodyForm>>, CompileErr> {
         self.depth += count_depth(&line);
@@ -196,19 +194,21 @@ impl Repl {
                     let prog0 = parsed_program[0].clone();
                     let name = second_of_alist(prog0.clone())?;
                     let built_program = program_with_helper(vec![name], prog0);
-                    let program = frontend(self.opts.clone(), &[built_program])?;
-                    self.evaluator.add_helper(
-                        &program.compileform().helpers[program.compileform().helpers.len() - 1],
-                    );
+                    let program = frontend(self.opts.clone(), &[built_program])?
+                        .compileform()
+                        .clone();
+                    self.evaluator
+                        .add_helper(&program.helpers[program.helpers.len() - 1]);
                     Ok(Some(Rc::new(BodyForm::Quoted(SExp::Nil(self.loc.clone())))))
                 } else {
                     frontend(self.opts.clone(), &parsed_program)
+                        .map(|p| p.compileform().clone())
                         .and_then(|program| {
                             self.evaluator.shrink_bodyform(
-                                allocator,
-                                program.compileform().args.clone(),
+                                context,
+                                program.args.clone(),
                                 &HashMap::new(),
-                                program.compileform().exp.clone(),
+                                program.exp.clone(),
                                 false,
                                 self.stack_limit,
                             )

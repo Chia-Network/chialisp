@@ -201,7 +201,6 @@ impl RunAndCompileInputData {
         symbol_table: &mut HashMap<String, String>,
     ) -> Result<Rc<sexp::SExp>, CompileErr> {
         let runner = Rc::new(DefaultProgramRunner::new());
-        let mut includes = Vec::new();
 
         let unopt_res = compile_file(
             allocator,
@@ -209,7 +208,6 @@ impl RunAndCompileInputData {
             self.opts.clone(),
             &self.program.content,
             symbol_table,
-            &mut includes,
         );
         let res = unopt_res.and_then(|x| {
             maybe_finalize_program_via_classic_optimizer(
