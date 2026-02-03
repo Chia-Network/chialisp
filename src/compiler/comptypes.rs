@@ -1130,9 +1130,6 @@ pub trait HasCompilerOptsDelegation {
     ) -> Result<(String, Vec<u8>), CompileErr> {
         self.compiler_opts().read_new_file(inc_from, filename)
     }
-    fn override_get_file_mod_date(&self, loc: &Srcloc, filename: &str) -> Result<u64, CompileErr> {
-        self.compiler_opts().get_file_mod_date(loc, filename)
-    }
     fn override_compile_program(
         &self,
         context: &mut BasicCompileContext,
@@ -1143,6 +1140,9 @@ pub trait HasCompilerOptsDelegation {
     /// Fully write a file to the filesystem.
     fn override_write_new_file(&self, target_path: &str, content: &[u8]) -> Result<(), CompileErr> {
         self.compiler_opts().write_new_file(target_path, content)
+    }
+    fn override_get_file_mod_date(&self, loc: &Srcloc, filename: &str) -> Result<u64, CompileErr> {
+        self.compiler_opts().get_file_mod_date(loc, filename)
     }
 }
 
@@ -1195,6 +1195,9 @@ impl<T: HasCompilerOptsDelegation> CompilerOpts for T {
     fn set_module_phase(&self, module_phase: Option<ModulePhase>) -> Rc<dyn CompilerOpts> {
         self.override_set_module_phase(module_phase)
     }
+    fn set_filename(&self, filename: &str) -> Rc<dyn CompilerOpts> {
+        self.override_set_filename(filename)
+    }
     fn set_dialect(&self, dialect: AcceptedDialect) -> Rc<dyn CompilerOpts> {
         self.override_set_dialect(dialect)
     }
@@ -1231,11 +1234,11 @@ impl<T: HasCompilerOptsDelegation> CompilerOpts for T {
     fn set_diag_flags(&self, new_flags: Rc<HashSet<usize>>) -> Rc<dyn CompilerOpts> {
         self.override_set_diag_flags(new_flags)
     }
+    fn write_new_file(&self, target: &str, content: &[u8]) -> Result<(), CompileErr> {
+        self.override_write_new_file(target, content)
+    }
     fn get_file_mod_date(&self, loc: &Srcloc, filename: &str) -> Result<u64, CompileErr> {
         self.override_get_file_mod_date(loc, filename)
-    }
-    fn set_filename(&self, filename: &str) -> Rc<dyn CompilerOpts> {
-        self.override_set_filename(filename)
     }
     fn read_new_file(
         &self,
@@ -1243,9 +1246,6 @@ impl<T: HasCompilerOptsDelegation> CompilerOpts for T {
         filename: String,
     ) -> Result<(String, Vec<u8>), CompileErr> {
         self.override_read_new_file(inc_from, filename)
-    }
-    fn write_new_file(&self, target: &str, content: &[u8]) -> Result<(), CompileErr> {
-        self.override_write_new_file(target, content)
     }
     fn compile_program(
         &self,
