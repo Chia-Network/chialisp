@@ -366,14 +366,12 @@ fn test_classic_compiler_with_compiler_opts() {
     let to_compile = "(mod (A) (include test.clinc) (F A))";
     let mut allocator = Allocator::new();
     let mut symbols = HashMap::new();
-    let mut includes = Vec::new();
 
     // Verify injection
     let result = compile_clvm_text(
         &mut allocator,
         opts.clone(),
         &mut symbols,
-        &mut includes,
         to_compile,
         "test.clsp",
         true,
@@ -388,7 +386,6 @@ fn test_classic_compiler_with_compiler_opts() {
         &mut allocator,
         opts,
         &mut symbols,
-        &mut includes,
         to_compile,
         "test.clsp",
         false,

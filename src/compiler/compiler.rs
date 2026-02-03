@@ -18,7 +18,7 @@ use crate::compiler::codegen::{codegen, hoist_body_let_binding, process_helper_l
 use crate::compiler::comptypes::{
     BodyForm, CompileErr, CompileForm, CompileModuleComponent, CompileModuleOutput, CompilerOpts,
     CompilerOutput, ConstantKind, DefunData, Export, FrontendOutput, HelperForm, ImportLongName,
-    IncludeDesc, ModulePhase, PrimaryCodegen, StandalonePhaseInfo, SyntheticType,
+    ModulePhase, PrimaryCodegen, StandalonePhaseInfo, SyntheticType,
 };
 use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
 use crate::compiler::frontend::frontend;

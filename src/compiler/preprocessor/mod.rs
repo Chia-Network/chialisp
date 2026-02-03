@@ -504,7 +504,6 @@ impl Preprocessor {
 
         if !have_module {
             let dialect = detect_modern(&mut allocator, classic_parse);
-            let mut includes = Vec::new();
             if dialect.stepping.is_none() {
                 // Classic compile.
                 let newly_compiled = compile_clvm_text_maybe_opt(
@@ -512,7 +511,6 @@ impl Preprocessor {
                     self.subcompile_opts.optimize(),
                     self.subcompile_opts.clone(),
                     &mut symbol_table,
-                    &mut includes,
                     &program_text,
                     filename,
                     true,
@@ -737,13 +735,11 @@ impl Preprocessor {
         } else if let IncludeProcessType::Compiled = &kind {
             let decoded_content = decode_string(&content);
             let mut symtab = HashMap::new();
-            let mut included = Vec::new();
             let newly_compiled = compile_clvm_text_maybe_opt(
                 &mut allocator,
                 self.subcompile_opts.optimize(),
                 self.subcompile_opts.clone(),
                 &mut symtab,
-                &mut included,
                 &decoded_content,
                 &full_name,
                 true,

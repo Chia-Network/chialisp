@@ -12,7 +12,6 @@ use crate::tests::classic::run::read_json_from_file;
 #[test]
 fn test_compile_clvm_function_1() {
     let mut symbol_hash_table = HashMap::new();
-    let mut includes = Vec::new();
     let bridge_hex_file = "validation_taproot.clvm2.hex";
     // Try to remove it if it exists.
     fs::remove_file(bridge_hex_file).ok();
@@ -21,7 +20,6 @@ fn test_compile_clvm_function_1() {
         bridge_hex_file,
         &["resources/tests/bridge-includes".to_string()],
         &mut symbol_hash_table,
-        &mut includes,
     )
     .expect("should compile");
     let bridge_hex = fs::read_to_string(bridge_hex_file).expect("should have been created");
@@ -46,7 +44,6 @@ fn test_compile_clvm_with_previous_data() {
         fs::read_to_string("resources/tests/bridgeref/validation_taproot.clvm.hex.reference")
             .expect("should have been created");
     let mut symbol_hash_table = HashMap::new();
-    let mut includes = Vec::new();
 
     fs::write(bridge_hex_file, bridge_hex).expect("should write");
     compile_clvm(
@@ -54,7 +51,6 @@ fn test_compile_clvm_with_previous_data() {
         bridge_hex_file,
         &["resources/tests/bridge-includes".to_string()],
         &mut symbol_hash_table,
-        &mut includes,
     )
     .expect("should compile");
     fs::remove_file(bridge_hex_file).expect("should have existed");
@@ -64,7 +60,6 @@ fn test_compile_clvm_with_previous_data() {
 fn test_classic_compile_error_output() {
     let mut allocator = Allocator::new();
     let mut symbols = HashMap::new();
-    let mut includes = Vec::new();
     let path = "*test*";
     let content = "(mod (X) (xxx X))";
     let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(path));
@@ -72,7 +67,6 @@ fn test_classic_compile_error_output() {
         &mut allocator,
         opts.clone(),
         &mut symbols,
-        &mut includes,
         &content,
         &path,
         true,
@@ -90,7 +84,6 @@ fn test_classic_compile_error_output() {
 fn test_modern_compile_error_output() {
     let mut allocator = Allocator::new();
     let mut symbols = HashMap::new();
-    let mut includes = Vec::new();
     let path = "*test*";
     let content = indoc! {
     "(mod (X)
@@ -103,7 +96,6 @@ fn test_modern_compile_error_output() {
         &mut allocator,
         opts.clone(),
         &mut symbols,
-        &mut includes,
         &content,
         &path,
         true,

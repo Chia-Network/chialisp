@@ -354,12 +354,8 @@ fn constant_fun_result(
                 };
 
                 let mut symbols = HashMap::new();
-                let mut wrapper = CompileContextWrapper::new(
-                    allocator,
-                    runner.clone(),
-                    &mut symbols,
-                    optimizer,
-                );
+                let mut wrapper =
+                    CompileContextWrapper::new(allocator, runner.clone(), &mut symbols, optimizer);
 
                 if let Ok(code) = codegen(&mut wrapper.context, opts.clone(), &to_compile) {
                     code
