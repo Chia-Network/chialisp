@@ -22,12 +22,8 @@ use chialisp::classic::clvm::__type_compatibility__::{
 };
 use chialisp::classic::clvm::serialize::sexp_to_stream;
 use chialisp::classic::clvm_tools::clvmc::compile_clvm_inner;
-<<<<<<< HEAD
-use chialisp::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
-=======
 use chialisp::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
 use chialisp::compiler::CompileContextWrapper;
->>>>>>> 20260202-better-test-result
 use chialisp::compiler::cldb::{
     hex_to_modern_sexp, CldbOverrideBespokeCode, CldbRun, CldbRunEnv, CldbRunnable,
     CldbSingleBespokeOverride,
@@ -37,10 +33,7 @@ use chialisp::compiler::compiler::{
     extract_program_and_env, path_to_function, rewrite_in_program, DefaultCompilerOpts,
 };
 use chialisp::compiler::comptypes::{CompileErr, CompilerOpts};
-<<<<<<< HEAD
-=======
 use chialisp::compiler::optimize::get_optimizer;
->>>>>>> 20260202-better-test-result
 use chialisp::compiler::prims;
 use chialisp::compiler::repl::Repl;
 use chialisp::compiler::runtypes::RunFailure;
@@ -310,7 +303,6 @@ fn make_compile_output(result_stream: &Stream, symbol_table: &HashMap<String, St
 pub fn compile(input_js: JsValue, filename_js: JsValue, search_paths_js: Vec<JsValue>) -> JsValue {
     let mut allocator = Allocator::new();
     let mut symbol_table = HashMap::new();
-    let mut includes = Vec::new();
     let mut result_stream = Stream::new(None);
     let input = input_js.as_string().unwrap();
     let filename = filename_js.as_string().unwrap();
@@ -324,7 +316,6 @@ pub fn compile(input_js: JsValue, filename_js: JsValue, search_paths_js: Vec<JsV
         &mut allocator,
         opts,
         &mut symbol_table,
-        &mut includes,
         &filename,
         &input,
         &mut result_stream,
