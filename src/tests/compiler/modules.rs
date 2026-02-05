@@ -613,3 +613,26 @@ fn test_constant_multiple_rounds() {
         ]
     );
 }
+
+#[test]
+fn test_three_outputs_common() {
+    let filename = "resources/tests/module/programs/three-outputs-common.clsp";
+    let content = fs::read_to_string(filename).expect("file should exist");
+    let h_hex_file = "resources/tests/module/programs/three-outputs-common_H.hex";
+    test_compile_and_run_program_with_modules(
+        filename,
+        &content,
+        &[
+            HexArgumentOutcome {
+                hexfile: h_hex_file,
+                argument: "(a (q 18 5 (q . 3)) (c (q () 18 5 (q . 3)) 1))",
+                outcome: ContentEquals,
+            },
+            HexArgumentOutcome {
+                hexfile: h_hex_file,
+                argument: "(15)",
+                outcome: Run("45"),
+            },
+        ],
+    );
+}

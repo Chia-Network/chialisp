@@ -1,0 +1,9 @@
+(include *standard-cl-23*)
+(export F)
+(export G)
+(export H)
+
+(defun E (X) (* X 3))
+(defun F (X) (E (+ X 1)))
+(defun G (X) (E (* X 2)))
+(defconst H E)
