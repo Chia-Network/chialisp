@@ -164,6 +164,10 @@ fn compute_env_shape(
             eprintln!("extra_env_data_strings {extra_env_data_strings:?}");
             let extra_env_tree =
                 make_env_tree(&sp.env.loc(), &extra_env_data, 0, extra_env_data.len());
+            if sp.empty_common_phase {
+                return SExp::Cons(l.clone(), extra_env_tree, args);
+            }
+
             if let SExp::Cons(l, all_env, _) = sp.env.borrow() {
                 if let SExp::Cons(_l, old_env, _) = all_env.borrow() {
                     return SExp::Cons(
@@ -177,7 +181,7 @@ fn compute_env_shape(
             eprintln!("Weird env {} trying to add {extra_env_tree}", sp.env);
             todo!();
         }
-        Some(ModulePhase::CommonPhase) => {
+        Some(ModulePhase::CommonPhase(true)) => {
             let car = compute_code_shape(l.clone(), helpers);
             eprintln!("about to compute env shape with helpers: {car}");
             let res = SExp::Cons(
@@ -196,7 +200,7 @@ fn compute_env_shape(
             // We use the env that was specified in the phase.
             env.clone()
         }
-        None => {
+        Some(ModulePhase::CommonPhase(false)) | None => {
             let car = compute_code_shape(l.clone(), helpers);
             let cdr = args;
             SExp::Cons(l, Rc::new(car), cdr)
@@ -1779,7 +1783,10 @@ fn generate_simple_constant_body(
     )
     .map_err(|r| CompileErr(defc.loc.clone(), format!("Error evaluating constant: {r}")))
     .and_then(|res| {
-        if matches!(code_generator.module_phase, Some(ModulePhase::CommonPhase)) {
+        if matches!(
+            code_generator.module_phase,
+            Some(ModulePhase::CommonPhase(_))
+        ) {
             eprintln!("XXX Allow redefinition in common constant phase");
             return Ok(res);
         }
@@ -1809,7 +1816,10 @@ fn generate_complex_constant_body(
         decode_string(&defc.name),
         defc.body.to_sexp()
     );
-    if matches!(code_generator.module_phase, Some(ModulePhase::CommonPhase)) {
+    if matches!(
+        code_generator.module_phase,
+        Some(ModulePhase::CommonPhase(_))
+    ) {
         eprintln!("module constant env {}", code_generator.env);
         let env_borrow: &SExp = code_generator.env.borrow();
         let new_phase = Some(ModulePhase::CommonConstant(env_borrow.clone()));
@@ -2007,7 +2017,10 @@ fn start_codegen(
         code_generator.module_phase = opts.module_phase();
     }
 
-    if matches!(code_generator.module_phase, Some(ModulePhase::CommonPhase)) {
+    if matches!(
+        code_generator.module_phase,
+        Some(ModulePhase::CommonPhase(_))
+    ) {
         for h in program.helpers.iter() {
             let helper = if let HelperForm::Defconstant(dc) = h {
                 HelperForm::Defconstant(DefconstData {
@@ -2056,7 +2069,10 @@ fn start_codegen(
         )),
     };
 
-    if matches!(code_generator.module_phase, Some(ModulePhase::CommonPhase)) {
+    if matches!(
+        code_generator.module_phase,
+        Some(ModulePhase::CommonPhase(_))
+    ) {
         // Generate constants after the generation of the main environment in
         // stable constant mode.  This captures the environment shape.
         for h in program.helpers.iter() {
@@ -2354,7 +2370,12 @@ pub fn codegen(
     let to_process = code_generator.to_process.clone();
     let mut already_processed = HashSet::new();
 
-    if !opts.in_defun() && matches!(code_generator.module_phase, Some(ModulePhase::CommonPhase)) {
+    if !opts.in_defun()
+        && matches!(
+            code_generator.module_phase,
+            Some(ModulePhase::CommonPhase(_))
+        )
+    {
         // Process defuns first in case they're needed.
         for h in to_process.iter() {
             eprintln!("generate function (first time) {}", decode_string(h.name()));
@@ -2404,7 +2425,10 @@ pub fn codegen(
     // If stepping 23 or greater, we support no-env mode.
     enable_nil_env_mode_for_stepping_23_or_greater(opts.clone(), &mut code_generator);
 
-    if matches!(code_generator.module_phase, Some(ModulePhase::CommonPhase)) {
+    if matches!(
+        code_generator.module_phase,
+        Some(ModulePhase::CommonPhase(true))
+    ) {
         // We've got an order for generation that will allow us to have correct
         // constant order.  At this point we know that the constant order is
         // resolvable and doesn't have direct cycles.  It may be the case that
@@ -2447,7 +2471,7 @@ pub fn codegen(
         while prev_repr != this_repr && steps < CONSTANT_GENERATIONS_ALLOWED {
             // Regenerate constants.
             for h in to_process.iter() {
-                if let HelperForm::Defconstant(_) = h {
+                if matches!(h, HelperForm::Defconstant(_)) {
                     code_generator = generate_helper_body(
                         context,
                         code_generator,
@@ -2531,7 +2555,7 @@ pub fn codegen(
         )),
         (true, _, Some(code)) => Ok(normal_produce_code(code)),
         (_, None, Some(code)) => Ok(normal_produce_code(code)),
-        (false, Some(ModulePhase::CommonPhase), Some(code)) => {
+        (false, Some(ModulePhase::CommonPhase(_)), Some(code)) => {
             // Produce a triple of env shape, env, output code
             eprintln!("common phase env {}", c.env);
             eprintln!("final_env {}", c.final_env);

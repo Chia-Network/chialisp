@@ -492,11 +492,34 @@ pub fn compile_module(
 
     // First pass compilation: remove standalone constant helpers and produce
     // a body which contains all the non-standalone exports.
-    let common_opts = opts.set_module_phase(Some(ModulePhase::CommonPhase));
-    let mut common_program = resolve_namespaces(
-        common_opts.clone(),
+
+    let common_opts_assume_introspection =
+        opts.set_module_phase(Some(ModulePhase::CommonPhase(true)));
+    let common_program_assume_introspection = resolve_namespaces(
+        common_opts_assume_introspection.clone(),
         &form_module_program_common_body(standalone_constants, program.clone(), exports)?,
     )?;
+    let common_phase_functions = common_program_assume_introspection
+        .helpers
+        .iter()
+        .any(|h| matches!(h, HelperForm::Defun(_, _)));
+    eprintln!("common phase functions: {common_phase_functions}");
+    let (common_opts, mut common_program) = if !common_phase_functions {
+        let new_opts =
+            opts.set_module_phase(Some(ModulePhase::CommonPhase(common_phase_functions)));
+        (
+            new_opts.clone(),
+            resolve_namespaces(
+                new_opts,
+                &form_module_program_common_body(standalone_constants, program.clone(), exports)?,
+            )?,
+        )
+    } else {
+        (
+            common_opts_assume_introspection.clone(),
+            common_program_assume_introspection.clone(),
+        )
+    };
     modernize_constants(&mut common_program.helpers, standalone_constants);
     eprintln!("common program {}", common_program.to_sexp());
     let common_output = compile_from_compileform(context, common_opts, common_program.clone())?;
@@ -508,16 +531,21 @@ pub fn compile_module(
     let (env_shape, env, code) = (|| {
         if let Some(lst) = common_output.proper_list() {
             if lst.len() == 3 {
-                return (
+                return Ok((
                     Rc::new(lst[0].clone()),
                     Rc::new(lst[1].clone()),
                     Rc::new(lst[2].clone()),
-                );
+                ));
             }
         }
 
-        todo!();
-    })();
+        Err(CompileErr(
+            common_program.loc(),
+            format!(
+                "Wrong environment shape result from common phase code generation: {common_output}"
+            ),
+        ))
+    })()?;
 
     populate_export_map(context, &mut captured_export_map, opts.clone(), code)?;
 
@@ -535,6 +563,7 @@ pub fn compile_module(
     let second_stage_opts =
         opts.set_module_phase(Some(ModulePhase::StandalonePhase(StandalonePhaseInfo {
             env: env_shape,
+            empty_common_phase: !common_phase_functions,
             left_env_value: env,
         })));
     for fun in exports.iter() {

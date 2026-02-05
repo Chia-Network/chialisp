@@ -867,6 +867,7 @@ pub struct DefunCall {
 /// on top of the common part of module constant generation.
 #[derive(Clone)]
 pub struct StandalonePhaseInfo {
+    pub empty_common_phase: bool,
     pub env: Rc<SExp>,
     pub left_env_value: Rc<SExp>,
 }
@@ -884,7 +885,7 @@ impl Debug for StandalonePhaseInfo {
 /// environment of the constant being evaluated.
 #[derive(Clone)]
 pub enum ModulePhase {
-    CommonPhase,
+    CommonPhase(bool),
     CommonConstant(SExp),
     StandalonePhase(StandalonePhaseInfo),
 }
@@ -892,7 +893,7 @@ pub enum ModulePhase {
 impl Debug for ModulePhase {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         match self {
-            ModulePhase::CommonPhase => write!(formatter, "CommonPhase"),
+            ModulePhase::CommonPhase(funs) => write!(formatter, "CommonPhase({funs})"),
             ModulePhase::CommonConstant(env) => write!(formatter, "CommonConstant({env})"),
             ModulePhase::StandalonePhase(sp) => write!(formatter, "StandalonePhase({sp:?})"),
         }
@@ -1235,6 +1236,7 @@ impl<T: HasCompilerOptsDelegation> CompilerOpts for T {
         self.override_set_diag_flags(new_flags)
     }
     fn write_new_file(&self, target: &str, content: &[u8]) -> Result<(), CompileErr> {
+        eprintln!("HasCompilerOptsDelegation {target}");
         self.override_write_new_file(target, content)
     }
     fn get_file_mod_date(&self, loc: &Srcloc, filename: &str) -> Result<u64, CompileErr> {

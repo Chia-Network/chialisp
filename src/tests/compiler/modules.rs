@@ -31,7 +31,7 @@ use DesiredOutcome::{ContentEquals, Error, Run};
 #[derive(Clone)]
 pub struct TestModuleCompilerOpts {
     opts: Rc<dyn CompilerOpts>,
-    written_files: Rc<RefCell<HashMap<String, Vec<u8>>>>,
+    pub written_files: Rc<RefCell<HashMap<String, Vec<u8>>>>,
 }
 
 impl TestModuleCompilerOpts {
@@ -294,7 +294,7 @@ fn test_simple_module_compilation_import_program_1() {
             HexArgumentOutcome {
                 hexfile: hex_filename,
                 argument: "(13 73)",
-                outcome: Run("(0xfab05b1fd610159ee4a46a120ece34b5a947f88057c4287f4506e513910a5d29 14 (a (q 16 5 (q . 1)) (c (q () 16 5 (q . 1)) 1)) 0x225de92687b39de0e3228e15d54bc9896f275027d5b6bb6bde309afbfb22b519 146 (a (q 18 5 (q . 2)) (c (q () 18 5 (q . 2)) 1)))")
+                outcome: Run("(0x1eed358b67f00f0b838300f2e7bcc8f6ace8c8eac5e931ab11b8559b96a206bb 14 (a (q 16 5 (q . 1)) (c (q 16 5 (q . 1)) 1)) 0x6d8ed6530d383c703bfa57dc502a71bec5cb5e5cb501d41b2a238c8bd4c44325 146 (a (q 18 5 (q . 2)) (c (q 18 5 (q . 2)) 1)))")
             }
         ]
     );
