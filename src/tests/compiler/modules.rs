@@ -31,7 +31,7 @@ use DesiredOutcome::{ContentEquals, Error, Run};
 #[derive(Clone)]
 pub struct TestModuleCompilerOpts {
     opts: Rc<dyn CompilerOpts>,
-    pub written_files: Rc<RefCell<HashMap<String, Vec<u8>>>>,
+    written_files: Rc<RefCell<HashMap<String, Vec<u8>>>>,
 }
 
 impl TestModuleCompilerOpts {
