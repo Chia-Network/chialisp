@@ -1,60 +1,59 @@
-#[cfg(not(test))]
-use std::borrow::{Borrow, BorrowMut};
+use std::borrow::BorrowMut;
+use std::cell::{RefCell, RefMut};
 use std::fmt::Debug;
 use std::rc::Rc;
-#[cfg(test)]
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-#[cfg(test)]
-use cached::stores::SizedCache;
-#[cfg(not(test))]
-use cached::stores::{DiskCache, DiskCacheBuilder, DiskCacheError};
+use cached::stores::{DiskCache, DiskCacheBuilder, DiskCacheError, SizedCache};
 
-#[cfg(test)]
-use cached::Cached;
-#[cfg(not(test))]
-use cached::IOCached;
+use cached::{Cached, IOCached};
 
 use crate::compiler::clvm::sha256tree;
 use crate::compiler::comptypes::{CompileErr, CompileForm, CompilerOpts, Export};
 use crate::compiler::sexp::{enlist, SExp};
 use crate::compiler::srcloc::Srcloc;
 
-#[cfg(test)]
-lazy_static! {
-    pub static ref TEST_CACHE: Mutex<SizedCache<String, String>> =
-        Mutex::new(SizedCache::with_size(1000 * 1000));
+thread_local! {
+    static USE_DISK_CACHE: AtomicBool = AtomicBool::new(false);
+    static TEST_CACHE: RefCell<SizedCache<String, String>> =
+        RefCell::new(SizedCache::with_size(1000 * 1000));
 }
 
-#[cfg(test)]
+pub fn set_use_disk_cache(use_disk_cache: bool) {
+    USE_DISK_CACHE.with(|a| a.store(use_disk_cache, Ordering::SeqCst));
+}
+
 struct SizedCacheForTest;
 
 trait AnyCache {
-    fn cache_get(&self, loc: Srcloc, key: &str) -> Result<Option<String>, CompileErr>;
-    fn cache_set(&mut self, loc: Srcloc, key: String, value: String) -> Result<(), CompileErr>;
+    fn cache_get_val(&self, loc: Srcloc, key: &str) -> Result<Option<String>, CompileErr>;
+    fn cache_set_val(&mut self, loc: Srcloc, key: String, value: String) -> Result<(), CompileErr>;
 }
 
 fn dc_error_to_cerr<E: Debug>(loc: Srcloc) -> Box<dyn Fn(E) -> CompileErr> {
     Box::new(move |e: E| CompileErr(loc.clone(), format!("{e:?}")))
 }
 
-#[cfg(not(test))]
-fn get_cache(loc: Srcloc) -> Result<Box<DiskCache<String, String>>, CompileErr> {
-    let mut builder: DiskCacheBuilder<String, String> = DiskCache::new("chialisp");
-    let build_error = dc_error_to_cerr(loc);
-    builder = builder.set_disk_directory(".chialisp");
-    builder.build().map_err(build_error).map(Box::new)
+fn get_cache(loc: Srcloc) -> Result<Box<dyn AnyCache>, CompileErr> {
+    if USE_DISK_CACHE.with(|c| c.load(Ordering::SeqCst)) {
+        let mut builder: DiskCacheBuilder<String, String> = DiskCache::new("chialisp");
+        let build_error = dc_error_to_cerr(loc);
+        builder = builder.set_disk_directory(".chialisp");
+        let result: Box<dyn AnyCache> = builder.build().map_err(build_error).map(Box::new)?;
+        Ok(result)
+    } else {
+        let result: Box<dyn AnyCache> = Box::new(SizedCacheForTest);
+        Ok(result)
+    }
 }
 
-#[cfg(not(test))]
-impl AnyCache for Box<DiskCache<String, String>> {
-    fn cache_get(&self, loc: Srcloc, key: &str) -> Result<Option<String>, CompileErr> {
+impl AnyCache for DiskCache<String, String> {
+    fn cache_get_val(&self, loc: Srcloc, key: &str) -> Result<Option<String>, CompileErr> {
         let dc_error: Box<dyn Fn(DiskCacheError) -> CompileErr> = dc_error_to_cerr(loc);
-        let dc_ref: &DiskCache<String, String> = self.borrow();
-        dc_ref.cache_get(&key.to_string()).map_err(dc_error)
+        self.cache_get(&key.to_string()).map_err(dc_error)
     }
 
-    fn cache_set(&mut self, loc: Srcloc, key: String, value: String) -> Result<(), CompileErr> {
+    fn cache_set_val(&mut self, loc: Srcloc, key: String, value: String) -> Result<(), CompileErr> {
         let dc_error: Box<dyn Fn(DiskCacheError) -> CompileErr> = dc_error_to_cerr(loc);
         let dc_ref: &mut DiskCache<String, String> = self.borrow_mut();
         dc_ref.cache_set(key, value).map_err(dc_error)?;
@@ -62,24 +61,20 @@ impl AnyCache for Box<DiskCache<String, String>> {
     }
 }
 
-#[cfg(test)]
-fn get_cache(_loc: Srcloc) -> Result<SizedCacheForTest, CompileErr> {
-    Ok(SizedCacheForTest)
-}
-
-#[cfg(test)]
 impl AnyCache for SizedCacheForTest {
-    fn cache_get(&self, loc: Srcloc, key: &str) -> Result<Option<String>, CompileErr> {
-        let lock_error = dc_error_to_cerr(loc);
-        let mut test_ref = TEST_CACHE.lock().map_err(lock_error)?;
-        Ok(test_ref.cache_get(key).map(|c| c.clone()))
+    fn cache_get_val(&self, _loc: Srcloc, key: &str) -> Result<Option<String>, CompileErr> {
+        TEST_CACHE.with(|cache| {
+            let mut cache_ref: RefMut<SizedCache<String, String>> = cache.borrow_mut();
+            Ok(cache_ref.cache_get(key).map(|c| c.clone()))
+        })
     }
 
-    fn cache_set(&mut self, loc: Srcloc, key: String, value: String) -> Result<(), CompileErr> {
-        let lock_error = dc_error_to_cerr(loc);
-        let mut test_ref = TEST_CACHE.lock().map_err(lock_error)?;
-        test_ref.cache_set(key, value);
-        Ok(())
+    fn cache_set_val(&mut self, _loc: Srcloc, key: String, value: String) -> Result<(), CompileErr> {
+        TEST_CACHE.with(|cache| {
+            let mut cache_ref: RefMut<SizedCache<String, String>> = cache.borrow_mut();
+            cache_ref.cache_set(key, value);
+            Ok(())
+        })
     }
 }
 
@@ -103,7 +98,7 @@ pub fn try_element_from_cache_error(
     let dc = get_cache(cf.loc())?;
     let key = cache_key(opts.clone(), cf, exports);
     let hex_file_name = format!("{}!{}", key, export_path);
-    dc.cache_get(cf.loc(), &hex_file_name)
+    dc.cache_get_val(cf.loc(), &hex_file_name)
 }
 
 /// Try to get an element from the cache, exposing errors.
@@ -140,7 +135,7 @@ pub fn set_cache_element_error(
     let mut dc = get_cache(cf.loc())?;
     let key = cache_key(opts.clone(), cf, exports);
     let hex_data_key = format!("{}!{}", key, export_path);
-    dc.cache_set(cf.loc(), hex_data_key, export_hex.to_string())?;
+    dc.cache_set_val(cf.loc(), hex_data_key, export_hex.to_string())?;
     Ok(())
 }
 
