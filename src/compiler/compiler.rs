@@ -771,7 +771,7 @@ pub fn try_from_cache(
     // if we got here, then we loaded all exports.
     // write (or rewrite) any hex files that were outputs of the elided build steps.
     for (hex_file_name, hex_data) in data_to_write.into_iter() {
-        opts.write_new_file(&hex_file_name, &hex_data.as_bytes())?;
+        opts.write_new_file(&hex_file_name, hex_data.as_bytes())?;
     }
 
     Ok(Some(CompilerOutput::Module(CompileModuleOutput {
