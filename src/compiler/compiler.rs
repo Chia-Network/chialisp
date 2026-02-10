@@ -21,7 +21,7 @@ use crate::compiler::comptypes::{
     ModulePhase, PrimaryCodegen, StandalonePhaseInfo, SyntheticType,
 };
 use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
-use crate::compiler::diskcache::{try_element_from_cache, set_cache_element};
+use crate::compiler::diskcache::{set_cache_element, try_element_from_cache};
 use crate::compiler::frontend::frontend;
 use crate::compiler::optimize::depgraph::{DepgraphOptions, FunctionDependencyGraph};
 use crate::compiler::optimize::get_optimizer;
@@ -462,7 +462,13 @@ pub fn compile_module(
             let mut stream = Stream::new(None);
             stream.write(sexp_as_bin(context.allocator(), converted));
             let hex_data = stream.get_value().hex();
-            set_cache_element(opts.clone(), &program, &exports, &output_path_str, &hex_data);
+            set_cache_element(
+                opts.clone(),
+                &program,
+                &exports,
+                &output_path_str,
+                &hex_data,
+            );
             opts.write_new_file(&output_path_str, hex_data.as_bytes())?;
             return Ok(CompileModuleOutput {
                 summary: Rc::new(SExp::Nil(loc.clone())),
@@ -723,7 +729,7 @@ pub fn get_hex_name_of_export(
 pub fn try_from_cache(
     opts: Rc<dyn CompilerOpts>,
     cf: &CompileForm,
-    exports: &[Export]
+    exports: &[Export],
 ) -> Result<Option<CompilerOutput>, CompileErr> {
     let mut allocator = Allocator::new();
     let mut components = Vec::new();
@@ -731,18 +737,15 @@ pub fn try_from_cache(
 
     for e in exports.iter() {
         let hex_file_name = get_hex_name_of_export(opts.clone(), &cf.loc(), e)?;
-        let hex_data = if let Some(hd) = try_element_from_cache(opts.clone(), cf, exports, &hex_file_name) {
-            hd
-        } else {
-            return Ok(None);
-        };
+        let hex_data =
+            if let Some(hd) = try_element_from_cache(opts.clone(), cf, exports, &hex_file_name) {
+                hd
+            } else {
+                return Ok(None);
+            };
 
-        let loaded_hex_data = hex_to_modern_sexp(
-            &mut allocator,
-            &HashMap::new(),
-            cf.loc.clone(),
-            &hex_data,
-        )?;
+        let loaded_hex_data =
+            hex_to_modern_sexp(&mut allocator, &HashMap::new(), cf.loc.clone(), &hex_data)?;
 
         let shortname = if let Export::Function(desc) = e {
             desc.name.value.clone()

@@ -7,8 +7,8 @@ use clvmr::allocator::{Allocator, NodePtr, SExp};
 
 use crate::classic::clvm::sexp::proper_list;
 
-use crate::compiler::sexp::{decode_string, enlist};
 use crate::compiler::sexp;
+use crate::compiler::sexp::{decode_string, enlist};
 use crate::compiler::srcloc::Srcloc;
 
 /// Stepping 21 and 22 do optimization in special ways with flags
@@ -32,10 +32,13 @@ impl AcceptedDialect {
         Rc::new(enlist(
             loc.clone(),
             &[
-                self.stepping.clone().map(int_cvt).unwrap_or_else(|| Rc::new(sexp::SExp::Nil(loc.clone()))),
+                self.stepping
+                    .clone()
+                    .map(int_cvt)
+                    .unwrap_or_else(|| Rc::new(sexp::SExp::Nil(loc.clone()))),
                 int_cvt(self.strict as i32),
-                int_cvt(self.int_fix as i32)
-            ]
+                int_cvt(self.int_fix as i32),
+            ],
         ))
     }
 }

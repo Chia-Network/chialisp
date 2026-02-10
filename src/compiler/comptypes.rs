@@ -1814,7 +1814,10 @@ pub struct NameAndLoc {
 
 impl NameAndLoc {
     fn to_sexp(&self, loc: Srcloc) -> Rc<SExp> {
-        Rc::new(SExp::Atom(self.loc.clone().unwrap_or_else(|| loc), self.value.clone()))
+        Rc::new(SExp::Atom(
+            self.loc.clone().unwrap_or_else(|| loc),
+            self.value.clone(),
+        ))
     }
 }
 
@@ -1830,16 +1833,19 @@ impl ExportProgramDesc {
     pub fn to_sexp(&self) -> Rc<SExp> {
         Rc::new(SExp::Cons(
             self.loc.clone(),
-            Rc::new(SExp::Atom(self.kw_loc.clone().unwrap_or_else(|| self.loc.clone()), b"export".to_vec())),
+            Rc::new(SExp::Atom(
+                self.kw_loc.clone().unwrap_or_else(|| self.loc.clone()),
+                b"export".to_vec(),
+            )),
             Rc::new(SExp::Cons(
                 self.loc.clone(),
                 self.args.clone(),
                 Rc::new(SExp::Cons(
                     self.loc.clone(),
                     self.expr.to_sexp(),
-                    Rc::new(SExp::Nil(self.loc.clone()))
-                ))
-            ))
+                    Rc::new(SExp::Nil(self.loc.clone())),
+                )),
+            )),
         ))
     }
 }
@@ -1855,23 +1861,27 @@ pub struct ExportFunctionDesc {
 
 impl ExportFunctionDesc {
     pub fn to_sexp(&self) -> Rc<SExp> {
-        self.as_name.as_ref().map(|n| {
-            Rc::new(SExp::Cons(
-                self.loc.clone(),
-                self.name.to_sexp(self.loc.clone()),
+        self.as_name
+            .as_ref()
+            .map(|n| {
                 Rc::new(SExp::Cons(
                     self.loc.clone(),
-                    Rc::new(SExp::Atom(self.as_loc.clone().unwrap_or_else(|| self.loc.clone()), b"as".to_vec())),
+                    self.name.to_sexp(self.loc.clone()),
                     Rc::new(SExp::Cons(
                         self.loc.clone(),
-                        n.to_sexp(self.loc.clone()),
-                        Rc::new(SExp::Nil(self.loc.clone()))
-                    ))
+                        Rc::new(SExp::Atom(
+                            self.as_loc.clone().unwrap_or_else(|| self.loc.clone()),
+                            b"as".to_vec(),
+                        )),
+                        Rc::new(SExp::Cons(
+                            self.loc.clone(),
+                            n.to_sexp(self.loc.clone()),
+                            Rc::new(SExp::Nil(self.loc.clone())),
+                        )),
+                    )),
                 ))
-            ))
-        }).unwrap_or_else(|| {
-            self.name.to_sexp(self.loc.clone())
-        })
+            })
+            .unwrap_or_else(|| self.name.to_sexp(self.loc.clone()))
     }
 }
 
@@ -1885,7 +1895,7 @@ impl Export {
     pub fn to_sexp(&self) -> Rc<SExp> {
         match self {
             Export::MainProgram(m) => m.to_sexp(),
-            Export::Function(f) => f.to_sexp()
+            Export::Function(f) => f.to_sexp(),
         }
     }
 }

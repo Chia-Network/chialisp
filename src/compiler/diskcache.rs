@@ -1,8 +1,8 @@
 use std::fmt::Debug;
 use std::rc::Rc;
 
-use cached::IOCached;
 use cached::stores::{DiskCache, DiskCacheBuilder, DiskCacheError};
+use cached::IOCached;
 
 use crate::compiler::clvm::sha256tree;
 use crate::compiler::comptypes::{CompileErr, CompileForm, CompilerOpts, Export};
@@ -13,27 +13,22 @@ fn dc_error_to_cerr<E: Debug>(loc: Srcloc) -> Box<dyn Fn(E) -> CompileErr> {
     Box::new(move |e: E| CompileErr(loc.clone(), format!("{e:?}")))
 }
 
-fn cache_key(
-    opts: Rc<dyn CompilerOpts>,
-    cf: &CompileForm,
-    exports: &[Export],
-) -> String {
+fn cache_key(opts: Rc<dyn CompilerOpts>, cf: &CompileForm, exports: &[Export]) -> String {
     let cf_sexp = cf.to_sexp();
     let export_sexp_list: Vec<Rc<SExp>> = exports.iter().map(|e| e.to_sexp()).collect();
     let exports_sexp = enlist(cf.loc(), &export_sexp_list);
     let dialect_sexp = opts.dialect().to_sexp(cf.loc());
-    hex::encode(&sha256tree(Rc::new(enlist(cf.loc(), &[
-        dialect_sexp,
-        exports_sexp.into(),
-        cf_sexp,
-    ]))))
+    hex::encode(&sha256tree(Rc::new(enlist(
+        cf.loc(),
+        &[dialect_sexp, exports_sexp.into(), cf_sexp],
+    ))))
 }
 
 pub fn try_element_from_cache_error(
     opts: Rc<dyn CompilerOpts>,
     cf: &CompileForm,
     exports: &[Export],
-    export_path: &str
+    export_path: &str,
 ) -> Result<Option<String>, CompileErr> {
     let mut builder: DiskCacheBuilder<String, String> = DiskCache::new("chialisp");
     let build_error = dc_error_to_cerr(cf.loc());
@@ -62,9 +57,11 @@ pub fn try_element_from_cache(
     opts: Rc<dyn CompilerOpts>,
     cf: &CompileForm,
     exports: &[Export],
-    export_path: &str
+    export_path: &str,
 ) -> Option<String> {
-    try_element_from_cache_error(opts, cf, exports, export_path).ok().and_then(|x| x)
+    try_element_from_cache_error(opts, cf, exports, export_path)
+        .ok()
+        .and_then(|x| x)
 }
 
 pub fn set_cache_element_error(
@@ -81,7 +78,8 @@ pub fn set_cache_element_error(
     let dc = builder.build().map_err(build_error)?;
     let key = cache_key(opts.clone(), cf, exports);
     let hex_data_key = format!("{}!{}", key, export_path);
-    dc.cache_set(hex_data_key, export_hex.to_string()).map_err(dc_error)?;
+    dc.cache_set(hex_data_key, export_hex.to_string())
+        .map_err(dc_error)?;
     Ok(())
 }
 
