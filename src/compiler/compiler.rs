@@ -21,6 +21,7 @@ use crate::compiler::comptypes::{
     ModulePhase, PrimaryCodegen, StandalonePhaseInfo, SyntheticType,
 };
 use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
+use crate::compiler::diskcache::{try_element_from_cache, set_cache_element};
 use crate::compiler::frontend::frontend;
 use crate::compiler::optimize::depgraph::{DepgraphOptions, FunctionDependencyGraph};
 use crate::compiler::optimize::get_optimizer;
@@ -460,7 +461,9 @@ pub fn compile_module(
             let output_path_str = output_path.into_os_string().to_string_lossy().to_string();
             let mut stream = Stream::new(None);
             stream.write(sexp_as_bin(context.allocator(), converted));
-            opts.write_new_file(&output_path_str, stream.get_value().hex().as_bytes())?;
+            let hex_data = stream.get_value().hex();
+            set_cache_element(opts.clone(), &program, &exports, &output_path_str, &hex_data);
+            opts.write_new_file(&output_path_str, hex_data.as_bytes())?;
             return Ok(CompileModuleOutput {
                 summary: Rc::new(SExp::Nil(loc.clone())),
                 includes: program.include_forms.clone(),
@@ -685,7 +688,9 @@ pub fn compile_module(
         let mut stream = Stream::new(None);
         let converted_func = convert_to_clvm_rs(context.allocator(), m.content.clone())?;
         stream.write(sexp_as_bin(context.allocator(), converted_func));
-        opts.write_new_file(&output_path, stream.get_value().hex().as_bytes())?;
+        let hex_data = stream.get_value().hex();
+        set_cache_element(opts.clone(), &program, &exports, &output_path, &hex_data);
+        opts.write_new_file(&output_path, hex_data.as_bytes())?;
 
         components.push(m);
     }
@@ -697,7 +702,7 @@ pub fn compile_module(
     })
 }
 
-fn get_hex_name_of_export(
+pub fn get_hex_name_of_export(
     opts: Rc<dyn CompilerOpts>,
     loc: &Srcloc,
     export: &Export,
@@ -715,118 +720,61 @@ fn get_hex_name_of_export(
     }
 }
 
-fn determine_hex_file_names(
-    opts: Rc<dyn CompilerOpts>,
-    loc: &Srcloc,
-    exports: &[Export],
-) -> Result<Vec<String>, CompileErr> {
-    let mut result = Vec::new();
-    for e in exports.iter() {
-        result.push(get_hex_name_of_export(opts.clone(), loc, e)?);
-    }
-    Ok(result)
-}
-
-pub fn try_to_use_existing_hex_outputs(
-    context: &mut BasicCompileContext,
+pub fn try_from_cache(
     opts: Rc<dyn CompilerOpts>,
     cf: &CompileForm,
-    exports: &[Export],
+    exports: &[Export]
 ) -> Result<Option<CompilerOutput>, CompileErr> {
-    let mut imports: Vec<String> = cf
-        .include_forms
-        .iter()
-        .map(|i| decode_string(&i.name))
-        .collect();
-    imports.push(opts.filename());
+    let mut allocator = Allocator::new();
+    let mut components = Vec::new();
+    let mut summary = Rc::new(SExp::Nil(cf.loc.clone()));
 
-    // Get earliest date of any hex file.
-    let hex_files = determine_hex_file_names(opts.clone(), &cf.loc, exports)?;
-    let mut earliest_hex_date: Option<u64> = None;
-    for file in hex_files.iter() {
-        if let Ok(mod_date) = opts.get_file_mod_date(&cf.loc, file) {
-            let should_set = if let Some(hex_date) = earliest_hex_date.as_ref() {
-                *hex_date > mod_date
-            } else {
-                true
-            };
-
-            if should_set {
-                earliest_hex_date = Some(mod_date);
-            }
+    for e in exports.iter() {
+        let hex_file_name = get_hex_name_of_export(opts.clone(), &cf.loc(), e)?;
+        let hex_data = if let Some(hd) = try_element_from_cache(opts.clone(), cf, exports, &hex_file_name) {
+            hd
         } else {
-            // One of them doesn't exist so we must build.
-            break;
-        }
-    }
+            return Ok(None);
+        };
 
-    let mut latest_file_date: Option<u64> = None;
-    for file in imports.iter() {
-        if let Ok(mod_date) = opts.get_file_mod_date(&cf.loc, file) {
-            let should_set = if let Some(input_date) = latest_file_date.as_ref() {
-                *input_date < mod_date
-            } else {
-                true
-            };
+        let loaded_hex_data = hex_to_modern_sexp(
+            &mut allocator,
+            &HashMap::new(),
+            cf.loc.clone(),
+            &hex_data,
+        )?;
 
-            if should_set {
-                latest_file_date = Some(mod_date);
-            }
+        let shortname = if let Export::Function(desc) = e {
+            desc.name.value.clone()
         } else {
-            // Could not get the mod date of an input.
-            break;
-        }
+            b"program".to_vec()
+        };
+
+        let hash = sha256tree(loaded_hex_data.clone());
+        summary = Rc::new(SExp::Cons(
+            cf.loc.clone(),
+            Rc::new(SExp::Cons(
+                cf.loc.clone(),
+                Rc::new(SExp::QuotedString(cf.loc.clone(), b'"', shortname.clone())),
+                Rc::new(SExp::QuotedString(cf.loc.clone(), b'x', hash.clone())),
+            )),
+            summary,
+        ));
+
+        components.push(CompileModuleComponent {
+            shortname,
+            filename: hex_file_name,
+            content: loaded_hex_data,
+            hash,
+        });
     }
 
-    if let (Some(earliest_hex_date), Some(latest_file_date)) = (earliest_hex_date, latest_file_date)
-    {
-        if earliest_hex_date > latest_file_date {
-            let mut summary = Rc::new(SExp::Nil(cf.loc.clone()));
-            let mut components = Vec::new();
-
-            for e in exports.iter() {
-                let hex_file_name = get_hex_name_of_export(opts.clone(), &cf.loc, e)?;
-                let (_, hex_data) = opts.read_new_file(opts.filename(), hex_file_name.clone())?;
-                let loaded_hex_data = hex_to_modern_sexp(
-                    context.allocator(),
-                    &HashMap::new(),
-                    cf.loc.clone(),
-                    &decode_string(&hex_data),
-                )?;
-                let shortname = if let Export::Function(desc) = e {
-                    desc.name.value.clone()
-                } else {
-                    b"program".to_vec()
-                };
-
-                let hash = sha256tree(loaded_hex_data.clone());
-                summary = Rc::new(SExp::Cons(
-                    cf.loc.clone(),
-                    Rc::new(SExp::Cons(
-                        cf.loc.clone(),
-                        Rc::new(SExp::QuotedString(cf.loc.clone(), b'"', shortname.clone())),
-                        Rc::new(SExp::QuotedString(cf.loc.clone(), b'x', hash.clone())),
-                    )),
-                    summary,
-                ));
-
-                components.push(CompileModuleComponent {
-                    shortname,
-                    filename: hex_file_name,
-                    content: loaded_hex_data,
-                    hash,
-                });
-            }
-
-            return Ok(Some(CompilerOutput::Module(CompileModuleOutput {
-                summary,
-                components,
-                includes: cf.include_forms.clone(),
-            })));
-        }
-    }
-
-    Ok(None)
+    // if we got here, then we loaded all exports.
+    return Ok(Some(CompilerOutput::Module(CompileModuleOutput {
+        summary,
+        components,
+        includes: cf.include_forms.clone(),
+    })));
 }
 
 pub fn compile_pre_forms(
@@ -842,9 +790,9 @@ pub fn compile_pre_forms(
             compile_from_compileform(context, opts, p0)?,
         )),
         FrontendOutput::Module(cf, exports) => {
-            if let Some(result) =
-                try_to_use_existing_hex_outputs(context, opts.clone(), &cf, &exports)?
-            {
+            // If we can read from cache, use that.  We'll use the actual form of the compileform
+            // and opts (the dialect) to determine a cache hit.
+            if let Some(result) = try_from_cache(opts.clone(), &cf, &exports)? {
                 return Ok(result);
             }
 
@@ -879,13 +827,14 @@ pub fn compile_pre_forms(
                 &cf.helpers,
                 &exports,
             );
-            Ok(CompilerOutput::Module(compile_module(
+            let result_form = CompilerOutput::Module(compile_module(
                 context,
-                opts,
+                opts.clone(),
                 &standalone_constants,
-                cf,
+                cf.clone(),
                 &exports,
-            )?))
+            )?);
+            Ok(result_form)
         }
     }
 }

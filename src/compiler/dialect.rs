@@ -1,10 +1,15 @@
 use std::collections::HashMap;
+use std::rc::Rc;
+
+use num_bigint::ToBigInt;
 
 use clvmr::allocator::{Allocator, NodePtr, SExp};
 
 use crate::classic::clvm::sexp::proper_list;
 
-use crate::compiler::sexp::decode_string;
+use crate::compiler::sexp::{decode_string, enlist};
+use crate::compiler::sexp;
+use crate::compiler::srcloc::Srcloc;
 
 /// Stepping 21 and 22 do optimization in special ways with flags
 /// I made this more general for other dialects, starting at
@@ -19,6 +24,20 @@ pub struct AcceptedDialect {
     pub stepping: Option<i32>,
     pub strict: bool,
     pub int_fix: bool,
+}
+
+impl AcceptedDialect {
+    pub fn to_sexp(&self, loc: Srcloc) -> Rc<sexp::SExp> {
+        let int_cvt = |s: i32| Rc::new(sexp::SExp::Integer(loc.clone(), s.to_bigint().unwrap()));
+        Rc::new(enlist(
+            loc.clone(),
+            &[
+                self.stepping.clone().map(int_cvt).unwrap_or_else(|| Rc::new(sexp::SExp::Nil(loc.clone()))),
+                int_cvt(self.strict as i32),
+                int_cvt(self.int_fix as i32)
+            ]
+        ))
+    }
 }
 
 /// A package containing the content we should insert when a dialect include is
