@@ -185,8 +185,6 @@ jobs:
       if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.12')
       run: |
         python -m pip install pytest
-        # OS distribution and setuptools interact weirdly at times.
-        python -m pip install --upgrade setuptools
         # This script installs the wheel built during this workflow.
         pip install --no-index --find-links wheel/target/wheels/ chialisp
         # TODO: bring in the other tests in resources/tests/cmdline/tests besides cmds_test.py

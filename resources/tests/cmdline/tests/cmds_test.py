@@ -1,11 +1,9 @@
 import io
 import os
-import pkg_resources
 import shlex
 import sys
 import unittest
 from chialisp import call_tool, launch_tool
-
 
 # If the REPAIR environment variable is set, any tests failing due to
 # wrong output will be corrected. Be sure to do a "git diff" to validate that
