@@ -30,7 +30,7 @@ lazy_static! {
 struct SizedCacheForTest;
 
 trait AnyCache {
-    fn cache_get(&self, loc: Srcloc, key: &String) -> Result<Option<String>, CompileErr>;
+    fn cache_get(&self, loc: Srcloc, key: &str) -> Result<Option<String>, CompileErr>;
     fn cache_set(&mut self, loc: Srcloc, key: String, value: String) -> Result<(), CompileErr>;
 }
 
@@ -48,10 +48,10 @@ fn get_cache(loc: Srcloc) -> Result<Box<DiskCache<String, String>>, CompileErr> 
 
 #[cfg(not(test))]
 impl AnyCache for Box<DiskCache<String, String>> {
-    fn cache_get(&self, loc: Srcloc, key: &String) -> Result<Option<String>, CompileErr> {
+    fn cache_get(&self, loc: Srcloc, key: &str) -> Result<Option<String>, CompileErr> {
         let dc_error: Box<dyn Fn(DiskCacheError) -> CompileErr> = dc_error_to_cerr(loc);
         let dc_ref: &DiskCache<String, String> = self.borrow();
-        dc_ref.cache_get(key).map_err(dc_error)
+        dc_ref.cache_get(&key.to_string()).map_err(dc_error)
     }
 
     fn cache_set(&mut self, loc: Srcloc, key: String, value: String) -> Result<(), CompileErr> {
@@ -69,7 +69,7 @@ fn get_cache(_loc: Srcloc) -> Result<SizedCacheForTest, CompileErr> {
 
 #[cfg(test)]
 impl AnyCache for SizedCacheForTest {
-    fn cache_get(&self, loc: Srcloc, key: &String) -> Result<Option<String>, CompileErr> {
+    fn cache_get(&self, loc: Srcloc, key: &str) -> Result<Option<String>, CompileErr> {
         let lock_error = dc_error_to_cerr(loc);
         let mut test_ref = TEST_CACHE.lock().map_err(lock_error)?;
         Ok(test_ref.cache_get(key).map(|c| c.clone()))
