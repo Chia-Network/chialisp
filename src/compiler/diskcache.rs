@@ -14,7 +14,7 @@ use crate::compiler::sexp::{enlist, SExp};
 use crate::compiler::srcloc::Srcloc;
 
 thread_local! {
-    static USE_DISK_CACHE: AtomicBool = AtomicBool::new(false);
+    static USE_DISK_CACHE: AtomicBool = const { AtomicBool::new(false) };
     static TEST_CACHE: RefCell<SizedCache<String, String>> =
         RefCell::new(SizedCache::with_size(1000 * 1000));
 }
@@ -65,11 +65,16 @@ impl AnyCache for SizedCacheForTest {
     fn cache_get_val(&self, _loc: Srcloc, key: &str) -> Result<Option<String>, CompileErr> {
         TEST_CACHE.with(|cache| {
             let mut cache_ref: RefMut<SizedCache<String, String>> = cache.borrow_mut();
-            Ok(cache_ref.cache_get(key).map(|c| c.clone()))
+            Ok(cache_ref.cache_get(key).cloned())
         })
     }
 
-    fn cache_set_val(&mut self, _loc: Srcloc, key: String, value: String) -> Result<(), CompileErr> {
+    fn cache_set_val(
+        &mut self,
+        _loc: Srcloc,
+        key: String,
+        value: String,
+    ) -> Result<(), CompileErr> {
         TEST_CACHE.with(|cache| {
             let mut cache_ref: RefMut<SizedCache<String, String>> = cache.borrow_mut();
             cache_ref.cache_set(key, value);
