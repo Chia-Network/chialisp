@@ -4,9 +4,13 @@ use std::fmt::Debug;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use cached::stores::{DiskCache, DiskCacheBuilder, DiskCacheError, SizedCache};
+#[cfg(not(target_family = "wasm"))]
+use cached::stores::{DiskCache, DiskCacheBuilder, DiskCacheError};
+use cached::stores::SizedCache;
 
-use cached::{Cached, IOCached};
+use cached::Cached;
+#[cfg(not(target_family = "wasm"))]
+use cached::IOCached;
 
 use crate::compiler::clvm::sha256tree;
 use crate::compiler::comptypes::{CompileErr, CompileForm, CompilerOpts, Export};
@@ -34,6 +38,13 @@ fn dc_error_to_cerr<E: Debug>(loc: Srcloc) -> Box<dyn Fn(E) -> CompileErr> {
     Box::new(move |e: E| CompileErr(loc.clone(), format!("{e:?}")))
 }
 
+#[cfg(target_family = "wasm")]
+fn get_cache(loc: Srcloc) -> Result<Box<dyn AnyCache>, CompileErr> {
+    let result: Box<dyn AnyCache> = Box::new(SizedCacheForTest);
+    Ok(result)
+}
+
+#[cfg(not(target_family = "wasm"))]
 fn get_cache(loc: Srcloc) -> Result<Box<dyn AnyCache>, CompileErr> {
     if USE_DISK_CACHE.with(|c| c.load(Ordering::SeqCst)) {
         let mut builder: DiskCacheBuilder<String, String> = DiskCache::new("chialisp");
@@ -47,6 +58,7 @@ fn get_cache(loc: Srcloc) -> Result<Box<dyn AnyCache>, CompileErr> {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl AnyCache for DiskCache<String, String> {
     fn cache_get_val(&self, loc: Srcloc, key: &str) -> Result<Option<String>, CompileErr> {
         let dc_error: Box<dyn Fn(DiskCacheError) -> CompileErr> = dc_error_to_cerr(loc);
