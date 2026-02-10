@@ -4,9 +4,9 @@ use std::fmt::Debug;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use cached::stores::SizedCache;
 #[cfg(not(target_family = "wasm"))]
 use cached::stores::{DiskCache, DiskCacheBuilder, DiskCacheError};
-use cached::stores::SizedCache;
 
 use cached::Cached;
 #[cfg(not(target_family = "wasm"))]
