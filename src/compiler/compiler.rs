@@ -728,6 +728,7 @@ pub fn try_from_cache(
     let mut allocator = Allocator::new();
     let mut components = Vec::new();
     let mut summary = Rc::new(SExp::Nil(cf.loc.clone()));
+    let mut data_to_write = Vec::new();
 
     for e in exports.iter() {
         let hex_file_name = get_hex_name_of_export(opts.clone(), &cf.loc(), e)?;
@@ -740,6 +741,7 @@ pub fn try_from_cache(
 
         let loaded_hex_data =
             hex_to_modern_sexp(&mut allocator, &HashMap::new(), cf.loc.clone(), &hex_data)?;
+        data_to_write.push((hex_file_name.clone(), hex_data.clone()));
 
         let shortname = if let Export::Function(desc) = e {
             desc.name.value.clone()
@@ -767,6 +769,11 @@ pub fn try_from_cache(
     }
 
     // if we got here, then we loaded all exports.
+    // write (or rewrite) any hex files that were outputs of the elided build steps.
+    for (hex_file_name, hex_data) in data_to_write.into_iter() {
+        opts.write_new_file(&hex_file_name, &hex_data.as_bytes())?;
+    }
+
     Ok(Some(CompilerOutput::Module(CompileModuleOutput {
         summary,
         components,
