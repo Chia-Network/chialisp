@@ -1815,7 +1815,7 @@ pub struct NameAndLoc {
 impl NameAndLoc {
     fn to_sexp(&self, loc: Srcloc) -> Rc<SExp> {
         Rc::new(SExp::Atom(
-            self.loc.clone().unwrap_or_else(|| loc),
+            self.loc.clone().unwrap_or(loc),
             self.value.clone(),
         ))
     }

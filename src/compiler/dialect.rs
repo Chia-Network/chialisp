@@ -33,7 +33,6 @@ impl AcceptedDialect {
             loc.clone(),
             &[
                 self.stepping
-                    .clone()
                     .map(int_cvt)
                     .unwrap_or_else(|| Rc::new(sexp::SExp::Nil(loc.clone()))),
                 int_cvt(self.strict as i32),

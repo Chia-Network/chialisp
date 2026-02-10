@@ -18,7 +18,7 @@ fn cache_key(opts: Rc<dyn CompilerOpts>, cf: &CompileForm, exports: &[Export]) -
     let export_sexp_list: Vec<Rc<SExp>> = exports.iter().map(|e| e.to_sexp()).collect();
     let exports_sexp = enlist(cf.loc(), &export_sexp_list);
     let dialect_sexp = opts.dialect().to_sexp(cf.loc());
-    hex::encode(&sha256tree(Rc::new(enlist(
+    hex::encode(sha256tree(Rc::new(enlist(
         cf.loc(),
         &[dialect_sexp, exports_sexp.into(), cf_sexp],
     ))))

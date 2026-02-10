@@ -462,13 +462,7 @@ pub fn compile_module(
             let mut stream = Stream::new(None);
             stream.write(sexp_as_bin(context.allocator(), converted));
             let hex_data = stream.get_value().hex();
-            set_cache_element(
-                opts.clone(),
-                &program,
-                &exports,
-                &output_path_str,
-                &hex_data,
-            );
+            set_cache_element(opts.clone(), &program, exports, &output_path_str, &hex_data);
             opts.write_new_file(&output_path_str, hex_data.as_bytes())?;
             return Ok(CompileModuleOutput {
                 summary: Rc::new(SExp::Nil(loc.clone())),
@@ -695,7 +689,7 @@ pub fn compile_module(
         let converted_func = convert_to_clvm_rs(context.allocator(), m.content.clone())?;
         stream.write(sexp_as_bin(context.allocator(), converted_func));
         let hex_data = stream.get_value().hex();
-        set_cache_element(opts.clone(), &program, &exports, &output_path, &hex_data);
+        set_cache_element(opts.clone(), &program, exports, &output_path, &hex_data);
         opts.write_new_file(&output_path, hex_data.as_bytes())?;
 
         components.push(m);
@@ -773,11 +767,11 @@ pub fn try_from_cache(
     }
 
     // if we got here, then we loaded all exports.
-    return Ok(Some(CompilerOutput::Module(CompileModuleOutput {
+    Ok(Some(CompilerOutput::Module(CompileModuleOutput {
         summary,
         components,
         includes: cf.include_forms.clone(),
-    })));
+    })))
 }
 
 pub fn compile_pre_forms(
