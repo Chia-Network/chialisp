@@ -906,7 +906,8 @@ fn test_module_cache_deep_dep_changed() {
             argument: "(13)",
             outcome: Run(&"39"),
         }],
-    ).unwrap();
+    )
+    .unwrap();
 
     // Prove we're using the cache.
     source_opts.set_file_content(".chialisp/99228b86b4644cdecb47ab29913e3cfb4b01052b1116cb363fe7f0891c130e1a/resources/tests/module/two_program_import_include.hex".to_string(), b"80".to_vec());
