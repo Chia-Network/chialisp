@@ -51,6 +51,9 @@ impl TestModuleCompilerOpts {
     pub fn set_file_content<'a>(&'a self, name: String, content: Vec<u8>) {
         let wf_refcell: &RefCell<HashMap<String, Vec<u8>>> = self.written_files.borrow();
         let wf_ref: &mut HashMap<String, Vec<u8>> = &mut wf_refcell.borrow_mut();
+        for k in wf_ref.keys() {
+            eprintln!("written {k}");
+        }
         wf_ref.insert(name, content);
     }
 
@@ -894,7 +897,7 @@ fn test_module_cache_deep_dep_changed() {
     // Now test original.
     source_opts.erase_written("programs/two-outputs-constant.clsp");
 
-    test_compile_and_run_program_with_modules_and_fs(
+    let source_opts = test_compile_and_run_program_with_modules_and_fs(
         source_opts,
         filename,
         &content,
@@ -902,6 +905,20 @@ fn test_module_cache_deep_dep_changed() {
             hexfile: h_hex_file,
             argument: "(13)",
             outcome: Run(&"39"),
+        }],
+    ).unwrap();
+
+    // Prove we're using the cache.
+    source_opts.set_file_content(".chialisp/99228b86b4644cdecb47ab29913e3cfb4b01052b1116cb363fe7f0891c130e1a/resources/tests/module/two_program_import_include.hex".to_string(), b"80".to_vec());
+
+    test_compile_and_run_program_with_modules_and_fs(
+        source_opts,
+        filename,
+        &content,
+        &[HexArgumentOutcome {
+            hexfile: h_hex_file,
+            argument: "(13)",
+            outcome: Run(&"()"),
         }],
     );
 }
