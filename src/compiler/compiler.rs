@@ -200,37 +200,6 @@ pub fn find_exported_helper(
     )
 }
 
-fn form_hash_expression(inner_exp: Rc<BodyForm>) -> Rc<BodyForm> {
-    let shloc = Srcloc::start("*sha256tree*");
-    let parsed =
-        parse_sexp(shloc.clone(), SHA256TREE_PROGRAM_CLVM.bytes()).expect("should have parsed");
-    let p0_borrowed: &SExp = parsed[0].borrow();
-
-    Rc::new(BodyForm::Call(
-        inner_exp.loc(),
-        vec![
-            Rc::new(BodyForm::Value(SExp::Integer(
-                inner_exp.loc(),
-                2_u32.to_bigint().unwrap(),
-            ))),
-            Rc::new(BodyForm::Quoted(p0_borrowed.clone())),
-            Rc::new(BodyForm::Call(
-                inner_exp.loc(),
-                vec![
-                    Rc::new(BodyForm::Value(SExp::Integer(
-                        inner_exp.loc(),
-                        4_u32.to_bigint().unwrap(),
-                    ))),
-                    inner_exp.clone(),
-                    Rc::new(BodyForm::Quoted(SExp::Nil(inner_exp.loc()))),
-                ],
-                None,
-            )),
-        ],
-        None,
-    ))
-}
-
 fn modernize_constants(helpers: &mut [HelperForm], standalone_constants: &HashSet<Vec<u8>>) {
     for h in helpers.iter_mut() {
         match h {
@@ -280,31 +249,6 @@ fn capture_standalone_constants(
             }
         }
     }
-}
-
-fn add_inline_hash_for_constant(program: &mut CompileForm, loc: &Srcloc, fun_name: &[u8]) {
-    let mut new_name = fun_name.to_vec();
-    new_name.extend(b"_hash".to_vec());
-
-    let mut underscore_name = new_name.clone();
-    underscore_name.insert(0, b'_');
-
-    program.helpers.push(HelperForm::Defun(
-        true,
-        Box::new(DefunData {
-            loc: loc.clone(),
-            nl: loc.clone(),
-            kw: None,
-            name: new_name.clone(),
-            args: Rc::new(SExp::Nil(loc.clone())),
-            orig_args: Rc::new(SExp::Nil(loc.clone())),
-            body: form_hash_expression(Rc::new(BodyForm::Value(SExp::Atom(
-                loc.clone(),
-                fun_name.to_vec(),
-            )))),
-            synthetic: Some(SyntheticType::WantInline),
-        }),
-    ));
 }
 
 fn form_module_program_common_body(
@@ -387,20 +331,16 @@ fn populate_export_map(
         None,
         None,
     )?;
-    eprintln!("populate_export_map: list {result}");
 
     while let SExp::Cons(_, first, rest) = result.borrow() {
-        eprintln!("{first} . {rest}");
         if let SExp::Cons(_, name, value) = first.borrow() {
             if let SExp::Atom(_, name) = name.atomize().borrow() {
                 let mut hash_name: Vec<u8> = name.clone();
                 hash_name.append(&mut b"_hash".to_vec());
-                eprintln!("{}", decode_string(&hash_name));
                 export_map.insert(
                     hash_name,
                     Rc::new(SExp::Atom(value.loc(), sha256tree(value.clone()))),
                 );
-                eprintln!("{} = {value}", decode_string(name));
                 export_map.insert(name.clone(), value.clone());
             }
         }
@@ -479,16 +419,10 @@ pub fn compile_module(
     for e in exports.iter() {
         if let Export::Function(exdef) = &e {
             if !standalone_constants.contains(&exdef.name.value) {
-                eprintln!(
-                    "add inline hash function for export {}",
-                    decode_string(&exdef.name.value)
-                );
                 add_inline_hash_for_constant(&mut program, &hash_loc, &exdef.name.value);
             }
         }
     }
-
-    eprintln!("program with hashes {}", program.to_sexp());
 
     // First pass compilation: remove standalone constant helpers and produce
     // a body which contains all the non-standalone exports.
@@ -499,11 +433,11 @@ pub fn compile_module(
         common_opts_assume_introspection.clone(),
         &form_module_program_common_body(standalone_constants, program.clone(), exports)?,
     )?;
+
     let common_phase_functions = common_program_assume_introspection
         .helpers
         .iter()
         .any(|h| matches!(h, HelperForm::Defun(_, _)));
-    eprintln!("common phase functions: {common_phase_functions}");
     let (common_opts, mut common_program) = if !common_phase_functions {
         let new_opts =
             opts.set_module_phase(Some(ModulePhase::CommonPhase(common_phase_functions)));
@@ -521,9 +455,7 @@ pub fn compile_module(
         )
     };
     modernize_constants(&mut common_program.helpers, standalone_constants);
-    eprintln!("common program {}", common_program.to_sexp());
     let common_output = compile_from_compileform(context, common_opts, common_program.clone())?;
-    eprintln!("common_output {}", common_output);
 
     let mut captured_export_map: BTreeMap<Vec<u8>, Rc<SExp>> = BTreeMap::new();
     // Capture exports that are members of the common set.
@@ -548,12 +480,6 @@ pub fn compile_module(
     })()?;
 
     populate_export_map(context, &mut captured_export_map, opts.clone(), code)?;
-
-    let keys_strings: Vec<String> = captured_export_map
-        .keys()
-        .map(|k| decode_string(k))
-        .collect();
-    eprintln!("have common export keys {keys_strings:?}");
 
     // Second pass compilation: for each export in standalone constants
     let cons = Rc::new(BodyForm::Value(SExp::Integer(
@@ -586,7 +512,6 @@ pub fn compile_module(
             ));
         };
 
-        eprintln!("process export {}", decode_string(&export_name));
         let second_stage_program = if let Some(h) =
             find_exported_helper(opts.clone(), &program, &fun_name)?
         {
@@ -624,10 +549,6 @@ pub fn compile_module(
             ));
         };
 
-        eprintln!(
-            "resolve namespaces in program {}",
-            second_stage_program.to_sexp()
-        );
         // remove_standalone_constant(&mut second_stage_program, &fun_name);
         let mut constant_culled_second_stage_program =
             resolve_namespaces(second_stage_opts.clone(), &second_stage_program)?;
@@ -635,18 +556,12 @@ pub fn compile_module(
             &mut constant_culled_second_stage_program.helpers,
             standalone_constants,
         );
-        eprintln!(
-            "standalone program for {}: {}",
-            decode_string(&fun_name),
-            constant_culled_second_stage_program.to_sexp()
-        );
 
         let compiled_result = Rc::new(compile_from_compileform(
             context,
             second_stage_opts.clone(),
             constant_culled_second_stage_program,
         )?);
-        eprintln!("compiled_result {compiled_result}");
 
         populate_export_map(
             context,
@@ -827,6 +742,62 @@ pub fn try_to_use_existing_hex_outputs(
     }
 
     Ok(None)
+}
+
+fn form_hash_expression(inner_exp: Rc<BodyForm>) -> Rc<BodyForm> {
+    let shloc = Srcloc::start("*sha256tree*");
+    let parsed =
+        parse_sexp(shloc.clone(), SHA256TREE_PROGRAM_CLVM.bytes()).expect("should have parsed");
+    let p0_borrowed: &SExp = parsed[0].borrow();
+
+    Rc::new(BodyForm::Call(
+        inner_exp.loc(),
+        vec![
+            Rc::new(BodyForm::Value(SExp::Integer(
+                inner_exp.loc(),
+                2_u32.to_bigint().unwrap(),
+            ))),
+            Rc::new(BodyForm::Quoted(p0_borrowed.clone())),
+            Rc::new(BodyForm::Call(
+                inner_exp.loc(),
+                vec![
+                    Rc::new(BodyForm::Value(SExp::Integer(
+                        inner_exp.loc(),
+                        4_u32.to_bigint().unwrap(),
+                    ))),
+                    inner_exp.clone(),
+                    Rc::new(BodyForm::Quoted(SExp::Nil(inner_exp.loc()))),
+                ],
+                None,
+            )),
+        ],
+        None,
+    ))
+}
+
+fn add_inline_hash_for_constant(program: &mut CompileForm, loc: &Srcloc, fun_name: &[u8]) {
+    let mut new_name = fun_name.to_vec();
+    new_name.extend(b"_hash".to_vec());
+
+    let mut underscore_name = new_name.clone();
+    underscore_name.insert(0, b'_');
+
+    program.helpers.push(HelperForm::Defun(
+        true,
+        Box::new(DefunData {
+            loc: loc.clone(),
+            nl: loc.clone(),
+            kw: None,
+            name: new_name.clone(),
+            args: Rc::new(SExp::Nil(loc.clone())),
+            orig_args: Rc::new(SExp::Nil(loc.clone())),
+            body: form_hash_expression(Rc::new(BodyForm::Value(SExp::Atom(
+                loc.clone(),
+                fun_name.to_vec(),
+            )))),
+            synthetic: Some(SyntheticType::WantInline),
+        }),
+    ));
 }
 
 pub fn compile_pre_forms(

@@ -1135,9 +1135,6 @@ impl Preprocessor {
     }
 
     fn parse_include(&mut self, form: &[SExp]) -> Result<Option<IncludeType>, CompileErr> {
-        for f in form.iter() {
-            eprintln!("parse_include {f} {f:?}");
-        }
         if let [SExp::Atom(kw, include_kw), include_name] = form {
             if include_kw != b"include" {
                 return Ok(None);
@@ -1267,8 +1264,8 @@ impl Preprocessor {
         let body = self
             .expand_macros(unexpanded_body.clone())?
             .unwrap_or_else(|| unexpanded_body.clone());
+
         // Support using the preprocessor to collect dependencies recursively.
-        eprintln!("after macros {body}");
         let as_list: Option<Vec<SExp>> = body
             .proper_list()
             .map(|x| x.iter().map(|elt| elt.atomize()).collect());

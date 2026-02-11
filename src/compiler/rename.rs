@@ -420,8 +420,12 @@ fn rename_in_helperform(
                 ..*defun.clone()
             }),
         )),
-        HelperForm::Defnamespace(_ns) => todo!(),
-        HelperForm::Defnsref(_ns) => todo!(),
+        // Defnamespace serves as a container for forms that are copied into the compileform when
+        // resolved.  It does not need renaming.
+        HelperForm::Defnamespace(_ns) => Ok(h.clone()),
+        // Defnsref is just a reference which doesn't contain locals.  Order was taken care of
+        // when we did module resolution.
+        HelperForm::Defnsref(_ns) => Ok(h.clone()),
     }
 }
 
