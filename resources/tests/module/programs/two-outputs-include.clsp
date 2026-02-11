@@ -1,0 +1,9 @@
+(include *standard-cl-23*)
+
+(import programs.two-outputs-constant exposing THREE)
+
+(export F)
+(export G)
+
+(defun F (X) (+ X 1))
+(defun G (X) (* X THREE))

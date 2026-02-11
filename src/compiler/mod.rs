@@ -16,6 +16,7 @@ pub mod comptypes;
 pub mod debug;
 /// Utilities for chialisp dialect choice
 pub mod dialect;
+pub mod diskcache;
 pub mod evaluate;
 pub mod frontend;
 #[cfg(any(test, feature = "fuzz"))]

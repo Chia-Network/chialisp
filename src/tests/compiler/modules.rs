@@ -31,7 +31,7 @@ use DesiredOutcome::{ContentEquals, Error, Run};
 #[derive(Clone)]
 pub struct TestModuleCompilerOpts {
     opts: Rc<dyn CompilerOpts>,
-    written_files: Rc<RefCell<HashMap<String, Vec<u8>>>>,
+    pub written_files: Rc<RefCell<HashMap<String, Vec<u8>>>>,
 }
 
 impl TestModuleCompilerOpts {
@@ -46,6 +46,18 @@ impl TestModuleCompilerOpts {
         let files_ref: &RefCell<HashMap<String, Vec<u8>>> = self.written_files.borrow();
         let files: &HashMap<String, Vec<u8>> = &files_ref.borrow();
         files.get(name).map(|f| f.to_vec())
+    }
+
+    pub fn set_file_content<'a>(&'a self, name: String, content: Vec<u8>) {
+        let wf_refcell: &RefCell<HashMap<String, Vec<u8>>> = self.written_files.borrow();
+        let wf_ref: &mut HashMap<String, Vec<u8>> = &mut wf_refcell.borrow_mut();
+        wf_ref.insert(name, content);
+    }
+
+    pub fn erase_written<'a>(&'a self, name: &str) {
+        let wf_refcell: &RefCell<HashMap<String, Vec<u8>>> = self.written_files.borrow();
+        let wf_ref: &mut HashMap<String, Vec<u8>> = &mut wf_refcell.borrow_mut();
+        wf_ref.remove(name);
     }
 }
 
@@ -63,6 +75,20 @@ impl HasCompilerOptsDelegation for TestModuleCompilerOpts {
             written_files: self.written_files.clone(),
             opts: new_opts,
         })
+    }
+
+    fn override_read_new_file(
+        &self,
+        inc_from: String,
+        filename: String,
+    ) -> Result<(String, Vec<u8>), CompileErr> {
+        eprintln!("filename {filename}");
+        let rfcell: &RefCell<HashMap<String, Vec<u8>>> = self.written_files.borrow();
+        let rf: &HashMap<String, Vec<u8>> = &rfcell.borrow();
+        if let Some(content) = rf.get(&filename) {
+            return Ok((filename, content.clone()));
+        }
+        self.opts.read_new_file(inc_from, filename)
     }
 
     fn override_write_new_file(&self, target: &str, content: &[u8]) -> Result<(), CompileErr> {
@@ -86,6 +112,7 @@ pub struct PerformCompileResult {
 pub fn perform_compile_of_file(
     allocator: &mut Allocator,
     runner: Rc<dyn TRunProgram>,
+    source_opts: TestModuleCompilerOpts,
     filename: &str,
     content: &str,
 ) -> Result<PerformCompileResult, CompileErr> {
@@ -94,11 +121,7 @@ pub fn perform_compile_of_file(
     let listed = Rc::new(enlist(loc.clone(), &parsed));
     let nodeptr = convert_to_clvm_rs(allocator, listed.clone()).expect("should convert");
     let dialect = detect_modern(allocator, nodeptr);
-    let orig_opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename))
-        .set_dialect(dialect)
-        .set_search_paths(&["resources/tests/module".to_string()]);
-    let source_opts = TestModuleCompilerOpts::new(orig_opts);
-    let opts: Rc<dyn CompilerOpts> = Rc::new(source_opts.clone());
+    let opts: Rc<dyn CompilerOpts> = Rc::new(source_opts.clone()).set_dialect(dialect);
     let mut symbol_table = HashMap::new();
     let mut includes = Vec::new();
     let compiled = compile_file(
@@ -131,18 +154,25 @@ pub fn hex_to_clvm(allocator: &mut Allocator, hex_data: &[u8]) -> clvmr::allocat
     .1
 }
 
-fn test_compile_and_run_program_with_modules(
+fn test_compile_and_run_program_with_modules_and_fs(
+    source_opts: TestModuleCompilerOpts,
     filename: &str,
     content: &str,
     runs: &[HexArgumentOutcome],
-) {
+) -> Option<TestModuleCompilerOpts> {
     let mut allocator = Allocator::new();
     let runner = Rc::new(DefaultProgramRunner::new());
-    let compile_result = perform_compile_of_file(&mut allocator, runner.clone(), filename, content);
+    let compile_result = perform_compile_of_file(
+        &mut allocator,
+        runner.clone(),
+        source_opts,
+        filename,
+        content,
+    );
 
     let compile_result = if runs.is_empty() {
         assert!(compile_result.is_err());
-        return;
+        return None;
     } else {
         compile_result.expect("Was expected to compile")
     };
@@ -172,6 +202,19 @@ fn test_compile_and_run_program_with_modules(
             assert!(run_result.is_err());
         }
     }
+
+    Some(compile_result.source_opts)
+}
+
+fn test_compile_and_run_program_with_modules(
+    filename: &str,
+    content: &str,
+    runs: &[HexArgumentOutcome],
+) -> Option<TestModuleCompilerOpts> {
+    let orig_opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename))
+        .set_search_paths(&["resources/tests/module".to_string()]);
+    let source_opts = TestModuleCompilerOpts::new(orig_opts);
+    test_compile_and_run_program_with_modules_and_fs(source_opts, filename, content, runs)
 }
 
 #[test]
@@ -620,16 +663,18 @@ fn test_constant_multiple_rounds() {
     );
 }
 
-#[test]
-fn test_three_outputs_common() {
-    let filename = "resources/tests/module/programs/three-outputs-common.clsp";
-    let content = fs::read_to_string(filename).expect("file should exist");
+fn test_three_outputs_as_written(
+    source_opts: TestModuleCompilerOpts,
+    filename: &str,
+    content: &str,
+) -> TestModuleCompilerOpts {
     let f_hex_file = "resources/tests/module/programs/three-outputs-common_F.hex";
     let g_hex_file = "resources/tests/module/programs/three-outputs-common_G.hex";
     let h_hex_file = "resources/tests/module/programs/three-outputs-common_H.hex";
-    test_compile_and_run_program_with_modules(
+    test_compile_and_run_program_with_modules_and_fs(
+        source_opts,
         filename,
-        &content,
+        content,
         &[
             HexArgumentOutcome {
                 hexfile: h_hex_file,
@@ -652,5 +697,211 @@ fn test_three_outputs_common() {
                 outcome: ContentEquals,
             },
         ],
+    )
+    .unwrap()
+}
+
+#[test]
+fn test_three_outputs_common() {
+    let filename = "resources/tests/module/programs/three-outputs-common.clsp";
+    let orig_opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename))
+        .set_search_paths(&["resources/tests/module".to_string()]);
+    let source_opts = TestModuleCompilerOpts::new(orig_opts);
+    let content = fs::read_to_string(filename).expect("file should exist");
+    test_three_outputs_as_written(source_opts, filename, &content);
+}
+
+#[test]
+fn test_module_cache_main_changed() {
+    let filename = "resources/tests/module/programs/three-outputs-common.clsp";
+    let orig_opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename))
+        .set_search_paths(&["resources/tests/module".to_string()]);
+    let source_opts = TestModuleCompilerOpts::new(orig_opts);
+    let content = fs::read_to_string(filename).expect("file should exist");
+
+    // Test original, creating cache data.
+    let source_opts = test_three_outputs_as_written(source_opts, filename, &content);
+
+    // Ensure cache data exists.
+    assert_eq!(source_opts.get_written_file(".chialisp/96ef2928eb1592d39462af4d76529e38bc0e46f3e018a49a8cef0795aaa81667/resources/tests/module/programs/three-outputs-common_E.hex"), Some(b"ff02ffff01ff12ff05ffff010380ffff04ffff01ffff12ff05ffff01038080ff018080".to_vec()));
+
+    let new_content = indoc! {"
+(include *standard-cl-23*)
+(export E)
+(export F)
+(export G)
+(export H)
+
+(defun D (X) (* X 2))
+(defun E (X) (* X 5))
+(defun F (X) (E (+ X 1)))
+(defun G (X) (E (D X)))
+(defconst H E)"}
+    .to_string();
+    let f_hex_file = "resources/tests/module/programs/three-outputs-common_F.hex";
+    let g_hex_file = "resources/tests/module/programs/three-outputs-common_G.hex";
+    let h_hex_file = "resources/tests/module/programs/three-outputs-common_H.hex";
+
+    // test changed.
+    let source_opts = test_compile_and_run_program_with_modules_and_fs(
+        source_opts,
+        filename,
+        &new_content,
+        &[
+            HexArgumentOutcome {
+                hexfile: h_hex_file,
+                argument: "(15)",
+                outcome: Run("75"),
+            },
+            HexArgumentOutcome {
+                hexfile: f_hex_file,
+                argument: "(2)",
+                outcome: Run("15"),
+            },
+            HexArgumentOutcome {
+                hexfile: g_hex_file,
+                argument: "(2)",
+                outcome: Run("20"),
+            },
+            HexArgumentOutcome {
+                hexfile: h_hex_file,
+                argument: "(a (q 18 5 (q . 5)) (c (q (* 5 (q . 5))) 1))",
+                outcome: ContentEquals,
+            },
+        ],
+    )
+    .unwrap();
+
+    // Both personalities of the file should be present.
+    assert_eq!(source_opts.get_written_file(".chialisp/96ef2928eb1592d39462af4d76529e38bc0e46f3e018a49a8cef0795aaa81667/resources/tests/module/programs/three-outputs-common_E.hex"), Some(b"ff02ffff01ff12ff05ffff010380ffff04ffff01ffff12ff05ffff01038080ff018080".to_vec()));
+    assert_eq!(source_opts.get_written_file(".chialisp/99d12bc86cfd32274d0655a041f5b5b726da407716aa3b9b1db39b3a036d7a38/resources/tests/module/programs/three-outputs-common_E.hex"), Some(b"ff02ffff01ff12ff05ffff010580ffff04ffff01ffff12ff05ffff01058080ff018080".to_vec()));
+
+    // Now test original.
+    let source_opts = test_three_outputs_as_written(source_opts, filename, &content);
+
+    // Now make a truncated file in the cache and test.
+    source_opts.set_file_content(".chialisp/96ef2928eb1592d39462af4d76529e38bc0e46f3e018a49a8cef0795aaa81667/resources/tests/module/programs/three-outputs-common_E.hex".to_string(), vec![]);
+
+    test_three_outputs_as_written(source_opts, filename, &content);
+}
+
+#[test]
+fn test_module_cache_dep_changed() {
+    let filename = "resources/tests/module/two_program_import.clsp";
+    let orig_opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename))
+        .set_search_paths(&["resources/tests/module".to_string()]);
+    let source_opts = TestModuleCompilerOpts::new(orig_opts);
+    let content = fs::read_to_string(filename).expect("file should exist");
+    let h_hex_file = "resources/tests/module/two_program_import.hex";
+    let initial_program = "(c (q . 0xfab05b1fd610159ee4a46a120ece34b5a947f88057c4287f4506e513910a5d29) (c (a (q 2 (q 16 5 (q . 1)) (c (q () 16 5 (q . 1)) 1)) (c 2 (q))) (c (q 2 (q 16 5 (q . 1)) (c (q () 16 5 (q . 1)) 1)) (c (q . 0x19b7de44398df8341b9bd6ef7e32ddd96a1e39cd7f55b97a6bf74f671f0a780d) (c (a (q 2 (q 18 5 (q . 3)) (c (q () 18 5 (q . 3)) 1)) (c 5 (q))) (c (q 2 (q 18 5 (q . 3)) (c (q () 18 5 (q . 3)) 1)) (q)))))))";
+    let second_program = "(c (q . 0xfab05b1fd610159ee4a46a120ece34b5a947f88057c4287f4506e513910a5d29) (c (a (q 2 (q 16 5 (q . 1)) (c (q () 16 5 (q . 1)) 1)) (c 2 (q))) (c (q 2 (q 16 5 (q . 1)) (c (q () 16 5 (q . 1)) 1)) (c (q . 0x225de92687b39de0e3228e15d54bc9896f275027d5b6bb6bde309afbfb22b519) (c (a (q 2 (q 18 5 (q . 2)) (c (q () 18 5 (q . 2)) 1)) (c 5 (q))) (c (q 2 (q 18 5 (q . 2)) (c (q () 18 5 (q . 2)) 1)) (q)))))))";
+
+    let source_opts = test_compile_and_run_program_with_modules_and_fs(
+        source_opts,
+        filename,
+        &content,
+        &[HexArgumentOutcome {
+            hexfile: h_hex_file,
+            argument: initial_program,
+            outcome: ContentEquals,
+        }],
+    )
+    .unwrap();
+
+    let new_content = indoc! {"
+(include *standard-cl-23*)
+(export F)
+(export G)
+
+(defun F (X) (+ X 1))
+(defun G (X) (* X 3))"}
+    .to_string();
+    source_opts.set_file_content(
+        "programs/two-outputs.clsp".to_string(),
+        new_content.as_bytes().to_vec(),
+    );
+
+    let source_opts = test_compile_and_run_program_with_modules_and_fs(
+        source_opts,
+        filename,
+        &content,
+        &[HexArgumentOutcome {
+            hexfile: h_hex_file,
+            argument: second_program,
+            outcome: ContentEquals,
+        }],
+    )
+    .unwrap();
+
+    // Now test original.
+    source_opts.erase_written("programs/two-outputs.clsp");
+
+    test_compile_and_run_program_with_modules_and_fs(
+        source_opts,
+        filename,
+        &content,
+        &[HexArgumentOutcome {
+            hexfile: h_hex_file,
+            argument: initial_program,
+            outcome: ContentEquals,
+        }],
+    );
+}
+
+#[test]
+fn test_module_cache_deep_dep_changed() {
+    let filename = "resources/tests/module/two_program_import_include.clsp";
+    let orig_opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename))
+        .set_search_paths(&["resources/tests/module".to_string()]);
+    let source_opts = TestModuleCompilerOpts::new(orig_opts);
+    let content = fs::read_to_string(filename).expect("file should exist");
+    let h_hex_file = "resources/tests/module/two_program_import_include.hex";
+
+    let source_opts = test_compile_and_run_program_with_modules_and_fs(
+        source_opts,
+        filename,
+        &content,
+        &[HexArgumentOutcome {
+            hexfile: h_hex_file,
+            argument: "(13)",
+            outcome: Run(&"39"),
+        }],
+    )
+    .unwrap();
+
+    let new_content = indoc! {"
+(include *standard-cl-23*)
+(defconst THREE 5)
+(export THREE)"}
+    .to_string();
+    source_opts.set_file_content(
+        "programs/two-outputs-constant.clsp".to_string(),
+        new_content.as_bytes().to_vec(),
+    );
+
+    let source_opts = test_compile_and_run_program_with_modules_and_fs(
+        source_opts,
+        filename,
+        &content,
+        &[HexArgumentOutcome {
+            hexfile: h_hex_file,
+            argument: "(13)",
+            outcome: Run(&"65"),
+        }],
+    )
+    .unwrap();
+
+    // Now test original.
+    source_opts.erase_written("programs/two-outputs-constant.clsp");
+
+    test_compile_and_run_program_with_modules_and_fs(
+        source_opts,
+        filename,
+        &content,
+        &[HexArgumentOutcome {
+            hexfile: h_hex_file,
+            argument: "(13)",
+            outcome: Run(&"39"),
+        }],
     );
 }

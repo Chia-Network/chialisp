@@ -21,7 +21,9 @@ use crate::compiler::sexp::{decode_string, SExp};
 use crate::compiler::srcloc::Srcloc;
 
 use crate::tests::compiler::fuzz::{compose_sexp, GenError};
-use crate::tests::compiler::modules::{hex_to_clvm, perform_compile_of_file};
+use crate::tests::compiler::modules::{
+    hex_to_clvm, perform_compile_of_file, TestModuleCompilerOpts,
+};
 
 fn simple_run(
     opts: Rc<dyn CompilerOpts>,
@@ -834,9 +836,17 @@ fn test_property_fuzz_stable_constants() {
         eprintln!("program_text\n{program_text}");
         let mut allocator = Allocator::new();
         let runner = Rc::new(DefaultProgramRunner::new());
-        let compiled =
-            perform_compile_of_file(&mut allocator, runner.clone(), "test.clsp", &program_text)
-                .expect("should compile");
+        let orig_opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new("test.clsp"))
+            .set_search_paths(&["resources/tests/module".to_string()]);
+        let source_opts = TestModuleCompilerOpts::new(orig_opts);
+        let compiled = perform_compile_of_file(
+            &mut allocator,
+            runner.clone(),
+            source_opts,
+            "test.clsp",
+            &program_text,
+        )
+        .expect("should compile");
 
         // Collect output values from compiled.
         let mut actual_values = BTreeMap::new();

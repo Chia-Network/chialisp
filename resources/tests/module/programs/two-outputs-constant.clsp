@@ -1,0 +1,2 @@
+(defconst THREE 3)
+(export THREE)
