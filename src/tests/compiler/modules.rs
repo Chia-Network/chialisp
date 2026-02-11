@@ -793,8 +793,8 @@ fn test_module_cache_dep_changed() {
     let source_opts = TestModuleCompilerOpts::new(orig_opts);
     let content = fs::read_to_string(filename).expect("file should exist");
     let h_hex_file = "resources/tests/module/two_program_import.hex";
-    let initial_program = "(c (q . 0xfab05b1fd610159ee4a46a120ece34b5a947f88057c4287f4506e513910a5d29) (c (a (q 2 (q 16 5 (q . 1)) (c (q () 16 5 (q . 1)) 1)) (c 2 (q))) (c (q 2 (q 16 5 (q . 1)) (c (q () 16 5 (q . 1)) 1)) (c (q . 0x19b7de44398df8341b9bd6ef7e32ddd96a1e39cd7f55b97a6bf74f671f0a780d) (c (a (q 2 (q 18 5 (q . 3)) (c (q () 18 5 (q . 3)) 1)) (c 5 (q))) (c (q 2 (q 18 5 (q . 3)) (c (q () 18 5 (q . 3)) 1)) (q)))))))";
-    let second_program = "(c (q . 0xfab05b1fd610159ee4a46a120ece34b5a947f88057c4287f4506e513910a5d29) (c (a (q 2 (q 16 5 (q . 1)) (c (q () 16 5 (q . 1)) 1)) (c 2 (q))) (c (q 2 (q 16 5 (q . 1)) (c (q () 16 5 (q . 1)) 1)) (c (q . 0x225de92687b39de0e3228e15d54bc9896f275027d5b6bb6bde309afbfb22b519) (c (a (q 2 (q 18 5 (q . 2)) (c (q () 18 5 (q . 2)) 1)) (c 5 (q))) (c (q 2 (q 18 5 (q . 2)) (c (q () 18 5 (q . 2)) 1)) (q)))))))";
+    let initial_program = "(c (q . 0xfab05b1fd610159ee4a46a120ece34b5a947f88057c4287f4506e513910a5d29) (c (a (q 2 (q 16 5 (q . 1)) (c (q () 16 5 (q . 1)) 1)) (c 2 (q))) (c (q 2 (q 16 5 (q . 1)) (c (q () 16 5 (q . 1)) 1)) (c (q . 0x225de92687b39de0e3228e15d54bc9896f275027d5b6bb6bde309afbfb22b519) (c (a (q 2 (q 18 5 (q . 2)) (c (q () 18 5 (q . 2)) 1)) (c 5 (q))) (c (q 2 (q 18 5 (q . 2)) (c (q () 18 5 (q . 2)) 1)) (q)))))))";
+    let second_program = "(c (q . 0xfab05b1fd610159ee4a46a120ece34b5a947f88057c4287f4506e513910a5d29) (c (a (q 2 (q 16 5 (q . 1)) (c (q () 16 5 (q . 1)) 1)) (c 2 (q))) (c (q 2 (q 16 5 (q . 1)) (c (q () 16 5 (q . 1)) 1)) (c (q . 0x19b7de44398df8341b9bd6ef7e32ddd96a1e39cd7f55b97a6bf74f671f0a780d) (c (a (q 2 (q 18 5 (q . 3)) (c (q () 18 5 (q . 3)) 1)) (c 5 (q))) (c (q 2 (q 18 5 (q . 3)) (c (q () 18 5 (q . 3)) 1)) (q)))))))";
 
     let source_opts = test_compile_and_run_program_with_modules_and_fs(
         source_opts,
