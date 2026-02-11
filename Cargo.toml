@@ -58,7 +58,7 @@ fuzz = ["dep:rand", "dep:rand_chacha", "dep:lfsr"]
 default = []
 
 [target.'cfg(target_family="wasm")'.dependencies]
-cached = { version = "0.56.0" }
+rusqlite = "0.38.0"
 wasm-bindgen = { version = "0.2.100", features = ["serde-serialize"] }
 js-sys = "0.3.58"
 getrandom = { version = "0.2", features = ["js"] }

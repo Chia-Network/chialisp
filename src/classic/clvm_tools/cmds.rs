@@ -57,7 +57,6 @@ use crate::compiler::cldb_hierarchy::{HierarchialRunner, HierarchialStepResult, 
 use crate::compiler::clvm::start_step;
 use crate::compiler::compiler::DefaultCompilerOpts;
 use crate::compiler::comptypes::{CompileErr, CompilerOpts};
-use crate::compiler::diskcache::set_use_disk_cache;
 use crate::compiler::frontend::frontend;
 use crate::compiler::preprocessor::gather_dependencies;
 use crate::compiler::prims;
@@ -910,8 +909,6 @@ fn perform_preprocessing(
 
 pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, default_stage: u32) {
     let mut allocator = Allocator::new();
-    // Use disk cache for module style builds.
-    set_use_disk_cache(true);
 
     let props = TArgumentParserProps {
         description: "Execute a clvm script.".to_string(),

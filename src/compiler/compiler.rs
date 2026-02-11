@@ -2,7 +2,8 @@ use num_bigint::ToBigInt;
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::UNIX_EPOCH;
 
@@ -770,8 +771,25 @@ pub fn try_from_cache(
 
     // if we got here, then we loaded all exports.
     // write (or rewrite) any hex files that were outputs of the elided build steps.
+    let mut allocator = Allocator::new();
+    let empty_symbols = HashMap::new();
     for (hex_file_name, hex_data) in data_to_write.into_iter() {
         opts.write_new_file(&hex_file_name, hex_data.as_bytes())?;
+        // Write a hash file alongside.
+        if !hex_file_name.ends_with(".hex") {
+            continue;
+        }
+
+        let decoded_hex = hex_to_modern_sexp(
+            &mut allocator,
+            &empty_symbols,
+            cf.loc(),
+            &hex_data
+        )?;
+        let treehash = sha256tree(decoded_hex);
+        let hash_file_name = format!("{}_hash.hex", &hex_file_name[0..hex_file_name.len() - 4]);
+        let treehash_hex = hex::encode(&treehash);
+        opts.write_new_file(&hash_file_name, treehash_hex.as_bytes())?;
     }
 
     Ok(Some(CompilerOutput::Module(CompileModuleOutput {
@@ -1031,17 +1049,24 @@ impl CompilerOpts for DefaultCompilerOpts {
     }
 
     fn write_new_file(&self, target: &str, content: &[u8]) -> Result<(), CompileErr> {
-        fs::write(target, content).map_err(|_| {
+        let path = Path::new(target);
+        let parent_dir = path.parent();
+        (|| {
+            if let Some(p) = parent_dir {
+                fs::create_dir_all(p)?;
+            }
+            fs::write(target, content)?;
+            Ok(())
+        })().map_err(|e: io::Error| {
             CompileErr(
                 Srcloc::start(&self.filename()),
                 format!(
-                    "could not write output file {} for {}",
+                    "could not write output file {} for {}, error {e:?}",
                     target,
                     self.filename()
                 ),
             )
-        })?;
-        Ok(())
+        })
     }
 
     fn compile_program(
