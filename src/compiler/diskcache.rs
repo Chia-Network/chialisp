@@ -36,7 +36,9 @@ pub fn try_element_from_cache(
 ) -> Option<String> {
     let key = cache_key(opts.clone(), cf, exports);
     let hex_file_name = format!(".chialisp/{key}/{export_path}");
-    opts.read_new_file(cf.loc().file.to_string(), hex_file_name).ok().map(|data| decode_string(&data.1))
+    opts.read_new_file(cf.loc().file.to_string(), hex_file_name)
+        .ok()
+        .map(|data| decode_string(&data.1))
 }
 
 pub fn set_cache_element_error(

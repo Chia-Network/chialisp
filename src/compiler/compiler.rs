@@ -780,12 +780,7 @@ pub fn try_from_cache(
             continue;
         }
 
-        let decoded_hex = hex_to_modern_sexp(
-            &mut allocator,
-            &empty_symbols,
-            cf.loc(),
-            &hex_data
-        )?;
+        let decoded_hex = hex_to_modern_sexp(&mut allocator, &empty_symbols, cf.loc(), &hex_data)?;
         let treehash = sha256tree(decoded_hex);
         let hash_file_name = format!("{}_hash.hex", &hex_file_name[0..hex_file_name.len() - 4]);
         let treehash_hex = hex::encode(&treehash);
@@ -1057,7 +1052,8 @@ impl CompilerOpts for DefaultCompilerOpts {
             }
             fs::write(target, content)?;
             Ok(())
-        })().map_err(|e: io::Error| {
+        })()
+        .map_err(|e: io::Error| {
             CompileErr(
                 Srcloc::start(&self.filename()),
                 format!(
