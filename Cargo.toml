@@ -63,7 +63,6 @@ js-sys = "0.3.58"
 getrandom = { version = "0.2", features = ["js"] }
 
 [target.'cfg(not(target_family="wasm"))'.dependencies]
-cached = { version = "0.56.0", features = ["disk_store"] }
 getrandom = { version = "0.2" }
 
 [build-dependencies]
