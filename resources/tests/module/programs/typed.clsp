@@ -1,0 +1,5 @@
+(include *standard-cl-23*)
+
+(export (X) : ((Atom) -> Atom)
+  (+ X 1)
+  )

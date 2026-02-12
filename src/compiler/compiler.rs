@@ -19,7 +19,8 @@ use crate::compiler::codegen::{codegen, hoist_body_let_binding, process_helper_l
 use crate::compiler::comptypes::{
     BodyForm, CompileErr, CompileForm, CompileModuleComponent, CompileModuleOutput, CompilerOpts,
     CompilerOutput, ConstantKind, DefunData, Export, FrontendOutput, HelperForm, ImportLongName,
-    ModulePhase, PrimaryCodegen, StandalonePhaseInfo, SyntheticType,
+    IncludeDesc, IncludeProcessType, ModulePhase, PrimaryCodegen, StandalonePhaseInfo,
+    SyntheticType,
 };
 use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
 use crate::compiler::diskcache::{set_cache_element, try_element_from_cache};
@@ -28,7 +29,7 @@ use crate::compiler::optimize::depgraph::{DepgraphOptions, FunctionDependencyGra
 use crate::compiler::optimize::get_optimizer;
 use crate::compiler::prims;
 use crate::compiler::resolve::{find_helper_target, resolve_namespaces};
-use crate::compiler::sexp::{decode_string, parse_sexp, SExp};
+use crate::compiler::sexp::{decode_string, enlist, parse_sexp, SExp};
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::{BasicCompileContext, CompileContextWrapper};
 use crate::util::Number;
@@ -463,7 +464,7 @@ pub fn compile_module(
             let mut stream = Stream::new(None);
             stream.write(sexp_as_bin(context.allocator(), converted));
             let hex_data = stream.get_value().hex();
-            set_cache_element(opts.clone(), &program, exports, &output_path_str, &hex_data);
+            set_cache_element(opts.clone(), &program, &output_path_str, &hex_data);
             opts.write_new_file(&output_path_str, hex_data.as_bytes())?;
             return Ok(CompileModuleOutput {
                 summary: Rc::new(SExp::Nil(loc.clone())),
@@ -690,7 +691,7 @@ pub fn compile_module(
         let converted_func = convert_to_clvm_rs(context.allocator(), m.content.clone())?;
         stream.write(sexp_as_bin(context.allocator(), converted_func));
         let hex_data = stream.get_value().hex();
-        set_cache_element(opts.clone(), &program, exports, &output_path, &hex_data);
+        set_cache_element(opts.clone(), &program, &output_path, &hex_data);
         opts.write_new_file(&output_path, hex_data.as_bytes())?;
 
         components.push(m);
@@ -703,7 +704,7 @@ pub fn compile_module(
     })
 }
 
-pub fn get_hex_name_of_export(
+fn get_hex_name_of_export(
     opts: Rc<dyn CompilerOpts>,
     loc: &Srcloc,
     export: &Export,
@@ -733,12 +734,11 @@ pub fn try_from_cache(
 
     for e in exports.iter() {
         let hex_file_name = get_hex_name_of_export(opts.clone(), &cf.loc(), e)?;
-        let hex_data =
-            if let Some(hd) = try_element_from_cache(opts.clone(), cf, exports, &hex_file_name) {
-                hd
-            } else {
-                return Ok(None);
-            };
+        let hex_data = if let Some(hd) = try_element_from_cache(opts.clone(), cf, &hex_file_name) {
+            hd
+        } else {
+            return Ok(None);
+        };
 
         let loaded_hex_data =
             hex_to_modern_sexp(&mut allocator, &HashMap::new(), cf.loc.clone(), &hex_data)?;
@@ -794,6 +794,17 @@ pub fn try_from_cache(
     })))
 }
 
+fn add_main_fingerprint(cf: &mut CompileForm, forms: &[Rc<SExp>]) {
+    let form_list = Rc::new(enlist(cf.loc(), forms));
+    cf.include_forms.push(IncludeDesc {
+        kw: cf.loc(),
+        nl: cf.loc(),
+        name: b"main".to_vec(),
+        kind: Some(IncludeProcessType::Compiled),
+        fingerprint: sha256tree(form_list),
+    });
+}
+
 pub fn compile_pre_forms(
     context: &mut BasicCompileContext,
     opts: Rc<dyn CompilerOpts>,
@@ -806,7 +817,8 @@ pub fn compile_pre_forms(
             p0.include_forms.clone(),
             compile_from_compileform(context, opts, p0)?,
         )),
-        FrontendOutput::Module(cf, exports) => {
+        FrontendOutput::Module(mut cf, exports) => {
+            add_main_fingerprint(&mut cf, pre_forms);
             // If we can read from cache, use that.  We'll use the actual form of the compileform
             // and opts (the dialect) to determine a cache hit.
             if let Some(result) = try_from_cache(opts.clone(), &cf, &exports)? {

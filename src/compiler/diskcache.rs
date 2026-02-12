@@ -1,18 +1,22 @@
 use std::rc::Rc;
+use std::thread::sleep;
+use std::time::Duration;
 
-use crate::compiler::clvm::sha256tree;
-use crate::compiler::comptypes::{CompileErr, CompileForm, CompilerOpts, Export};
-use crate::compiler::sexp::{decode_string, enlist, SExp};
+use crate::compiler::clvm::sha256tree_from_atom;
+use crate::compiler::comptypes::{CompileErr, CompileForm, CompilerOpts};
+use crate::compiler::sexp::decode_string;
 
-fn cache_key(opts: Rc<dyn CompilerOpts>, cf: &CompileForm, exports: &[Export]) -> String {
-    let cf_sexp = cf.to_sexp();
-    let export_sexp_list: Vec<Rc<SExp>> = exports.iter().map(|e| e.to_sexp()).collect();
-    let exports_sexp = enlist(cf.loc(), &export_sexp_list);
-    let dialect_sexp = opts.dialect().to_sexp(cf.loc());
-    hex::encode(sha256tree(Rc::new(enlist(
-        cf.loc(),
-        &[dialect_sexp, exports_sexp.into(), cf_sexp],
-    ))))
+const MAX_CACHE_TRIES: usize = 3;
+lazy_static! {
+    pub static ref RETRY_WAIT: Duration = Duration::new(1, 0);
+}
+
+fn cache_key(cf: &CompileForm) -> String {
+    let mut include_fingerprints = Vec::new();
+    for include in cf.include_forms.iter() {
+        include_fingerprints.append(&mut include.fingerprint.clone());
+    }
+    hex::encode(sha256tree_from_atom(&include_fingerprints))
 }
 
 /// Try to get an element from the cache, exposing errors.
@@ -31,38 +35,50 @@ fn cache_key(opts: Rc<dyn CompilerOpts>, cf: &CompileForm, exports: &[Export]) -
 pub fn try_element_from_cache(
     opts: Rc<dyn CompilerOpts>,
     cf: &CompileForm,
-    exports: &[Export],
     export_path: &str,
 ) -> Option<String> {
-    let key = cache_key(opts.clone(), cf, exports);
+    let key = cache_key(cf);
     let hex_file_name = format!(".chialisp/{key}/{export_path}");
-    opts.read_new_file(cf.loc().file.to_string(), hex_file_name)
-        .ok()
-        .map(|data| decode_string(&data.1))
+    for _ in 0..MAX_CACHE_TRIES {
+        let result = opts
+            .read_new_file(cf.loc().file.to_string(), hex_file_name.clone())
+            .ok()
+            .map(|data| decode_string(&data.1))?;
+
+        // Hex files are never empty.  Even the nil is one byte.
+        if !result.is_empty() {
+            return Some(result);
+        }
+
+        // We read the file after its creation but before it had content.  Wait a bit and try
+        // again.
+        sleep(*RETRY_WAIT);
+    }
+
+    // Couldn't make sense of it.
+    None
 }
 
 pub fn set_cache_element_error(
     opts: Rc<dyn CompilerOpts>,
     cf: &CompileForm,
-    exports: &[Export],
     export_path: &str,
     export_hex: &str,
 ) -> Result<(), CompileErr> {
-    let key = cache_key(opts.clone(), cf, exports);
+    let key = cache_key(cf);
     let hex_file_name = format!(".chialisp/{key}/{export_path}");
     opts.write_new_file(&hex_file_name, export_hex.as_bytes())?;
     Ok(())
 }
 
-/// Set an element in the cache.  Use the current dialect, compileform and exports as the majority
+/// Set an element in the cache.  Use the current dialect and compileform as the majority
 /// of key material.  We add a file path and content to determine an exact hex serialization of
 /// an export.
 pub fn set_cache_element(
     opts: Rc<dyn CompilerOpts>,
     cf: &CompileForm,
-    exports: &[Export],
     export_path: &str,
     export_hex: &str,
 ) {
-    set_cache_element_error(opts, cf, exports, export_path, export_hex).ok();
+    set_cache_element_error(opts, cf, export_path, export_hex).ok();
 }
