@@ -1238,7 +1238,6 @@ impl<T: HasCompilerOptsDelegation> CompilerOpts for T {
         self.override_set_diag_flags(new_flags)
     }
     fn write_new_file(&self, target: &str, content: &[u8]) -> Result<(), CompileErr> {
-        eprintln!("HasCompilerOptsDelegation {target}");
         self.override_write_new_file(target, content)
     }
     fn get_file_mod_date(&self, loc: &Srcloc, filename: &str) -> Result<u64, CompileErr> {

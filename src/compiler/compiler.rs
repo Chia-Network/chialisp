@@ -245,10 +245,7 @@ fn capture_standalone_constants(
             let mut constant_is_depended = HashSet::new();
             depgraph.get_full_depended_on_by(&mut constant_is_depended, h.name());
             if constant_is_depended.is_empty() {
-                eprintln!("[X] standalone {}", decode_string(h.name()));
                 standalone_constants.insert(h.name().to_vec());
-            } else {
-                eprintln!("[ ] standalone {}", decode_string(h.name()));
             }
         }
     }
@@ -950,7 +947,6 @@ impl CompilerOpts for DefaultCompilerOpts {
     }
     fn set_module_phase(&self, module_phase: Option<ModulePhase>) -> Rc<dyn CompilerOpts> {
         let mut copy = self.clone();
-        eprintln!("set module_phase {module_phase:?}");
         copy.module_phase = module_phase;
         Rc::new(copy)
     }

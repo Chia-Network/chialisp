@@ -147,7 +147,7 @@ fn compute_env_shape(
     l: Srcloc,
     args: Rc<SExp>,
     helpers: &[HelperForm],
-) -> SExp {
+) -> Result<SExp, CompileErr> {
     match module_phase {
         Some(ModulePhase::StandalonePhase(sp)) => {
             let common_env_data = collect_env_names(sp.env.clone());
@@ -159,31 +159,32 @@ fn compute_env_shape(
                 }
             }
 
-            let extra_env_data_strings: Vec<String> =
-                extra_env_data.iter().map(|e| e.to_string()).collect();
-            eprintln!("extra_env_data_strings {extra_env_data_strings:?}");
             let extra_env_tree =
                 make_env_tree(&sp.env.loc(), &extra_env_data, 0, extra_env_data.len());
             if sp.empty_common_phase {
-                return SExp::Cons(l.clone(), extra_env_tree, args);
+                return Ok(SExp::Cons(l.clone(), extra_env_tree, args));
             }
 
             if let SExp::Cons(l, all_env, _) = sp.env.borrow() {
                 if let SExp::Cons(_l, old_env, _) = all_env.borrow() {
-                    return SExp::Cons(
+                    return Ok(SExp::Cons(
                         l.clone(),
                         Rc::new(SExp::Cons(l.clone(), old_env.clone(), extra_env_tree)),
                         args,
-                    );
+                    ));
                 }
             }
 
-            eprintln!("Weird env {} trying to add {extra_env_tree}", sp.env);
-            todo!();
+            Err(CompileErr(
+                l,
+                format!(
+                    "standalone phase doesn't have a comprehensible env shape {}",
+                    sp.env
+                ),
+            ))
         }
         Some(ModulePhase::CommonPhase(true)) => {
             let car = compute_code_shape(l.clone(), helpers);
-            eprintln!("about to compute env shape with helpers: {car}");
             let res = SExp::Cons(
                 l.clone(),
                 Rc::new(SExp::Cons(
@@ -193,17 +194,16 @@ fn compute_env_shape(
                 )),
                 args,
             );
-            eprintln!("common phase computed shape {car}");
-            res
+            Ok(res)
         }
         Some(ModulePhase::CommonConstant(env)) => {
             // We use the env that was specified in the phase.
-            env.clone()
+            Ok(env.clone())
         }
         Some(ModulePhase::CommonPhase(false)) | None => {
             let car = compute_code_shape(l.clone(), helpers);
             let cdr = args;
-            SExp::Cons(l, Rc::new(car), cdr)
+            Ok(SExp::Cons(l, Rc::new(car), cdr))
         }
     }
 }
@@ -379,13 +379,6 @@ fn create_name_lookup(
     // it integrates with the rest of the program it lives in.
     as_variable: bool,
 ) -> Result<Rc<SExp>, CompileErr> {
-    if let Some(ModulePhase::StandalonePhase(sp)) = opts.module_phase() {
-        eprintln!(
-            "lookup {} with standalone env {}",
-            sp.env,
-            decode_string(name)
-        );
-    }
     compiler
         .constants
         .get(name)
@@ -1621,11 +1614,8 @@ fn decide_constant_generation_order(
     let mut exp = Rc::new(BodyForm::Quoted(SExp::Nil(loc.clone())));
 
     for h in helpers.iter() {
-        eprintln!("decide_constant_generation_order {}", h.to_sexp());
-
         let do_include = match h {
             HelperForm::Defconstant(dc) => {
-                eprintln!("{:?} {}", dc.kind, decode_string(&dc.name));
                 matches!(dc.kind, ConstantKind::Module(false))
             }
             HelperForm::Defun(false, _) => true,
@@ -1787,7 +1777,6 @@ fn generate_simple_constant_body(
             code_generator.module_phase,
             Some(ModulePhase::CommonPhase(_))
         ) {
-            eprintln!("XXX Allow redefinition in common constant phase");
             return Ok(res);
         }
 
@@ -1811,16 +1800,10 @@ fn generate_complex_constant_body(
     h: &HelperForm,
     defc: &DefconstData,
 ) -> Result<PrimaryCodegen, CompileErr> {
-    eprintln!(
-        "evaluate code for constant {}: {}",
-        decode_string(&defc.name),
-        defc.body.to_sexp()
-    );
     if matches!(
         code_generator.module_phase,
         Some(ModulePhase::CommonPhase(_))
     ) {
-        eprintln!("module constant env {}", code_generator.env);
         let env_borrow: &SExp = code_generator.env.borrow();
         let new_phase = Some(ModulePhase::CommonConstant(env_borrow.clone()));
         return generate_module_constant_body(
@@ -1852,10 +1835,8 @@ fn generate_complex_constant_body(
     if let BodyForm::Quoted(q) = constant_result.borrow() {
         let res = Rc::new(q.clone());
         if defc.tabled {
-            eprintln!("add_tabled_constant {} = {res}", decode_string(&defc.name));
             Ok(code_generator.add_tabled_constant(&defc.name, res))
         } else {
-            eprintln!("add_constant {} = {res}", decode_string(&defc.name));
             let quoted = primquote(defc.loc.clone(), res);
             Ok(code_generator.add_constant(&defc.name, Rc::new(quoted)))
         }
@@ -1911,11 +1892,6 @@ fn generate_module_constant_body(
         updated_opts.clone(),
         constant_program,
     )?;
-    eprintln!(
-        "evaluate constant code for {}: {}",
-        decode_string(h.name()),
-        code
-    );
 
     run(
         context_wrapper.context.allocator(),
@@ -2066,7 +2042,7 @@ fn start_codegen(
             program.loc.clone(),
             program.args.clone(),
             &only_defuns,
-        )),
+        )?),
     };
 
     if matches!(
@@ -2080,9 +2056,6 @@ fn start_codegen(
                 generate_helper_body(context, code_generator, opts.clone(), program.clone(), h)?;
         }
     }
-
-    eprintln!("phase {:?}", code_generator.module_phase.as_ref());
-    eprintln!("env {}", code_generator.env);
 
     code_generator.to_process.clone_from(&program.helpers);
     // Ensure that we have the synthesis of the previous codegen's helpers and
@@ -2117,10 +2090,6 @@ fn get_env_data_from_common_env(
     common_env: Rc<SExp>,
     common_env_value: Rc<SExp>,
 ) -> Option<Rc<SExp>> {
-    eprintln!(
-        "get env data {} {common_env} {common_env_value}",
-        decode_string(name)
-    );
     if let (SExp::Cons(_, le, re), SExp::Cons(_, lv, rv)) =
         (common_env.borrow(), common_env_value.borrow())
     {
@@ -2180,7 +2149,6 @@ fn finalize_env_(
             }
 
             if let Some(ModulePhase::StandalonePhase(sp)) = c.module_phase.as_ref() {
-                eprintln!("Standalone mode: {}", sp.env);
                 let wrapped_env_value = Rc::new(SExp::Cons(
                     sp.left_env_value.loc(),
                     sp.left_env_value.clone(),
@@ -2189,14 +2157,8 @@ fn finalize_env_(
                 if let Some(res) =
                     get_env_data_from_common_env(v, sp.env.clone(), wrapped_env_value.clone())
                 {
-                    eprintln!("get_env_data: {} => {res}", decode_string(v));
                     return Ok(res);
                 }
-                eprintln!(
-                    "standalone: failed to lookup {} in {env} with values {}",
-                    decode_string(v),
-                    sp.left_env_value
-                );
             }
 
             Err(CompileErr(
@@ -2378,7 +2340,6 @@ pub fn codegen(
     {
         // Process defuns first in case they're needed.
         for h in to_process.iter() {
-            eprintln!("generate function (first time) {}", decode_string(h.name()));
             if let HelperForm::Defun(_, _) = h {
                 already_processed.insert(h.name().to_vec());
                 code_generator = codegen_(context, opts.clone(), &code_generator, h, true)?;
@@ -2390,24 +2351,16 @@ pub fn codegen(
         let final_env = finalize_env(context, opts.clone(), &code_generator)?;
         code_generator.final_env = final_env.clone();
 
-        eprintln!("common phase");
         let generation_order = decide_constant_generation_order(
             &cmod.loc,
             &code_generator,
             &code_generator.to_process,
         )?;
 
-        let generation_order_strings: Vec<String> = generation_order
-            .iter()
-            .map(|h| decode_string(h.name()))
-            .collect();
-        eprintln!("generation_order {generation_order_strings:?}");
-
         // Generate constants in our target order.  This must come after we've computed
         // the environment shape so if function bodies or computations that depend on
         // them are captured, they've been computed.
         for h in generation_order.iter() {
-            eprintln!("generate constant {}", h.to_sexp());
             already_processed.insert(h.name().to_vec());
             code_generator = codegen_(context, opts.clone(), &code_generator, h, true)?;
         }
@@ -2418,7 +2371,6 @@ pub fn codegen(
             continue;
         }
 
-        eprintln!("generate normal helper {}", decode_string(f.name()));
         code_generator = codegen_(context, opts.clone(), &code_generator, f, false)?;
     }
 
@@ -2543,11 +2495,6 @@ pub fn codegen(
         }
     };
 
-    eprintln!(
-        "code generation {:?} {:?}",
-        opts.in_defun(),
-        opts.module_phase()
-    );
     match (opts.in_defun(), opts.module_phase(), c.final_code) {
         (_, _, None) => Err(CompileErr(
             Srcloc::start(&opts.filename()),
@@ -2557,8 +2504,6 @@ pub fn codegen(
         (_, None, Some(code)) => Ok(normal_produce_code(code)),
         (false, Some(ModulePhase::CommonPhase(_)), Some(code)) => {
             // Produce a triple of env shape, env, output code
-            eprintln!("common phase env {}", c.env);
-            eprintln!("final_env {}", c.final_env);
             Ok(SExp::Cons(
                 c.env.loc(),
                 c.env.clone(),
