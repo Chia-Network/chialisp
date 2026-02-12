@@ -17,9 +17,7 @@ use crate::jsval::{
     read_string_to_string_map, sexp_from_js_object,
 };
 use crate::objects::Program;
-use chialisp::classic::clvm::__type_compatibility__::{
-    Bytes, Stream, UnvalidatedBytesFromType,
-};
+use chialisp::classic::clvm::__type_compatibility__::{Bytes, Stream, UnvalidatedBytesFromType};
 use chialisp::classic::clvm::serialize::sexp_to_stream;
 use chialisp::classic::clvm_tools::clvmc::compile_clvm_inner;
 use chialisp::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
@@ -47,7 +45,8 @@ use lol_alloc::{FreeListAllocator, LockedAllocator};
 
 #[cfg(target_arch = "wasm32")]
 #[global_allocator]
-static ALLOCATOR: LockedAllocator<FreeListAllocator> = LockedAllocator::new(FreeListAllocator::new());
+static ALLOCATOR: LockedAllocator<FreeListAllocator> =
+    LockedAllocator::new(FreeListAllocator::new());
 struct JsRunStep {
     allocator: Allocator,
     cldbrun: CldbRun,
@@ -390,9 +389,7 @@ pub fn compose_run_function(
         _ => {
             return create_clvm_compile_failure(&CompileErr(
                 program.loc(),
-                format!(
-                    "could not find function with hash from symbols: {function_name}"
-                ),
+                format!("could not find function with hash from symbols: {function_name}"),
             ));
         }
     };
