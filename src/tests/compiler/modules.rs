@@ -795,8 +795,13 @@ fn test_module_cache_dep_changed() {
 
     // Now test original.
     source_opts.erase_written("programs/two-outputs.clsp");
+    // Ensure that we re-write hex files from source files that didn't change, upstream of another
+    // one for which cache also exists.
+    source_opts.erase_written("resources/tests/module/programs/two-outputs_F.hex");
+    // File erased.  If we can set it later, it's because compiling traversed and rewrote it.
+    assert_eq!(source_opts.get_written_file("resources/tests/module/programs/two-outputs_F.hex"), None);
 
-    test_compile_and_run_program_with_modules_and_fs(
+    let source_opts = test_compile_and_run_program_with_modules_and_fs(
         source_opts,
         filename,
         &content,
@@ -805,7 +810,10 @@ fn test_module_cache_dep_changed() {
             argument: initial_program,
             outcome: ContentEquals,
         }],
-    );
+    ).unwrap();
+
+    // The file should exist now.
+    assert_eq!(source_opts.get_written_file("resources/tests/module/programs/two-outputs_F.hex"), Some(b"ff02ffff01ff10ff05ffff010180ffff04ffff01ff10ff05ffff010180ff018080".to_vec()));
 }
 
 #[test]
