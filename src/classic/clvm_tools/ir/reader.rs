@@ -139,7 +139,7 @@ pub fn interpret_atom_value(chars: &[u8]) -> Result<IRRepr, SyntaxErr> {
     if chars.is_empty() {
         Ok(IRRepr::Null)
     } else if is_hex(chars) {
-        let mut string_bytes = if chars.len() % 2 > 0 {
+        let mut string_bytes = if !chars.len().is_multiple_of(2) {
             // Pad an odd-length hex constant from the program text
             // with a zero in the High nibble
             Bytes::new(Some(BytesFromType::Raw(vec![b'0'])))

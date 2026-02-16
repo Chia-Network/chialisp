@@ -1,4 +1,4 @@
 
 [toolchain]
-channel = "stable-2025-08-07"
+channel = "stable"
 components = [ "rustfmt", "rustc", "rust-std", "rust-analyzer", "rustc-dev" ]
