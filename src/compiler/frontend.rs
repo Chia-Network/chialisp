@@ -313,7 +313,7 @@ fn handle_assign_form(
     v: &[SExp],
     inline_hint: Option<LetFormInlineHint>,
 ) -> Result<BodyForm, CompileErr> {
-    if v.len() % 2 == 0 {
+    if v.len().is_multiple_of(2) {
         return Err(CompileErr(
             l,
             "assign form should be in pairs of pattern value followed by an expression".to_string(),
