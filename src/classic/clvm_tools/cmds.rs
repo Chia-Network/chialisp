@@ -117,6 +117,14 @@ pub trait TConversion {
 }
 
 pub fn call_tool_stdout(allocator: &mut Allocator, tool_name: &str, input_args: &[String]) {
+    let _ = call_tool_stdout_status(allocator, tool_name, input_args);
+}
+
+pub fn call_tool_stdout_status(
+    allocator: &mut Allocator,
+    tool_name: &str,
+    input_args: &[String],
+) -> i32 {
     let mut stdout_stream = Stream::new(None);
     match call_tool(&mut stdout_stream, allocator, tool_name, input_args) {
         Ok(_) => {
@@ -124,9 +132,11 @@ pub fn call_tool_stdout(allocator: &mut Allocator, tool_name: &str, input_args: 
             if s.length() > 0 {
                 println!("{}", s.decode());
             }
+            0
         }
         Err(e) => {
             eprintln!("{e}");
+            1
         }
     }
 }
@@ -176,8 +186,7 @@ pub fn call_tool(
     let args: HashMap<String, ArgumentValue> = match args_res {
         Ok(a) => a,
         Err(e) => {
-            println!("{e}");
-            return Ok(());
+            return Err(e);
         }
     };
 
@@ -245,8 +254,6 @@ impl TConversion for OpcConversion {
                 })
             })
             .map(|sexp| t(sexp, sexp_as_bin(allocator, sexp).hex()))
-            .map(Ok) // Flatten result type to Ok
-            .unwrap_or_else(|err| Ok(t(NodePtr::NIL, err))) // Original code printed error messages on stdout, ret 0 on CLVM error
     }
 }
 
@@ -287,13 +294,21 @@ impl TConversion for OpdConversion {
 }
 
 pub fn opc(args: &[String]) {
+    let _ = opc_status(args);
+}
+
+pub fn opc_status(args: &[String]) -> i32 {
     let mut allocator = Allocator::new();
-    call_tool_stdout(&mut allocator, "opc", args);
+    call_tool_stdout_status(&mut allocator, "opc", args)
 }
 
 pub fn opd(args: &[String]) {
+    let _ = opd_status(args);
+}
+
+pub fn opd_status(args: &[String]) -> i32 {
     let mut allocator = Allocator::new();
-    call_tool_stdout(&mut allocator, "opd", args);
+    call_tool_stdout_status(&mut allocator, "opd", args)
 }
 
 struct StageImport {}
