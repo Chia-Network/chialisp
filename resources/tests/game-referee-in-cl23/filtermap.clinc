@@ -4,8 +4,8 @@
         (if remaining
             (assign next (a process (list (f remaining)))
                 (if next 
-                    (c next (filtermap process (r remaining) init))
-                    (filtermap process (r remaining) init)
+                    (c next (filtermap_fun process (r remaining) init))
+                    (filtermap_fun process (r remaining) init)
                 )
             )
             init
