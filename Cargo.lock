@@ -82,9 +82,9 @@ dependencies = [
 
 [[package]]
 name = "bumpalo"
-version = "3.17.0"
+version = "3.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1628fb46dfa0b37568d12e5edd512553eccf6a22a78e8bde00bb4aed84d5bdbf"
+checksum = "5dd9dc738b7a8311c7ade152424974d8115f2cdad61e8dab8dac9f2362298510"
 
 [[package]]
 name = "cc"
@@ -135,6 +135,15 @@ name = "chia-sha2"
 version = "0.28.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2f03c71bc63599a711caad15dafca1d2a948c26b4c8a021709a338149632769"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
+name = "chia-sha2"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f06500dc809a916fa0c70f5219b8b79a598462382a4ddca91ef1a3cb32b826ce"
 dependencies = [
  "sha2",
 ]
@@ -228,14 +237,14 @@ dependencies = [
 
 [[package]]
 name = "clvmr"
-version = "0.16.2"
+version = "0.16.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf14f44f7c6b1d7972753cdd66f6afae38b117b752e6d1256b6f532dc3a0d304"
+checksum = "38e8c8c0529b627891e9f007f30af2b931260a7eee6a6e1a8f55ba7a4ad6105a"
 dependencies = [
  "bitvec",
  "bumpalo",
  "chia-bls 0.28.2",
- "chia-sha2 0.28.2",
+ "chia-sha2 0.34.0",
  "hex",
  "hex-literal",
  "k256",
