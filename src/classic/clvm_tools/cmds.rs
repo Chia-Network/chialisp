@@ -120,25 +120,41 @@ pub fn call_tool_stdout(allocator: &mut Allocator, tool_name: &str, input_args: 
     let _ = call_tool_stdout_status(allocator, tool_name, input_args);
 }
 
+pub struct CallToolCapture {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
+}
+
+pub fn call_tool_capture(allocator: &mut Allocator, tool_name: &str, input_args: &[String]) -> CallToolCapture {
+    let mut stdout_stream = Stream::new(None);
+    match call_tool(&mut stdout_stream, allocator, tool_name, input_args) {
+        Ok(_) => CallToolCapture {
+            stdout: stdout_stream.get_value().decode(),
+            stderr: String::new(),
+            exit_code: 0,
+        },
+        Err(e) => CallToolCapture {
+            stdout: stdout_stream.get_value().decode(),
+            stderr: e,
+            exit_code: 1,
+        },
+    }
+}
+
 pub fn call_tool_stdout_status(
     allocator: &mut Allocator,
     tool_name: &str,
     input_args: &[String],
 ) -> i32 {
-    let mut stdout_stream = Stream::new(None);
-    match call_tool(&mut stdout_stream, allocator, tool_name, input_args) {
-        Ok(_) => {
-            let s = stdout_stream.get_value();
-            if s.length() > 0 {
-                println!("{}", s.decode());
-            }
-            0
-        }
-        Err(e) => {
-            eprintln!("{e}");
-            1
-        }
+    let result = call_tool_capture(allocator, tool_name, input_args);
+    if !result.stdout.is_empty() {
+        println!("{}", result.stdout);
     }
+    if !result.stderr.is_empty() {
+        eprintln!("{}", result.stderr);
+    }
+    result.exit_code
 }
 
 pub fn call_tool(
