@@ -1,3 +1,0 @@
-(import std.internal.internal_file exposing *INTERNAL*)
-
-(defun use-internal-constant (X) (+ X *INTERNAL*))

@@ -1,2 +1,0 @@
-(defconst ONE 1)
-(defconst QUOTED_ONE (c 1 1))
