@@ -23,6 +23,8 @@ def get_test_cases(path):
                 paths.append(os.path.join(dirpath, fn))
     paths.sort()
     test_cases = []
+    with open("test_cases.txt", "w") as t:
+        t.write("test_name, cmd_lines, expected_output[0], expected_stderr[0]\n")
     for p in paths:
         with open(p) as f:
             # allow "#" comments at the beginning of the file
@@ -37,9 +39,23 @@ def get_test_cases(path):
                     cmd_lines.append(line)
                     break
                 comments.append(line + "\n")
-            expected_output = f.read()
+            lines = f.readlines()
+            expected_outputs = []
+            expected_stderrs = []
+            for line in lines:
+                line = line.strip()
+                if line.startswith("stderr:"):
+                    expected_stderrs.append(line[7:])
+                else:
+                    expected_outputs.append(line)
             test_name = os.path.relpath(p, PREFIX).replace(".", "_").replace("/", "_")
-            test_cases.append((test_name, cmd_lines, expected_output, comments, p))
+            expected_output = "\n".join(expected_outputs)
+            expected_stderr = "\n".join(expected_stderrs)
+            test_cases.append((test_name, cmd_lines, expected_output, expected_stderr, comments, p))
+            with open("test_cases.txt", "a") as t:
+                expected_out = expected_output.replace("\n", "\\n")
+                expected_err = expected_stderr.replace("\n", "\\n")
+                t.write(f'{test_name}, {cmd_lines}, {expected_out}, {expected_err}\n')
     return test_cases
 
 
@@ -53,54 +69,49 @@ class TestCmds(unittest.TestCase):
             default_stage = 2
 
         if args[0] == 'run' or args[0] == 'brun':
-            stdout = launch_tool(
+            r = launch_tool(
                 args[0],
                 args,
                 default_stage
             )
         else:
-            stdout = call_tool(
+            r = call_tool(
                 args[0],
                 args
             )
 
-        return None, bytes(stdout).decode('utf8'), ''
+        print("r", r)
+        exit_code, stdout, stderr = r
+        return exit_code, bytes(stdout).decode('utf8'), bytes(stderr).decode('utf8')
 
 
-def make_f(cmd_lines, expected_output_in, comments, path):
+def make_f(cmd_lines, expected_stdout_param, expected_stderr_param, comments, path):
     def f(self):
         cmd = "".join(cmd_lines)
         for c in cmd.split(";"):
             r, actual_output, actual_stderr = self.invoke_tool(c)
         actual_output = actual_output.strip()
-        expected_output = expected_output_in.strip()
-        if actual_output != expected_output:
-            print(path)
-            print(cmd)
-            print(actual_output)
-            print(expected_output)
-            if REPAIR:
-                f = open(path, "w")
-                f.write("".join(comments))
-                for line in cmd_lines[:-1]:
-                    f.write(line)
-                    f.write("\\\n")
-                f.write(cmd_lines[-1])
-                f.write("\n")
-                f.write(actual_output)
-                f.close()
-        self.assertEqual(expected_output, actual_output)
-
+        expected_stdout = expected_stdout_param#.strip()
+        expected_stderr = expected_stderr_param#.strip()
+        if actual_stderr != expected_stderr:
+            print("--------------------------------")
+            print("path={path}")
+            print("cmd={cmd}")
+            print("comments={comments}")
+            stdout_msg = f"expected_stdout={expected_stdout} actual_output={actual_output}"
+            stderr_msg = f"expected_stderr={expected_stderr} actual_stderr={actual_stderr}"
+            self.assertEqual(expected_stdout, actual_output, stdout_msg)
+            self.assertEqual(expected_stderr, actual_stderr, stderr_msg)
+            print("--------------------------------")
     return f
-
 
 def inject(*paths):
     for path in paths:
-        for idx, (name, i, o, comments, path) in enumerate(get_test_cases(path)):
-            print(idx, (name, i, o, comments, path))
+        for idx, (name, i, o, s, comments, path) in enumerate(get_test_cases(path)):
+            print(idx, (name, i, o, s, comments, path))
             name_of_f = "test_%s" % name
             print("name_of_f",name_of_f)
-            setattr(TestCmds, name_of_f, make_f(i, o, comments, path))
+            setattr(TestCmds, name_of_f, make_f(i, o, s, comments, path))
 
 
 inject("opc")

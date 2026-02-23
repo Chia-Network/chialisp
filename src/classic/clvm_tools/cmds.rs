@@ -117,7 +117,7 @@ pub trait TConversion {
 }
 
 pub fn call_tool_stdout(allocator: &mut Allocator, tool_name: &str, input_args: &[String]) {
-    let _ = call_tool_stdout_status(allocator, tool_name, input_args);
+    let _ = call_tool_stdout_stderr_status(allocator, tool_name, input_args);
 }
 
 pub struct CallToolCapture {
@@ -128,21 +128,22 @@ pub struct CallToolCapture {
 
 pub fn call_tool_capture(allocator: &mut Allocator, tool_name: &str, input_args: &[String]) -> CallToolCapture {
     let mut stdout_stream = Stream::new(None);
-    match call_tool(&mut stdout_stream, allocator, tool_name, input_args) {
+    let mut stderr_stream = Stream::new(None);
+    match call_tool(&mut stdout_stream, &mut stderr_stream, allocator, tool_name, input_args) {
         Ok(_) => CallToolCapture {
             stdout: stdout_stream.get_value().decode(),
-            stderr: String::new(),
+            stderr: stderr_stream.get_value().decode(),
             exit_code: 0,
         },
-        Err(e) => CallToolCapture {
+        Err(_e) => CallToolCapture {
             stdout: stdout_stream.get_value().decode(),
-            stderr: e,
+            stderr: stderr_stream.get_value().decode(),
             exit_code: 1,
         },
     }
 }
 
-pub fn call_tool_stdout_status(
+pub fn call_tool_stdout_stderr_status(
     allocator: &mut Allocator,
     tool_name: &str,
     input_args: &[String],
@@ -159,6 +160,7 @@ pub fn call_tool_stdout_status(
 
 pub fn call_tool(
     stream: &mut Stream,
+    _stderr: &mut Stream,
     allocator: &mut Allocator,
     tool_name: &str,
     input_args: &[String],
@@ -315,7 +317,7 @@ pub fn opc(args: &[String]) {
 
 pub fn opc_status(args: &[String]) -> i32 {
     let mut allocator = Allocator::new();
-    call_tool_stdout_status(&mut allocator, "opc", args)
+    call_tool_stdout_stderr_status(&mut allocator, "opc", args)
 }
 
 pub fn opd(args: &[String]) {
@@ -324,7 +326,7 @@ pub fn opd(args: &[String]) {
 
 pub fn opd_status(args: &[String]) -> i32 {
     let mut allocator = Allocator::new();
-    call_tool_stdout_status(&mut allocator, "opd", args)
+    call_tool_stdout_stderr_status(&mut allocator, "opd", args)
 }
 
 struct StageImport {}
@@ -355,20 +357,26 @@ impl ArgumentValueConv for OperatorsVersion {
 
 pub fn run(args: &[String]) {
     let mut s = Stream::new(None);
-    launch_tool(&mut s, args, "run", 2);
+    let mut serr = Stream::new(None);
+    launch_tool(&mut s, &mut serr, args, "run", 2);
     io::stdout()
         .write_all(s.get_value().data())
         .expect("stdout");
     io::stdout().flush().expect("stdout");
+    io::stderr().write_all(serr.get_value().data()).expect("stderr");
+    io::stderr().flush().expect("stderr");
 }
 
 pub fn brun(args: &[String]) {
     let mut s = Stream::new(None);
-    launch_tool(&mut s, args, "brun", 0);
+    let mut serr = Stream::new(None);
+    launch_tool(&mut s, &mut serr, args, "brun", 0);
     if let Err(e) = io::stdout().write_all(s.get_value().data()) {
         println!("{e}")
     }
     io::stdout().flush().expect("stdout");
+    io::stderr().write_all(serr.get_value().data()).expect("stderr");
+    io::stderr().flush().expect("stderr");
 }
 
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
@@ -938,7 +946,13 @@ fn perform_preprocessing(
     Ok(())
 }
 
-pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, default_stage: u32) {
+pub fn launch_tool(
+    stdout: &mut Stream,
+    stderr: &mut Stream,
+    args: &[String],
+    tool_name: &str,
+    default_stage: u32,
+) -> i32 {
     let mut allocator = Allocator::new();
 
     let props = TArgumentParserProps {
@@ -1111,8 +1125,8 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
     let arg_vec = args[1..].to_vec();
     let parsed_args: HashMap<String, ArgumentValue> = match parser.parse_args(&arg_vec) {
         Err(e) => {
-            stdout.write_str(&format!("FAIL: {e}\n"));
-            return;
+            stderr.write_str(&format!("FAIL: {e}\n"));
+            return 1;
         }
         Ok(pa) => pa,
     };
@@ -1120,14 +1134,14 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
     if parsed_args.contains_key("version") {
         let version = version();
         println!("{version}");
-        return;
+        return 0;
     }
 
     let parsed = match RunAndCompileInputData::new(&mut allocator, &parsed_args) {
         Ok(r) => r,
         Err(e) => {
-            stdout.write_str(&format!("FAIL: {e}\n"));
-            return;
+            stderr.write_str(&format!("FAIL: {e}\n"));
+            return 1;
         }
     };
 
@@ -1159,18 +1173,20 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
             match gather_dependencies(opts, filename, file_content) {
                 Err(e) => {
                     stdout.write_str(&format!("{}: {}\n", e.0, e.1));
+                    return 1;
                 }
                 Ok(res) => {
                     for r in res.iter() {
                         stdout.write_str(&decode_string(&r.name));
                         stdout.write_str("\n");
                     }
+                    return 0;
                 }
             }
         } else {
-            stdout.write_str("FAIL: must specify a filename\n");
+            stderr.write_str("FAIL: must specify a filename\n");
+            return 1;
         }
-        return;
     }
 
     let special_runner = run_program_for_search_paths(
@@ -1239,12 +1255,12 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
             Ok((success, output)) => {
                 stderr_output(output);
                 if !success {
-                    return;
+                    return 1;
                 }
             }
             Err(e) => {
                 stderr_output(format!("{}: {}\n", e.0, e.1));
-                return;
+                return 1;
             }
         }
     }
@@ -1260,8 +1276,9 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
                 &parsed.program.content,
             ) {
                 stdout.write_str(&format!("{}: {}", e.0, e.1));
+                return 1;
             }
-            return;
+            return 0;
         }
 
         let mut symbol_table = HashMap::new();
@@ -1283,10 +1300,11 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
                 stdout.write_str(&r.to_string());
             }
             Err(c) => {
-                stdout.write_str(&format!("{}: {}", c.0, c.1));
+                stderr.write_str(&format!("{}: {}", c.0, c.1));
+                return 1;
             }
         }
-        return;
+        return 0;
     }
 
     let mut pre_eval_f: Option<PreEval> = None;
@@ -1558,6 +1576,11 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
                 &|allocator, p| disassemble(allocator, p, disassembly_ver),
             );
         }
+    }
+    if output.starts_with("FAIL:") {
+        1
+    } else {
+        0
     }
 }
 
