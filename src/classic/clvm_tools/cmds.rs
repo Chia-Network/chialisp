@@ -126,10 +126,20 @@ pub struct CallToolCapture {
     pub exit_code: i32,
 }
 
-pub fn call_tool_capture(allocator: &mut Allocator, tool_name: &str, input_args: &[String]) -> CallToolCapture {
+pub fn call_tool_capture(
+    allocator: &mut Allocator,
+    tool_name: &str,
+    input_args: &[String],
+) -> CallToolCapture {
     let mut stdout_stream = Stream::new(None);
     let mut stderr_stream = Stream::new(None);
-    match call_tool(&mut stdout_stream, &mut stderr_stream, allocator, tool_name, input_args) {
+    match call_tool(
+        &mut stdout_stream,
+        &mut stderr_stream,
+        allocator,
+        tool_name,
+        input_args,
+    ) {
         Ok(_) => CallToolCapture {
             stdout: stdout_stream.get_value().decode(),
             stderr: stderr_stream.get_value().decode(),
@@ -363,7 +373,9 @@ pub fn run(args: &[String]) {
         .write_all(s.get_value().data())
         .expect("stdout");
     io::stdout().flush().expect("stdout");
-    io::stderr().write_all(serr.get_value().data()).expect("stderr");
+    io::stderr()
+        .write_all(serr.get_value().data())
+        .expect("stderr");
     io::stderr().flush().expect("stderr");
 }
 
@@ -375,7 +387,9 @@ pub fn brun(args: &[String]) {
         println!("{e}")
     }
     io::stdout().flush().expect("stdout");
-    io::stderr().write_all(serr.get_value().data()).expect("stderr");
+    io::stderr()
+        .write_all(serr.get_value().data())
+        .expect("stderr");
     io::stderr().flush().expect("stderr");
 }
 

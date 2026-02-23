@@ -407,7 +407,11 @@ fn start_clvm_program(
 
 #[pyfunction]
 #[pyo3(signature = (tool_name, args, default_stage=2))]
-fn launch_tool(tool_name: String, args: Vec<String>, default_stage: u32) -> PyResult<(u8, Vec<u8>, Vec<u8>)> {
+fn launch_tool(
+    tool_name: String,
+    args: Vec<String>,
+    default_stage: u32,
+) -> PyResult<(u8, Vec<u8>, Vec<u8>)> {
     let mut stdout = Stream::new(None);
     let mut stderr = Stream::new(None);
     let raw_exit = cmds::launch_tool(&mut stdout, &mut stderr, &args, &tool_name, default_stage);
@@ -424,14 +428,14 @@ fn call_tool(tool_name: String, args: Vec<String>) -> PyResult<(u8, Vec<u8>, Vec
     let mut allocator = Allocator::new();
     let mut stdout = Stream::new(None);
     let mut stderr = Stream::new(None);
-    let exit_code = match cmds::call_tool(&mut stdout, &mut stderr, &mut allocator, &tool_name, &args)
-    {
-        Ok(_) => 0,
-        Err(e) => {
-            stderr.write_str(&e);
-            1
-        }
-    };
+    let exit_code =
+        match cmds::call_tool(&mut stdout, &mut stderr, &mut allocator, &tool_name, &args) {
+            Ok(_) => 0,
+            Err(e) => {
+                stderr.write_str(&e);
+                1
+            }
+        };
     Ok((
         exit_code,
         stdout.get_value().data().clone(),
