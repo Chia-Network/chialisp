@@ -798,7 +798,10 @@ fn test_err_exit_flag_for_call_tool_capture() {
     let without_flag = call_tool_capture(
         &mut allocator,
         "opc",
-        &["opc".to_string(), "--this-option-does-not-exist".to_string()],
+        &[
+            "opc".to_string(),
+            "--this-option-does-not-exist".to_string(),
+        ],
     );
     assert_eq!(without_flag.exit_code, 0);
 
@@ -821,7 +824,10 @@ fn test_err_exit_flag_for_launch_tool() {
     let without_flag = launch_tool(
         &mut out,
         &mut err,
-        &["run".to_string(), "--this-option-does-not-exist".to_string()],
+        &[
+            "run".to_string(),
+            "--this-option-does-not-exist".to_string(),
+        ],
         "run",
         2,
     );

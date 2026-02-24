@@ -1616,7 +1616,11 @@ pub fn launch_tool(
         }
     }
     if output.starts_with("FAIL:") {
-        if err_exit { 1 } else { 0 }
+        if err_exit {
+            1
+        } else {
+            0
+        }
     } else {
         0
     }
