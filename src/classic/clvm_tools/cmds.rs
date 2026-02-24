@@ -6,6 +6,7 @@ use std::fs;
 use std::io;
 use std::io::Write;
 use std::mem::swap;
+use std::process;
 use std::rc::Rc;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -126,6 +127,10 @@ pub struct CallToolCapture {
     pub exit_code: i32,
 }
 
+fn err_exit_enabled(input_args: &[String]) -> bool {
+    input_args.iter().any(|arg| arg == "--err-exit")
+}
+
 pub fn call_tool_capture(
     allocator: &mut Allocator,
     tool_name: &str,
@@ -148,7 +153,7 @@ pub fn call_tool_capture(
         Err(_e) => CallToolCapture {
             stdout: stdout_stream.get_value().decode(),
             stderr: stderr_stream.get_value().decode(),
-            exit_code: 1,
+            exit_code: if err_exit_enabled(input_args) { 1 } else { 0 },
         },
     }
 }
@@ -200,6 +205,12 @@ pub fn call_tool(
         Argument::new()
             .set_type(Rc::new(OperatorsVersion {}))
             .set_default(ArgumentValue::ArgInt(OPERATORS_LATEST_VERSION as i64)),
+    );
+    parser.add_argument(
+        vec!["--err-exit".to_string()],
+        Argument::new()
+            .set_action(TArgOptionAction::StoreTrue)
+            .set_help("Return non-zero exit code on error".to_string()),
     );
     parser.add_argument(
         vec!["path_or_code".to_string()],
@@ -368,7 +379,7 @@ impl ArgumentValueConv for OperatorsVersion {
 pub fn run(args: &[String]) {
     let mut s = Stream::new(None);
     let mut serr = Stream::new(None);
-    launch_tool(&mut s, &mut serr, args, "run", 2);
+    let status = launch_tool(&mut s, &mut serr, args, "run", 2);
     io::stdout()
         .write_all(s.get_value().data())
         .expect("stdout");
@@ -377,12 +388,15 @@ pub fn run(args: &[String]) {
         .write_all(serr.get_value().data())
         .expect("stderr");
     io::stderr().flush().expect("stderr");
+    if status != 0 {
+        process::exit(status);
+    }
 }
 
 pub fn brun(args: &[String]) {
     let mut s = Stream::new(None);
     let mut serr = Stream::new(None);
-    launch_tool(&mut s, &mut serr, args, "brun", 0);
+    let status = launch_tool(&mut s, &mut serr, args, "brun", 0);
     if let Err(e) = io::stdout().write_all(s.get_value().data()) {
         println!("{e}")
     }
@@ -391,6 +405,9 @@ pub fn brun(args: &[String]) {
         .write_all(serr.get_value().data())
         .expect("stderr");
     io::stderr().flush().expect("stderr");
+    if status != 0 {
+        process::exit(status);
+    }
 }
 
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
@@ -968,6 +985,7 @@ pub fn launch_tool(
     default_stage: u32,
 ) -> i32 {
     let mut allocator = Allocator::new();
+    let err_exit = err_exit_enabled(args);
 
     let props = TArgumentParserProps {
         description: "Execute a clvm script.".to_string(),
@@ -1124,6 +1142,12 @@ pub fn launch_tool(
             .set_type(Rc::new(OperatorsVersion {}))
             .set_default(ArgumentValue::ArgInt(OPERATORS_LATEST_VERSION as i64)),
     );
+    parser.add_argument(
+        vec!["--err-exit".to_string()],
+        Argument::new()
+            .set_action(TArgOptionAction::StoreTrue)
+            .set_help("Return non-zero exit code on error".to_string()),
+    );
 
     if tool_name == "run" {
         parser.add_argument(
@@ -1140,7 +1164,7 @@ pub fn launch_tool(
     let parsed_args: HashMap<String, ArgumentValue> = match parser.parse_args(&arg_vec) {
         Err(e) => {
             stderr.write_str(&format!("FAIL: {e}\n"));
-            return 1;
+            return if err_exit { 1 } else { 0 };
         }
         Ok(pa) => pa,
     };
@@ -1155,7 +1179,7 @@ pub fn launch_tool(
         Ok(r) => r,
         Err(e) => {
             stderr.write_str(&format!("FAIL: {e}\n"));
-            return 1;
+            return if err_exit { 1 } else { 0 };
         }
     };
 
@@ -1187,7 +1211,7 @@ pub fn launch_tool(
             match gather_dependencies(opts, filename, file_content) {
                 Err(e) => {
                     stdout.write_str(&format!("{}: {}\n", e.0, e.1));
-                    return 1;
+                    return if err_exit { 1 } else { 0 };
                 }
                 Ok(res) => {
                     for r in res.iter() {
@@ -1199,7 +1223,7 @@ pub fn launch_tool(
             }
         } else {
             stderr.write_str("FAIL: must specify a filename\n");
-            return 1;
+            return if err_exit { 1 } else { 0 };
         }
     }
 
@@ -1269,12 +1293,12 @@ pub fn launch_tool(
             Ok((success, output)) => {
                 stderr_output(output);
                 if !success {
-                    return 1;
+                    return if err_exit { 1 } else { 0 };
                 }
             }
             Err(e) => {
                 stderr_output(format!("{}: {}\n", e.0, e.1));
-                return 1;
+                return if err_exit { 1 } else { 0 };
             }
         }
     }
@@ -1290,7 +1314,7 @@ pub fn launch_tool(
                 &parsed.program.content,
             ) {
                 stdout.write_str(&format!("{}: {}", e.0, e.1));
-                return 1;
+                return if err_exit { 1 } else { 0 };
             }
             return 0;
         }
@@ -1315,7 +1339,7 @@ pub fn launch_tool(
             }
             Err(c) => {
                 stderr.write_str(&format!("{}: {}", c.0, c.1));
-                return 1;
+                return if err_exit { 1 } else { 0 };
             }
         }
         return 0;
@@ -1592,7 +1616,7 @@ pub fn launch_tool(
         }
     }
     if output.starts_with("FAIL:") {
-        1
+        if err_exit { 1 } else { 0 }
     } else {
         0
     }
