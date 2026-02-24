@@ -16,7 +16,9 @@ use crate::classic::clvm::serialize::{sexp_from_stream, SimpleCreateCLVMObject};
 use crate::classic::clvm::sexp::{sexp_as_bin, First, NodeSel, Rest, SelectNode, ThisNode};
 use crate::classic::clvm::syntax_error::SyntaxErr;
 use crate::classic::clvm_tools::binutils;
-use crate::classic::clvm_tools::cmds::{launch_tool, OpcConversion, OpdConversion, TConversion};
+use crate::classic::clvm_tools::cmds::{
+    call_tool_capture, launch_tool, OpcConversion, OpdConversion, TConversion,
+};
 
 use crate::classic::clvm_tools::binutils::{assemble, assemble_from_ir, disassemble};
 use crate::classic::clvm_tools::ir::r#type::IRRepr;
@@ -788,6 +790,57 @@ fn test_argparse_not_present_option_2() {
     );
     let result = argparse.parse_args(&["--fail-to-provide".to_string()]);
     assert_eq!(result, Err("usage: test, [-h] [--fail-to-provide]\n\noptional arguments:\n -h, --help  Show help message\n --fail-to-provide  A help message\n\nError: fail_to_provide requires a value".to_string()));
+}
+
+#[test]
+fn test_err_exit_flag_for_call_tool_capture() {
+    let mut allocator = Allocator::new();
+    let without_flag = call_tool_capture(
+        &mut allocator,
+        "opc",
+        &["opc".to_string(), "--this-option-does-not-exist".to_string()],
+    );
+    assert_eq!(without_flag.exit_code, 0);
+
+    let with_flag = call_tool_capture(
+        &mut allocator,
+        "opc",
+        &[
+            "opc".to_string(),
+            "--err-exit".to_string(),
+            "--this-option-does-not-exist".to_string(),
+        ],
+    );
+    assert_eq!(with_flag.exit_code, 1);
+}
+
+#[test]
+fn test_err_exit_flag_for_launch_tool() {
+    let mut out = Stream::new(None);
+    let mut err = Stream::new(None);
+    let without_flag = launch_tool(
+        &mut out,
+        &mut err,
+        &["run".to_string(), "--this-option-does-not-exist".to_string()],
+        "run",
+        2,
+    );
+    assert_eq!(without_flag, 0);
+
+    let mut out = Stream::new(None);
+    let mut err = Stream::new(None);
+    let with_flag = launch_tool(
+        &mut out,
+        &mut err,
+        &[
+            "run".to_string(),
+            "--err-exit".to_string(),
+            "--this-option-does-not-exist".to_string(),
+        ],
+        "run",
+        2,
+    );
+    assert_eq!(with_flag, 1);
 }
 
 #[test]
