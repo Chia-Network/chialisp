@@ -476,7 +476,7 @@ fn resolve_namespaces_in_expr(
                 add_binding_names(&mut new_scope, &b.pattern);
             }
             Ok(Rc::new(BodyForm::Let(
-                LetFormKind::Sequential,
+                LetFormKind::Parallel,
                 Box::new(LetData {
                     bindings: new_bindings,
                     body: resolve_namespaces_in_expr(
