@@ -1,6 +1,0 @@
-(include *strict-cl-21*)
-(import std.assert exposing assert)
-
-(deftype T (A B))
-
-(export (X Y) (get_T_A (new_T X Y)))

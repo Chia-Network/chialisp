@@ -1,8 +1,0 @@
-(mod ((X : Atom) (Y : Atom)) -> Atom
-  (include *standard-cl-23*)
-  (defun plus-n ((N : Atom)) -> (Exec ((Pair Atom Unit) -> Atom))
-    (lambda ((& N) Y) (+ N Y))
-    )
-
-  (a (plus-n X) (list Y))
-  )

@@ -288,17 +288,21 @@ pub enum ConstantKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+/// Specifies a module style name with dotted namespaces such as std.compare.deep_compare .
 pub struct ImportLongName {
     pub components: Vec<Vec<u8>>,
 }
 
 #[derive(Debug, Clone)]
+/// Specifies a type of long name translation to byte string, which is currently only dotted
+/// namespace style.  When module style is added subsequently, Filename(_) will appear.
 pub enum LongNameTranslation {
     Namespace,
     Filename(String),
 }
 
 impl ImportLongName {
+    /// Given a bytewise string that may contain dots, construct an ImportLongName.
     pub fn parse(name: &[u8]) -> (bool, Self) {
         let (relative, skip_words) = if name.starts_with(b".") {
             (true, 1)
@@ -314,6 +318,7 @@ impl ImportLongName {
         (relative, ImportLongName { components })
     }
 
+    /// Render to a string of readable bytes.
     pub fn as_u8_vec(&self, filename: LongNameTranslation) -> Vec<u8> {
         let mut result_vec = vec![];
         let sep = if matches!(filename, LongNameTranslation::Filename(_)) {
@@ -333,6 +338,7 @@ impl ImportLongName {
         result_vec
     }
 
+    /// Joins the components of the target name to this name.
     pub fn combine(&self, with: &ImportLongName) -> Self {
         let mut result = self.components.clone();
         result.extend(with.components.clone());
@@ -354,12 +360,14 @@ impl ImportLongName {
         true
     }
 
+    /// Add a name that selects a specified child for a given namespace.
     pub fn with_child(&self, name: &[u8]) -> Self {
         let mut result = self.components.clone();
         result.push(name.to_vec());
         ImportLongName { components: result }
     }
 
+    /// Get the parent namespace.
     pub fn parent(&self) -> Option<Self> {
         if self.components.len() < 2 {
             return None;
@@ -375,6 +383,7 @@ impl ImportLongName {
         })
     }
 
+    /// Separate this namespace into parent and child.
     pub fn parent_and_name(&self) -> (Option<Self>, Vec<u8>) {
         if self.components.is_empty() {
             return (None, vec![]);

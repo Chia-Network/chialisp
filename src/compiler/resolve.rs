@@ -31,17 +31,21 @@ fn capture_scope(in_scope: &mut HashSet<Vec<u8>>, args: Rc<SExp>) {
     }
 }
 
-pub struct FindNamespaceLookingAtHelpers<'a> {
+struct FindNamespaceLookingAtHelpers<'a> {
     hlist: &'a [HelperForm],
     namespace: Option<&'a ImportLongName>,
     offset: usize,
 }
 
+/// An iterator which finds all the reachable helpers in a namespaced program, allowing them
+/// to be selected via outside criteria.
 pub struct TourNamespaces<'a> {
     helpers: &'a [HelperForm],
     look_stack: Vec<FindNamespaceLookingAtHelpers<'a>>,
 }
 
+/// Gives a candidate helper to match a given name in a namespace, fully specifying the source
+/// and original name.
 pub struct FoundHelper<'a> {
     pub helpers: &'a [HelperForm],
     pub namespace: Option<&'a ImportLongName>,
@@ -87,6 +91,7 @@ impl<'a> Iterator for TourNamespaces<'a> {
     }
 }
 
+/// Given a helper, rewrite its name to reflect the original source.
 fn namespace_helper(name: &ImportLongName, value: &HelperForm) -> HelperForm {
     match value {
         HelperForm::Defun(inline, dd) => HelperForm::Defun(
@@ -108,6 +113,7 @@ fn namespace_helper(name: &ImportLongName, value: &HelperForm) -> HelperForm {
     }
 }
 
+/// Produce a traversal of all reachable helpers in the program.
 pub fn tour_helpers(helpers: &[HelperForm]) -> TourNamespaces<'_> {
     TourNamespaces {
         helpers,
@@ -133,7 +139,9 @@ fn exposed_name_matches(exposed: &ModuleImportListedName, orig_name: &[u8]) -> b
     }
 }
 
-pub fn is_macro_name(name: &ImportLongName) -> bool {
+/// Macros are renamed during preprocessing, so determine whether the name given is the rename
+/// of a macro.
+fn is_macro_name(name: &ImportLongName) -> bool {
     if name.components.is_empty() {
         return false;
     }
@@ -141,6 +149,8 @@ pub fn is_macro_name(name: &ImportLongName) -> bool {
     name.components[name.components.len() - 1].starts_with(b"__chia__defmac__")
 }
 
+/// Main function which resolves a given short name to a helper retrieved from somewhere in the
+/// namespace tree, given the import directives that are active in the current namespace.
 pub fn find_helper_target(
     opts: Rc<dyn CompilerOpts>,
     helpers: &[HelperForm],
@@ -311,6 +321,7 @@ fn add_binding_names(bindings: &mut HashSet<Vec<u8>>, pattern: &BindingPattern) 
     }
 }
 
+/// Given an expression, fully resolve needed helpers from namespaces if needed.
 fn resolve_namespaces_in_expr(
     resolved_helpers: &mut BTreeMap<ImportLongName, HelperForm>,
     opts: Rc<dyn CompilerOpts>,
@@ -546,6 +557,7 @@ fn resolve_namespaces_in_expr(
     }
 }
 
+/// Given a helper, fully resolve needed imported helpers from other namespaces.
 fn resolve_namespaces_in_helper(
     resolved_helpers: &mut BTreeMap<ImportLongName, HelperForm>,
     opts: Rc<dyn CompilerOpts>,
@@ -621,6 +633,8 @@ fn resolve_namespaces_in_helper(
     }
 }
 
+/// Given a program containing namespaces and namespace references, rewrite it so that any impoted
+/// helpers from outside namespaces have fully qualified names and include them in the program.
 pub fn resolve_namespaces(
     opts: Rc<dyn CompilerOpts>,
     program: &CompileForm,

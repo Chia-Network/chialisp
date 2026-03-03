@@ -1,9 +1,0 @@
-(mod ((X : (Pair Atom Unit))) -> (Pair Atom Any)
-  (include *standard-cl-23*)
-  (deftype T (x))
-  (assign
-    x_of_t (get_T_x (new_T X))
-    lam (a (lambda (Y) (+ Y 1)) (list x_of_t))
-    (c x_of_t lam)
-    )
-  )

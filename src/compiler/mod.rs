@@ -240,12 +240,7 @@ impl<'a> CompileContextWrapper<'a> {
         symbols: &'a mut HashMap<String, String>,
         optimizer: Box<dyn Optimization>,
     ) -> Self {
-        let bcc = BasicCompileContext {
-            allocator: Allocator::new(),
-            runner,
-            symbols: HashMap::new(),
-            optimizer,
-        };
+        let bcc = BasicCompileContext::new(Allocator::new(), runner, HashMap::new(), optimizer);
         let mut wrapper = CompileContextWrapper {
             allocator,
             symbols,

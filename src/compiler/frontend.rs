@@ -752,6 +752,8 @@ impl HelperFormResult {
     }
 }
 
+/// Produce a helperform from a namespace.  This acts as a storage container for helpers that
+/// can later be resolved via module resolution.
 pub fn compile_namespace(
     opts: Rc<dyn CompilerOpts>,
     loc: Srcloc,
@@ -794,6 +796,9 @@ pub fn compile_namespace(
     })))
 }
 
+/// Add a namespace reference from an input form.  These specify namespaces to use when adding
+/// helper forms.  A namespaced program is rewritten so that every helper has a fully resolved
+/// name.
 pub fn compile_nsref(loc: Srcloc, internal: &[SExp]) -> Result<HelperForm, CompileErr> {
     if internal.len() < 2 {
         return Err(CompileErr(
@@ -868,12 +873,6 @@ pub fn compile_helperform(
                 new_helpers: vec![definition],
             }))
         } else if matched.op_name == b"defmacro" || is_defmac {
-            if is_defmac {
-                return Ok(Some(HelperFormResult {
-                    new_helpers: vec![],
-                }));
-            }
-
             let definition = compile_defmacro(
                 opts,
                 l,

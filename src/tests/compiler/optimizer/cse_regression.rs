@@ -126,21 +126,21 @@ fn test_cse_merge_regression() {
                 .set_frontend_opt(false)
                 .set_diag_flags(old_flags);
         let runner = Rc::new(DefaultProgramRunner::new());
-        let mut new_context = BasicCompileContext {
-            allocator: Allocator::new(),
-            runner: runner.clone(),
-            symbols: HashMap::new(),
-            optimizer: get_optimizer(&program_sexp.loc(), new_opts.clone()).unwrap(),
-        };
+        let mut new_context = BasicCompileContext::new(
+            Allocator::new(),
+            runner.clone(),
+            HashMap::new(),
+            get_optimizer(&program_sexp.loc(), new_opts.clone()).unwrap(),
+        );
         let new_compiled = new_opts
             .compile_program(&mut new_context, program_sexp.clone())
             .expect("should compile (new)");
-        let mut old_context = BasicCompileContext {
-            allocator: Allocator::new(),
-            runner: runner.clone(),
-            symbols: HashMap::new(),
-            optimizer: get_optimizer(&program_sexp.loc(), old_opts.clone()).unwrap(),
-        };
+        let mut old_context = BasicCompileContext::new(
+            Allocator::new(),
+            runner.clone(),
+            HashMap::new(),
+            get_optimizer(&program_sexp.loc(), old_opts.clone()).unwrap(),
+        );
         let old_compiled = old_opts
             .compile_program(&mut old_context, program_sexp)
             .expect("should compile (old)");

@@ -1,5 +1,0 @@
-(include *strict-cl-21*)
-
-(import test-data.use_internal exposing use-internal-constant)
-
-(export (X) (use-internal-constant X))

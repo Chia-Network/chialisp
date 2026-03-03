@@ -1,6 +1,0 @@
-(include *strict-cl-21*)
-(import std.assert exposing assert)
-
-(defmacro M (X) (c 1 X))
-
-(export (Z) (M Z))

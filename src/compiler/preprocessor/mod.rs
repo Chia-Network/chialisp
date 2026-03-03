@@ -1261,9 +1261,17 @@ impl Preprocessor {
         includes: &mut Vec<IncludeDesc>,
         unexpanded_body: Rc<SExp>,
     ) -> Result<Vec<Rc<SExp>>, CompileErr> {
-        let body = self
-            .expand_macros(unexpanded_body.clone())?
-            .unwrap_or_else(|| unexpanded_body.clone());
+        let mut body = unexpanded_body.clone();
+
+        loop {
+            let new_body = self.expand_macros(body.clone())?;
+            // Keep expanding until we run out of expansions.
+            if let Some(new_body) = new_body {
+                body = new_body;
+            } else {
+                break;
+            }
+        }
 
         // Support using the preprocessor to collect dependencies recursively.
         let as_list: Option<Vec<SExp>> = body

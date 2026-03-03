@@ -22,12 +22,12 @@ fn shrink_expr_from_string(s: String) -> Result<String, CompileErr> {
     let runner = Rc::new(DefaultProgramRunner::new());
     let opts = Rc::new(DefaultCompilerOpts::new(&"*program*".to_string()));
     let loc = Srcloc::start(&"*program*".to_string());
-    let mut context = BasicCompileContext {
-        allocator: Allocator::new(),
-        runner: runner.clone(),
-        symbols: HashMap::new(),
-        optimizer: get_optimizer(&loc, opts.clone()).unwrap(),
-    };
+    let mut context = BasicCompileContext::new(
+        Allocator::new(),
+        runner.clone(),
+        HashMap::new(),
+        get_optimizer(&loc, opts.clone()).unwrap(),
+    );
     let result = parse_sexp(loc.clone(), s.bytes())
         .err_into()
         .and_then(|parsed_program| {

@@ -1,4 +1,0 @@
-(include *strict-cl-21*)
-(import qualified test-data.test-type as TD)
-
-(export (X Y) (TD.get_TestType_A (TD.new_TestType X Y 1337)))

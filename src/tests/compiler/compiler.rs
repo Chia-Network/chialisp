@@ -2427,12 +2427,12 @@ fn test_handle_explicit_empty_atom() {
     ]);
     let runner = Rc::new(DefaultProgramRunner::new());
 
-    let mut context = BasicCompileContext {
-        allocator: Allocator::new(),
-        runner: runner.clone(),
-        symbols: HashMap::new(),
-        optimizer: get_optimizer(&program.loc(), opts.clone()).unwrap(),
-    };
+    let mut context = BasicCompileContext::new(
+        Allocator::new(),
+        runner.clone(),
+        HashMap::new(),
+        get_optimizer(&program.loc(), opts.clone()).unwrap(),
+    );
     let compiled = opts
         .compile_program(&mut context, program)
         .expect("should compile");
@@ -2515,12 +2515,12 @@ fn test_exhaustive_chars() {
             let dialect = KNOWN_DIALECTS["*standard-cl-23.1*"].accepted.clone();
             opts = opts.set_dialect(dialect);
 
-            let mut context = BasicCompileContext {
-                allocator: Allocator::new(),
-                runner: runner.clone(),
-                symbols: HashMap::new(),
-                optimizer: get_optimizer(&sub_qe.loc(), opts.clone()).unwrap(),
-            };
+            let mut context = BasicCompileContext::new(
+                Allocator::new(),
+                runner.clone(),
+                HashMap::new(),
+                get_optimizer(&sub_qe.loc(), opts.clone()).unwrap(),
+            );
             let compiled = opts
                 .compile_program(&mut context, make_test_program(sub_qe))
                 .expect("should compile");

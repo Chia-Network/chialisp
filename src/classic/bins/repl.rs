@@ -25,12 +25,8 @@ fn main() {
         }
     };
     let runner = Rc::new(DefaultProgramRunner::new());
-    let mut context = BasicCompileContext {
-        allocator: Allocator::new(),
-        runner: runner.clone(),
-        symbols: HashMap::new(),
-        optimizer,
-    };
+    let mut context =
+        BasicCompileContext::new(Allocator::new(), runner.clone(), HashMap::new(), optimizer);
     let stdin = io::stdin();
     let mut repl = Repl::new(opts, runner);
 

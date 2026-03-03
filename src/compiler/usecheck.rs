@@ -97,12 +97,12 @@ pub fn check_parameters_used_compileform(
         program.args.clone(),
     );
 
-    let mut context = BasicCompileContext {
-        allocator: Allocator::new(),
-        runner: runner.clone(),
-        symbols: HashMap::new(),
-        optimizer: get_optimizer(&program.loc(), opts.clone())?,
-    };
+    let mut context = BasicCompileContext::new(
+        Allocator::new(),
+        runner.clone(),
+        HashMap::new(),
+        get_optimizer(&program.loc(), opts.clone())?,
+    );
     let result = e.shrink_bodyform(
         &mut context,
         program.args.clone(),
