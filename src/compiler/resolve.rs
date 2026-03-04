@@ -213,7 +213,7 @@ pub fn find_helper_target(
                             orig_name,
                             &target_name,
                         )? {
-                            return Ok(Some(rename_args_named_helper(helper)?));
+                            return Ok(Some(helper));
                         }
                     }
                 } else {
@@ -227,7 +227,7 @@ pub fn find_helper_target(
                             orig_name,
                             &target_name,
                         )? {
-                            return Ok(Some(rename_args_named_helper(helper)?));
+                            return Ok(Some(helper));
                         }
                     }
                 }
@@ -256,7 +256,7 @@ pub fn find_helper_target(
                             orig_name,
                             &target_name,
                         )? {
-                            return Ok(Some(rename_args_named_helper(helper)?));
+                            return Ok(Some(helper));
                         }
                     }
                 }
@@ -279,7 +279,7 @@ pub fn find_helper_target(
                     orig_name,
                     &target_name,
                 )? {
-                    return Ok(Some(rename_args_named_helper(helper)?));
+                    return Ok(Some(helper));
                 }
             }
         }
