@@ -1068,7 +1068,7 @@ impl CompilerOpts for DefaultCompilerOpts {
         sexp: Rc<SExp>,
     ) -> Result<CompilerOutput, CompileErr> {
         let _int_conversion_bug = NewStyleIntConversion::new(self.dialect.int_fix);
-        let me = self.set_module_phase(None);
+        let me: Rc<dyn CompilerOpts> = Rc::new(self.clone());
         compile_pre_forms(context, me, &[sexp])
     }
 }

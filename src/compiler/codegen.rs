@@ -2545,9 +2545,6 @@ pub fn codegen(
         code_generator = codegen_(context, opts.clone(), &code_generator, f, false)?;
     }
 
-    // If stepping 23 or greater, we support no-env mode.
-    enable_nil_env_mode_for_stepping_23_or_greater(opts.clone(), &mut code_generator);
-
     if matches!(
         code_generator.module_phase,
         Some(ModulePhase::CommonPhase(true))
@@ -2609,6 +2606,9 @@ pub fn codegen(
                 // Regenerate representations of functions.
                 code_generator = codegen_(context, opts.clone(), &code_generator, h, true)?;
             }
+
+            let final_env = finalize_env(context, opts.clone(), &code_generator)?;
+            code_generator.final_env = final_env;
 
             prev_repr = this_repr;
             this_repr = code_generator.final_env.clone();
