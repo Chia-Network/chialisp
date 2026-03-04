@@ -7,7 +7,7 @@ use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 use crate::compiler::clvm::run;
 use crate::compiler::codegen::codegen;
 use crate::compiler::compiler::{do_desugar, DefaultCompilerOpts};
-use crate::compiler::comptypes::{BodyForm, CompileErr, CompileForm, CompilerOpts, DefunData, HelperForm, LetFormKind, NamespaceData};
+use crate::compiler::comptypes::{BodyForm, CompileErr, CompileForm, CompilerOpts, DefunData, HelperForm, LetFormKind};
 use crate::compiler::frontend::frontend;
 use crate::compiler::optimize::get_optimizer;
 use crate::compiler::resolve::resolve_namespaces;
@@ -39,7 +39,7 @@ fn compile_program_get_result(
 ) -> Result<Rc<SExp>, CompileErr> {
     let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new("*resolve-test*"));
     let loc = Srcloc::start("*resolve-test*");
-    let resolved = do_program_module_resolution(opts.clone(), loc.clone(), test_program).unwrap();
+    let resolved = do_program_module_resolution(opts.clone(), loc.clone(), test_program)?;
     let desugared = do_desugar(&resolved)?;
     let mut context = BasicCompileContext {
         allocator: Allocator::new(),
