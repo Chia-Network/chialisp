@@ -669,21 +669,6 @@ pub fn resolve_namespaces(
 
             let renamed_helper = namespace_helper(name, helper);
 
-            // This is ugly but working: if we have phantom type helpers, we
-            // add their individual names as well with no outputs.  This allows
-            // the type to be fully expanded each time and each helper to
-            // individally ensure that it's only emitted once.
-            let full_name = if let Some(p) = parent.as_ref() {
-                p.with_child(renamed_helper.name())
-            } else {
-                let (_, parsed) = ImportLongName::parse(renamed_helper.name());
-                parsed
-            };
-
-            if resolved_helpers.contains_key(&full_name) {
-                continue;
-            }
-
             let result = resolve_namespaces_in_helper(
                 &mut round_resolved_helpers,
                 opts.clone(),
@@ -692,7 +677,6 @@ pub fn resolve_namespaces(
                 &renamed_helper,
             )?;
 
-            resolved_helpers.remove(&full_name);
             resolved_helpers.insert(name.clone(), result.clone());
         }
         swap(&mut new_resolved_helpers, &mut round_resolved_helpers);
