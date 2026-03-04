@@ -567,12 +567,6 @@ fn resolve_namespaces_in_helper(
 ) -> Result<HelperForm, CompileErr> {
     match helper {
         HelperForm::Defnamespace(ns) => {
-            let combined_ns = if let Some(p) = parent_ns {
-                p.combine(&ns.longname)
-            } else {
-                ns.longname.clone()
-            };
-
             let mut result_helpers = Vec::new();
 
             for h in ns.helpers.iter() {
@@ -580,7 +574,7 @@ fn resolve_namespaces_in_helper(
                     resolved_helpers,
                     opts.clone(),
                     program,
-                    Some(&combined_ns),
+                    Some(&ns.longname),
                     h,
                 )?;
                 result_helpers.push(newly_created);
