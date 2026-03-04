@@ -7,7 +7,9 @@ use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 use crate::compiler::clvm::run;
 use crate::compiler::codegen::codegen;
 use crate::compiler::compiler::{do_desugar, DefaultCompilerOpts};
-use crate::compiler::comptypes::{BodyForm, CompileErr, CompileForm, CompilerOpts, DefunData, HelperForm, LetFormKind};
+use crate::compiler::comptypes::{
+    BodyForm, CompileErr, CompileForm, CompilerOpts, DefunData, HelperForm, LetFormKind,
+};
 use crate::compiler::frontend::frontend;
 use crate::compiler::optimize::get_optimizer;
 use crate::compiler::resolve::resolve_namespaces;
@@ -25,9 +27,7 @@ fn do_program_module_resolution(
     resolve_namespaces(opts.clone(), &processed.compileform())
 }
 
-fn resolve_modules(
-    test_program: &str,
-) -> Result<CompileForm, CompileErr> {
+fn resolve_modules(test_program: &str) -> Result<CompileForm, CompileErr> {
     let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new("*resolve-test*"));
     let loc = Srcloc::start("*resolve-test*");
     do_program_module_resolution(opts, loc, test_program)
@@ -94,7 +94,7 @@ fn test_resolve_with_let_star() {
 
 fn find_helper<F, R>(cf: &CompileForm, name: &str, f: F) -> Option<R>
 where
-    F: FnOnce(&DefunData) -> R
+    F: FnOnce(&DefunData) -> R,
 {
     for h in cf.helpers.iter() {
         if decode_string(h.name()) == name {
@@ -114,9 +114,7 @@ fn test_module_resolve_preserves_parallel_let() {
     let cf = resolve_modules(test_program).unwrap();
     let outcome = compile_program_get_result(test_program, "(3)").unwrap();
     assert_eq!(outcome.to_string(), "4");
-    let funbody = find_helper(&cf, "X.F", |f| {
-            f.body.clone()
-    }).unwrap();
+    let funbody = find_helper(&cf, "X.F", |f| f.body.clone()).unwrap();
     assert!(matches!(&*funbody, BodyForm::Let(LetFormKind::Parallel, _)));
 }
 
