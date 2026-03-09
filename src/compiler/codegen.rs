@@ -963,9 +963,13 @@ fn codegen_(
                     },
                 ))
             } else {
-                let cache_key = dependency_graph
-                    .as_ref()
-                    .map(|d| get_function_cache_key(compiler, d, h));
+                let cache_key = if context.funcache.is_some() {
+                    dependency_graph
+                        .as_ref()
+                        .map(|d| get_function_cache_key(compiler, d, h))
+                } else {
+                    None
+                };
 
                 if let Some(code) = cache_key.as_ref().and_then(|key| {
                     context
