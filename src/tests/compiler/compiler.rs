@@ -4,16 +4,19 @@ use std::rc::Rc;
 use clvm_rs::allocator::Allocator;
 
 use crate::classic::clvm::__type_compatibility__::bi_one;
+use crate::classic::clvm_tools::binutils::disassemble;
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 use crate::compiler::clvm::run;
 use crate::compiler::compiler::{compile_file, DefaultCompilerOpts};
 use crate::compiler::comptypes::{CompileErr, CompilerOpts};
-use crate::compiler::dialect::AcceptedDialect;
+use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
 use crate::compiler::frontend::{collect_used_names_sexp, frontend};
 use crate::compiler::rename::rename_in_cons;
 use crate::compiler::runtypes::RunFailure;
 use crate::compiler::sexp::{decode_string, enlist, parse_sexp, SExp};
 use crate::compiler::srcloc::Srcloc;
+
+use crate::tests::classic::run::do_basic_brun;
 
 const TEST_TIMEOUT: usize = 1000000;
 
@@ -43,6 +46,7 @@ fn run_string_maybe_opt(
         opts = opts.set_dialect(AcceptedDialect {
             stepping: Some(21),
             strict: true,
+            int_fix: false,
         });
     }
 
@@ -2396,6 +2400,7 @@ fn test_handle_explicit_empty_atom() {
     let opts = Rc::new(DefaultCompilerOpts::new(filename)).set_dialect(AcceptedDialect {
         stepping: Some(21),
         strict: true,
+        int_fix: false,
     });
 
     let atom = |s: &str| Rc::new(SExp::Atom(srcloc.clone(), s.as_bytes().to_vec()));
@@ -2445,4 +2450,90 @@ fn test_almost_empty_lambda_gives_error() {
     let res = run_string(&prog, &"()".to_string());
     assert!(res.is_err());
     assert!(format!("{res:?}").contains("Must provide at least arguments and body to lambda"));
+}
+
+#[test]
+fn test_exhaustive_chars() {
+    // Verify that we can create a program that gives the expected output using
+    // every byte value in the first, mid and last position of a value.
+    let mut substitute = vec![b'x', b'x', b'x'];
+
+    let srcloc = Srcloc::start("*extest*");
+    let make_test_program = |sub: Rc<SExp>| {
+        // (mod () (include *standard-cl-23.1*) (q . <sub>))
+        Rc::new(SExp::Cons(
+            srcloc.clone(),
+            Rc::new(SExp::Atom(srcloc.clone(), b"mod".to_vec())),
+            Rc::new(SExp::Cons(
+                srcloc.clone(),
+                Rc::new(SExp::Nil(srcloc.clone())),
+                Rc::new(SExp::Cons(
+                    srcloc.clone(),
+                    Rc::new(SExp::Cons(
+                        srcloc.clone(),
+                        Rc::new(SExp::Atom(srcloc.clone(), b"include".to_vec())),
+                        Rc::new(SExp::Cons(
+                            srcloc.clone(),
+                            Rc::new(SExp::Atom(srcloc.clone(), b"*standard-cl-23.1*".to_vec())),
+                            Rc::new(SExp::Nil(srcloc.clone())),
+                        )),
+                    )),
+                    Rc::new(SExp::Cons(
+                        srcloc.clone(),
+                        Rc::new(SExp::Cons(
+                            srcloc.clone(),
+                            Rc::new(SExp::Integer(srcloc.clone(), bi_one())),
+                            sub,
+                        )),
+                        Rc::new(SExp::Nil(srcloc.clone())),
+                    )),
+                )),
+            )),
+        ))
+    };
+
+    let runner = Rc::new(DefaultProgramRunner::new());
+
+    for i in 0..=2 {
+        for j in 0..=255 {
+            substitute[i] = j;
+
+            let sub_qe = Rc::new(SExp::QuotedString(srcloc.clone(), b'"', substitute.clone()));
+
+            let mut allocator = Allocator::new();
+            let mut opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new("*extest*"));
+            let dialect = KNOWN_DIALECTS["*standard-cl-23.1*"].accepted.clone();
+            opts = opts.set_dialect(dialect);
+
+            let compiled = opts
+                .compile_program(
+                    &mut allocator,
+                    runner.clone(),
+                    make_test_program(sub_qe),
+                    &mut HashMap::new(),
+                )
+                .expect("should compile");
+
+            let compiled_output = compiled.to_string();
+            let result = do_basic_brun(&vec!["brun".to_string(), compiled_output])
+                .trim()
+                .to_string();
+
+            let classic_atom = allocator.new_atom(&substitute).expect("should work");
+            let disassembled = disassemble(&mut allocator, classic_atom, None);
+            assert_eq!(result, disassembled);
+
+            substitute[i] = b'x';
+        }
+    }
+}
+
+#[test]
+fn test_odd_hex_works() {
+    let res = run_string(
+        &"(mod () (include *standard-cl-23*) (+ 1 0xf))".to_string(),
+        &"()".to_string(),
+    )
+    .expect("should work");
+    assert_eq!(res.to_string(), "16");
 }

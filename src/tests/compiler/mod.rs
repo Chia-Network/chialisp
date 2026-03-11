@@ -10,6 +10,7 @@ mod clvm;
 mod compiler;
 mod evaluate;
 mod fuzz;
+mod fuzz_assign;
 mod optimizer;
 mod preprocessor;
 mod repl;

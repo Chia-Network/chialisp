@@ -11,3 +11,5 @@ resources/tests/game-referee/*.sym
 resources/tests/game-referee/*.clvm.hex
 __pycache__
 .pytest_cache
+main.sym
+venv/

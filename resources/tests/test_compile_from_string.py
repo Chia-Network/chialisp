@@ -1,5 +1,5 @@
 import binascii
-import clvm_tools_rs
+import chialisp
 from pathlib import Path
 
 classic_code = """
@@ -24,7 +24,7 @@ expected_deinline = "ff02ffff01ff02ff02ffff04ff02ffff04ff03ffff04ffff10ff05ffff0
 classic_error = "(mod (X) (xxx X))"
 cl23_error = "(mod (X) (include *standard-cl-23*) (+ X X1))"
 
-compiled_code = clvm_tools_rs.compile(
+compiled_code = chialisp.compile(
     classic_code,
     ["."],
     True
@@ -33,14 +33,14 @@ compiled_code = clvm_tools_rs.compile(
 # be fixed.
 assert compiled_code["output"] == expected_classic
 
-compiled_code = clvm_tools_rs.compile(
+compiled_code = chialisp.compile(
     classic_code,
     ["."]
 )
 assert compiled_code == expected_classic
 
 # Verify modern compilation
-compiled_code = clvm_tools_rs.compile(
+compiled_code = chialisp.compile(
     cl23_code,
     ["."],
     True
@@ -55,7 +55,7 @@ assert compiled_code["output"] == expected_cl23
 test_path = Path(__file__).parent
 
 output_file = "simple_deinline_case_23.hex"
-compiled_code = clvm_tools_rs.compile_clvm(
+compiled_code = chialisp.compile_clvm(
     str(test_path / "simple_deinline_case_23.clsp"),
     output_file,
     ["."],
@@ -67,7 +67,7 @@ assert open(output_file).read().strip() == expected_deinline
 
 # Check dependency output
 game_referee = Path(__file__).parent / "game-referee-in-cl23"
-dependencies = clvm_tools_rs.check_dependencies(
+dependencies = chialisp.check_dependencies(
     str(game_referee / "test_reverse.clsp"),
     [str(game_referee)]
 )
@@ -76,13 +76,13 @@ assert Path(dependencies[0]) == game_referee / 'reverse.clinc'
 
 # Better error reporting
 try:
-    clvm_tools_rs.compile(classic_error, [])
+    chialisp.compile(classic_error, [])
     assert False
 except Exception as e:
     assert e.args[0] == "error can't compile (\"xxx\" 88), unknown operator compiling (\"xxx\" 88)"
 
 try:
-    clvm_tools_rs.compile(cl23_error, [])
+    chialisp.compile(cl23_error, [])
     assert False
 except Exception as e:
     assert e.args[0] == "*inline*(1):42-*inline*(1):44: Unbound use of X1 as a variable name"

@@ -23,13 +23,13 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v6
       with:
         fetch-depth: 1
 
     - name: Set up QEMU on x86_64
       id: qemu
-      uses: docker/setup-qemu-action@v2
+      uses: docker/setup-qemu-action@v3
       with:
         platforms: riscv64
 
@@ -51,13 +51,13 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v6
       with:
         fetch-depth: 1
 
     - name: Set up QEMU on x86_64
       id: qemu
-      uses: docker/setup-qemu-action@v2
+      uses: docker/setup-qemu-action@v3
       with:
         platforms: riscv64
 
@@ -71,12 +71,12 @@ jobs:
           python -m venv venv && \
           source ./venv/bin/activate && \
           pip install --upgrade pip && \
-          pip install --extra-index-url https://pypi.chia.net/simple/ maturin==1.2.3 && \
+          pip install --extra-index-url https://pypi.chia.net/simple/ maturin==1.5.0 && \
           maturin build -i python --release --strip \
           '
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v7
       with:
         name: packages
         path: ./target/wheels/

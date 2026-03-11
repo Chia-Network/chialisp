@@ -51,7 +51,7 @@ impl<'info, T> VisitedMarker<'info, T> {
     }
 }
 
-impl<'info, T> Unvisit<T> for VisitedMarker<'info, T> {
+impl<T> Unvisit<T> for VisitedMarker<'_, T> {
     fn give_back(&mut self, info: Option<Box<T>>) {
         self.info = info;
     }
@@ -66,7 +66,7 @@ impl<'info, T> Unvisit<T> for VisitedMarker<'info, T> {
 }
 
 // When dropped, the info box is handed back.
-impl<'info, T> Drop for VisitedMarker<'info, T> {
+impl<T> Drop for VisitedMarker<'_, T> {
     fn drop(&mut self) {
         let mut info = None;
         swap(&mut self.info, &mut info);

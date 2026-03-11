@@ -1,4 +1,10 @@
-# clvm_tools_rs Changelog
+# chialisp Changelog
+
+## 0.1.42
+### Fixed
+- Subtle differences with python representation of disassmebled strings.
+- Bug in CSE that would lift common subexpressions above their containing
+  forms.
 
 ## 0.1.41
 ### Changed

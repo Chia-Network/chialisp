@@ -3,7 +3,7 @@ import binascii
 import json
 import os
 from pathlib import Path
-from clvm_tools_rs import start_clvm_program, compose_run_function, compile_clvm
+from chialisp import start_clvm_program, compose_run_function, compile_clvm
 from clvm_tools.binutils import assemble
 from clvm_rs import Program
 

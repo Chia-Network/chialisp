@@ -3,7 +3,7 @@ use std::fs;
 use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr};
-use clvm_rs::reduction::EvalErr;
+use clvm_rs::error::EvalErr;
 
 use crate::classic::clvm::__type_compatibility__::Stream;
 use crate::classic::clvm::serialize::sexp_to_stream;
@@ -33,7 +33,13 @@ pub enum CompileError {
 
 impl From<EvalErr> for CompileError {
     fn from(e: EvalErr) -> Self {
-        CompileError::Classic(e.0, e.1)
+        CompileError::Classic(
+            e.node_ptr(),
+            match e {
+                EvalErr::InternalError(_, e) => e.to_string(),
+                _ => e.to_string(),
+            },
+        )
     }
 }
 
@@ -63,7 +69,7 @@ impl CompileError {
                 )
             }
             CompileError::Modern(loc, message) => {
-                format!("{}: {}", loc, message)
+                format!("{loc}: {message}")
             }
         }
     }
@@ -90,7 +96,7 @@ pub fn compile_clvm_text_maybe_opt(
     input_path: &str,
     classic_with_opts: bool,
 ) -> Result<NodePtr, CompileError> {
-    let ir_src = read_ir(text).map_err(|s| EvalErr(allocator.null(), s.to_string()))?;
+    let ir_src = read_ir(text).map_err(|s| EvalErr::InternalError(NodePtr::NIL, s.to_string()))?;
     let assembled_sexp = assemble_from_ir(allocator, Rc::new(ir_src))?;
 
     let dialect = detect_modern(allocator, assembled_sexp);
@@ -118,7 +124,7 @@ pub fn compile_clvm_text_maybe_opt(
         Ok(convert_to_clvm_rs(allocator, res)?)
     } else {
         let compile_invoke_code = run(allocator);
-        let input_sexp = allocator.new_pair(assembled_sexp, allocator.null())?;
+        let input_sexp = allocator.new_pair(assembled_sexp, NodePtr::NIL)?;
         let run_program = run_program_for_search_paths(input_path, &opts.get_search_paths(), false);
         if classic_with_opts {
             run_program.set_compiler_opts(Some(opts));

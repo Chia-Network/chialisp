@@ -1,10 +1,9 @@
 import io
 import os
-import pkg_resources
 import shlex
 import sys
 import unittest
-from clvm_tools_rs import call_tool, launch_tool
+from chialisp import call_tool, launch_tool
 
 
 # If the REPAIR environment variable is set, any tests failing due to

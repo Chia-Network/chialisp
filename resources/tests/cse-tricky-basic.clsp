@@ -1,0 +1,25 @@
+(mod (move)
+  (include *standard-cl-23*)
+  
+  (defun fhi (ha ca) (sha256 ha ca))
+  (defun nfh (ha ca) (fhi ha ca))
+  
+  (defun testf1 (ca)
+    (assign-lambda
+      fc (+ ca 1)
+      sc (* ca 11)
+      (assign-lambda
+        tango 121
+        (if (= ca 13)
+          (nfh fc sc)
+          (if (= ca 15)
+            (fhi fc sc)
+            tango
+            )
+          )
+        )
+      )
+    )
+
+  (testf1 move)
+  )

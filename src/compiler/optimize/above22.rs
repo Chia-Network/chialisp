@@ -6,6 +6,8 @@ use clvmr::allocator::Allocator;
 
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 
+#[cfg(any(test, feature = "fuzz"))]
+use crate::compiler::compiler::FUZZ_TEST_PRE_CSE_MERGE_FIX_FLAG;
 use crate::compiler::comptypes::{
     BodyForm, CompileErr, CompileForm, CompilerOpts, DefunData, HelperForm, PrimaryCodegen,
 };
@@ -25,6 +27,18 @@ use crate::compiler::StartOfCodegenOptimization;
 #[derive(Default, Clone)]
 pub struct Strategy23 {}
 
+#[cfg(any(test, feature = "fuzz"))]
+fn enable_cse_merge_fix_so_can_be_disabled_for_tests(opts: Rc<dyn CompilerOpts>) -> bool {
+    !opts
+        .diag_flags()
+        .contains(&FUZZ_TEST_PRE_CSE_MERGE_FIX_FLAG)
+}
+
+#[cfg(not(any(test, feature = "fuzz")))]
+fn enable_cse_merge_fix_so_can_be_disabled_for_tests(_opts: Rc<dyn CompilerOpts>) -> bool {
+    true
+}
+
 impl Strategy23 {
     pub fn new() -> Self {
         Strategy23 {}
@@ -36,13 +50,20 @@ impl Optimization for Strategy23 {
         &mut self,
         _allocator: &mut Allocator,
         _runner: Rc<dyn TRunProgram>,
-        _opts: Rc<dyn CompilerOpts>,
+        opts: Rc<dyn CompilerOpts>,
         mut p0: CompileForm,
     ) -> Result<CompileForm, CompileErr> {
         let mut rebuilt_helpers = Vec::new();
+        let enable_merge_disable_for_tests =
+            enable_cse_merge_fix_so_can_be_disabled_for_tests(opts.clone());
         for h in p0.helpers.iter() {
             if let HelperForm::Defun(inline, d) = h {
-                let function_body = cse_optimize_bodyform(&h.loc(), h.name(), d.body.borrow())?;
+                let function_body = cse_optimize_bodyform(
+                    &h.loc(),
+                    h.name(),
+                    enable_merge_disable_for_tests,
+                    d.body.borrow(),
+                )?;
                 // Ok we've got a body that is now a let stack.
                 let new_helper = HelperForm::Defun(
                     *inline,

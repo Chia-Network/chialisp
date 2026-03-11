@@ -1,5 +1,5 @@
 #[cfg(test)]
-use rand::distributions::Standard;
+use rand::distr::StandardUniform;
 #[cfg(test)]
 use rand::prelude::Distribution;
 #[cfg(test)]
@@ -55,7 +55,7 @@ pub fn random_atom_name<R: Rng + ?Sized>(rng: &mut R, min_size: usize) -> Vec<u8
     let mut bytevec: Vec<u8> = Vec::new();
     let mut len = 0;
     loop {
-        let mut n: u8 = rng.gen();
+        let mut n: u8 = rng.random();
         n %= 40;
         len += 1;
         if n < 26 || len < min_size {
@@ -78,11 +78,11 @@ pub fn random_sexp<R: Rng + ?Sized>(rng: &mut R, remaining: usize) -> SExp {
         random_atom(rng)
     } else {
         let loc = || Srcloc::start("*rng*");
-        let alternative: usize = rng.gen_range(0..=2);
+        let alternative: usize = rng.random_range(0..=2);
         match alternative {
             0 => {
                 // list
-                let length = rng.gen_range(1..=remaining);
+                let length = rng.random_range(1..=remaining);
                 let costs = vec![remaining / length; length];
                 let collected_list: Vec<Rc<SExp>> = costs
                     .iter()
@@ -92,7 +92,7 @@ pub fn random_sexp<R: Rng + ?Sized>(rng: &mut R, remaining: usize) -> SExp {
             }
             1 => {
                 // cons
-                let left_cost = rng.gen_range(1..=remaining);
+                let left_cost = rng.random_range(1..=remaining);
                 let right_cost = remaining - left_cost;
                 SExp::Cons(
                     loc(),
@@ -110,7 +110,7 @@ pub fn random_sexp<R: Rng + ?Sized>(rng: &mut R, remaining: usize) -> SExp {
 
 // Thanks: https://stackoverflow.com/questions/48490049/how-do-i-choose-a-random-value-from-an-enum
 #[cfg(test)]
-impl Distribution<SExp> for Standard {
+impl Distribution<SExp> for StandardUniform {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> SExp {
         random_sexp(rng, MAX_SEXP_COST)
     }
@@ -274,8 +274,18 @@ fn normalize_int(v: Vec<u8>, base: u32) -> Number {
 // left to retain their sign and hex constants are considered unsigned so _not_
 // padded.
 fn from_hex(l: Srcloc, v: &[u8]) -> SExp {
-    let mut result = vec![0; (v.len() - 2) / 2];
-    hex2bin(&v[2..], &mut result).expect("should convert from hex");
+    let mut result = vec![0; (v.len() - 1) / 2];
+    let mut hex_const;
+    // This assigns a new reference so the vec is copied only when we need
+    // to pad it.
+    let v_ref = if v.len() % 2 == 1 {
+        hex_const = v.to_vec();
+        hex_const.insert(2, b'0');
+        &hex_const[2..]
+    } else {
+        &v[2..]
+    };
+    hex2bin(v_ref, &mut result).ok();
     SExp::QuotedString(l, b'x', result)
 }
 
@@ -357,14 +367,16 @@ fn list_no_parens(a: &SExp, b: &SExp) -> String {
 }
 
 pub fn decode_string(v: &[u8]) -> String {
-    return String::from_utf8_lossy(v).as_ref().to_string();
+    String::from_utf8_lossy(v).as_ref().to_string()
 }
 
 pub fn printable(a: &[u8], quoted: bool) -> bool {
     !a.iter().any(|ch| {
-        (*ch as char).is_control()
-            || !(*ch as char).is_ascii()
-            || (!quoted && ch.is_ascii_whitespace())
+        *ch < 32
+            || *ch > 126
+            || (!quoted && ((*ch as char).is_ascii_whitespace() || *ch == b'\''))
+            || *ch == b'"'
+            || *ch == b'\\'
     })
 }
 

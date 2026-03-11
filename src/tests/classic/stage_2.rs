@@ -9,7 +9,6 @@ use crate::classic::clvm_tools::binutils::{assemble, assemble_from_ir, disassemb
 use crate::classic::clvm_tools::clvmc::compile_clvm_text;
 use crate::classic::clvm_tools::cmds::call_tool;
 use crate::classic::clvm_tools::ir::reader::read_ir;
-use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 use crate::classic::clvm_tools::stages::stage_2::compile::{
     do_com_prog, get_compile_filename, get_last_path_component, try_expand_macro_for_atom,
 };
@@ -17,9 +16,9 @@ use crate::classic::clvm_tools::stages::stage_2::helpers::{brun, evaluate, quote
 use crate::classic::clvm_tools::stages::stage_2::operators::run_program_for_search_paths;
 use crate::classic::clvm_tools::stages::stage_2::reader::{process_embed_file, read_file};
 
-use crate::compiler::comptypes::{CompileErr, CompilerOpts, PrimaryCodegen};
-use crate::compiler::dialect::AcceptedDialect;
-use crate::compiler::sexp::{decode_string, SExp};
+use crate::compiler::compiler::DefaultCompilerOpts;
+use crate::compiler::comptypes::{CompileErr, CompilerOpts, HasCompilerOptsDelegation};
+use crate::compiler::sexp::decode_string;
 use crate::compiler::srcloc::Srcloc;
 
 fn test_expand_macro(
@@ -300,90 +299,38 @@ fn test_process_embed_file_as_hex() {
     assert_eq!(name, b"test-embed-from-hex");
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct TestCompilerOptsPresentsOwnFiles {
-    filename: String,
-    files: HashMap<String, String>,
+    files: Rc<HashMap<String, String>>,
+    opts: Rc<dyn CompilerOpts>,
 }
 
 impl TestCompilerOptsPresentsOwnFiles {
     fn new(filename: String, files: HashMap<String, String>) -> Self {
-        TestCompilerOptsPresentsOwnFiles { filename, files }
+        TestCompilerOptsPresentsOwnFiles {
+            files: Rc::new(files),
+            opts: Rc::new(DefaultCompilerOpts::new(&filename)),
+        }
     }
 }
 
-impl CompilerOpts for TestCompilerOptsPresentsOwnFiles {
-    fn filename(&self) -> String {
-        self.filename.clone()
+impl HasCompilerOptsDelegation for TestCompilerOptsPresentsOwnFiles {
+    fn compiler_opts(&self) -> Rc<dyn CompilerOpts> {
+        self.opts.clone()
     }
 
-    fn code_generator(&self) -> Option<PrimaryCodegen> {
-        None
+    fn update_compiler_opts<F: FnOnce(Rc<dyn CompilerOpts>) -> Rc<dyn CompilerOpts>>(
+        &self,
+        f: F,
+    ) -> Rc<dyn CompilerOpts> {
+        let new_opts = f(self.opts.clone());
+        Rc::new(TestCompilerOptsPresentsOwnFiles {
+            opts: new_opts,
+            ..self.clone()
+        })
     }
-    fn dialect(&self) -> AcceptedDialect {
-        AcceptedDialect::default()
-    }
-    fn in_defun(&self) -> bool {
-        false
-    }
-    fn stdenv(&self) -> bool {
-        false
-    }
-    fn optimize(&self) -> bool {
-        false
-    }
-    fn frontend_opt(&self) -> bool {
-        false
-    }
-    fn frontend_check_live(&self) -> bool {
-        false
-    }
-    fn start_env(&self) -> Option<Rc<SExp>> {
-        None
-    }
-    fn disassembly_ver(&self) -> Option<usize> {
-        None
-    }
-    fn prim_map(&self) -> Rc<HashMap<Vec<u8>, Rc<SExp>>> {
-        Rc::new(HashMap::new())
-    }
-    fn get_search_paths(&self) -> Vec<String> {
-        vec![".".to_string()]
-    }
-    fn set_dialect(&self, _dialect: AcceptedDialect) -> Rc<dyn CompilerOpts> {
-        Rc::new(self.clone())
-    }
-    fn set_search_paths(&self, _dirs: &[String]) -> Rc<dyn CompilerOpts> {
-        Rc::new(self.clone())
-    }
-    fn set_in_defun(&self, _new_in_defun: bool) -> Rc<dyn CompilerOpts> {
-        Rc::new(self.clone())
-    }
-    fn set_stdenv(&self, _new_stdenv: bool) -> Rc<dyn CompilerOpts> {
-        Rc::new(self.clone())
-    }
-    fn set_optimize(&self, _opt: bool) -> Rc<dyn CompilerOpts> {
-        Rc::new(self.clone())
-    }
-    fn set_frontend_opt(&self, _opt: bool) -> Rc<dyn CompilerOpts> {
-        Rc::new(self.clone())
-    }
-    fn set_frontend_check_live(&self, _check: bool) -> Rc<dyn CompilerOpts> {
-        Rc::new(self.clone())
-    }
-    fn set_code_generator(&self, _new_compiler: PrimaryCodegen) -> Rc<dyn CompilerOpts> {
-        Rc::new(self.clone())
-    }
-    fn set_start_env(&self, _start_env: Option<Rc<SExp>>) -> Rc<dyn CompilerOpts> {
-        Rc::new(self.clone())
-    }
-    fn set_prim_map(&self, _prims: Rc<HashMap<Vec<u8>, Rc<SExp>>>) -> Rc<dyn CompilerOpts> {
-        Rc::new(self.clone())
-    }
-    fn set_disassembly_ver(&self, _ver: Option<usize>) -> Rc<dyn CompilerOpts> {
-        Rc::new(self.clone())
-    }
-    fn read_new_file(
+
+    fn override_read_new_file(
         &self,
         inc_from: String,
         filename: String,
@@ -395,18 +342,6 @@ impl CompilerOpts for TestCompilerOptsPresentsOwnFiles {
         Err(CompileErr(
             Srcloc::start(&inc_from),
             format!("could not read {filename}"),
-        ))
-    }
-    fn compile_program(
-        &self,
-        _allocator: &mut Allocator,
-        _runner: Rc<dyn TRunProgram>,
-        _sexp: Rc<SExp>,
-        _symbol_table: &mut HashMap<String, String>,
-    ) -> Result<SExp, CompileErr> {
-        Err(CompileErr(
-            Srcloc::start(&self.filename),
-            "test object only".to_string(),
         ))
     }
 }

@@ -57,6 +57,7 @@ pub struct HierarchialRunner {
     input_file: Option<String>,
     program_lines: Rc<Vec<String>>,
     prog: Rc<SExp>,
+    flags: u32,
 
     pub running: Vec<HierarchyFrame>,
 }
@@ -233,6 +234,7 @@ impl HierarchialRunner {
             program_lines,
             error: false,
             prog: prog.clone(),
+            flags: 0,
 
             running: vec![HierarchyFrame {
                 purpose: RunPurpose::Main,
@@ -258,6 +260,13 @@ impl HierarchialRunner {
         }
     }
 
+    pub fn set_flags(&mut self, flags: u32) {
+        self.flags = flags;
+        for r in self.running.iter_mut() {
+            r.run.set_flags(flags);
+        }
+    }
+
     pub fn is_ended(&self) -> bool {
         self.running.is_empty()
             || self.error
@@ -267,7 +276,7 @@ impl HierarchialRunner {
     fn push_synthetic_stack_frame(&mut self, current_env: Rc<SExp>, info: &RunStepRelevantInfo) {
         let arg_step = clvm::start_step(info.prog.clone(), info.runtime_argument_values.clone());
 
-        let arg_run = CldbRun::new(
+        let mut arg_run = CldbRun::new(
             self.runner.clone(),
             self.prim_map.clone(),
             Box::new(CldbRunEnv::new(
@@ -277,6 +286,8 @@ impl HierarchialRunner {
             )),
             arg_step,
         );
+
+        arg_run.set_flags(self.flags);
 
         let mut named_args = HashMap::new();
         get_args_from_env(
@@ -306,7 +317,7 @@ impl HierarchialRunner {
 
         // Make an empty frame to repopulate (maybe option here?).
         let step = clvm::start_step(info.prog.clone(), current_env.clone());
-        let run = CldbRun::new(
+        let mut run = CldbRun::new(
             self.runner.clone(),
             self.prim_map.clone(),
             Box::new(CldbRunEnv::new(
@@ -316,6 +327,8 @@ impl HierarchialRunner {
             )),
             step,
         );
+
+        run.set_flags(self.flags);
 
         self.running.push(HierarchyFrame {
             purpose: RunPurpose::Main,
@@ -379,6 +392,8 @@ impl HierarchialRunner {
                 )),
                 step,
             );
+
+            self.running[idx].run.set_flags(self.flags);
 
             Ok(HierarchialStepResult::ShapeChange)
         } else if let Some(info) = relevant_run_step_info(&self.symbol_table, &current_step) {

@@ -24,22 +24,22 @@ use subprocess::{Popen, PopenConfig};
 use target_lexicon::triple;
 use tempfile::NamedTempFile;
 
-use clvm_tools_rs::classic::clvm::casts::bigint_to_bytes_clvm;
-use clvm_tools_rs::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
-use clvm_tools_rs::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
+use chialisp::classic::clvm::casts::bigint_to_bytes_clvm;
+use chialisp::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
+use chialisp::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
 
-use clvm_tools_rs::compiler::clvm::{sha256tree, truthy};
-use clvm_tools_rs::compiler::comptypes::CompilerOpts;
-use clvm_tools_rs::compiler::compiler::{DefaultCompilerOpts, compile_file};
-use clvm_tools_rs::compiler::debug::build_symbol_table_mut;
-use clvm_tools_rs::compiler::debug::armjit::code::{Program, TARGET_ADDR};
-use clvm_tools_rs::compiler::debug::armjit::emu::Emu;
-use clvm_tools_rs::compiler::debug::armjit::emu_stub::{run_stub, start_stub};
-use clvm_tools_rs::compiler::debug::armjit::load::ElfLoader;
-use clvm_tools_rs::compiler::debug::armjit::memory::PagedMemory;
-use clvm_tools_rs::compiler::dialect::AcceptedDialect;
-use clvm_tools_rs::compiler::sexp::{Atom, decode_string, NodeSel, SelectNode, SExp, ThisNode, parse_sexp};
-use clvm_tools_rs::compiler::srcloc::Srcloc;
+use chialisp::compiler::clvm::{sha256tree, truthy};
+use chialisp::compiler::comptypes::CompilerOpts;
+use chialisp::compiler::compiler::{DefaultCompilerOpts, compile_file};
+use chialisp::compiler::debug::build_symbol_table_mut;
+use chialisp::compiler::debug::armjit::code::{Program, TARGET_ADDR};
+use chialisp::compiler::debug::armjit::emu::Emu;
+use chialisp::compiler::debug::armjit::emu_stub::{run_stub, start_stub};
+use chialisp::compiler::debug::armjit::load::ElfLoader;
+use chialisp::compiler::debug::armjit::memory::PagedMemory;
+use chialisp::compiler::dialect::AcceptedDialect;
+use chialisp::compiler::sexp::{Atom, decode_string, NodeSel, SelectNode, SExp, ThisNode, parse_sexp};
+use chialisp::compiler::srcloc::Srcloc;
 
 /// Translate a chialisp program to debug as an arm elf executable.
 #[derive(FromArgs)]
@@ -88,6 +88,7 @@ fn main() {
         .set_dialect(AcceptedDialect {
             stepping: Some(23),
             strict: true,
+            int_fix: true
         })
         .set_optimize(true)
         .set_search_paths(&search_paths)

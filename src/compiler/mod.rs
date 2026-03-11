@@ -267,7 +267,7 @@ impl<'a> CompileContextWrapper<'a> {
 
 /// Drop CompileContextWrapper reverts the contained objects back to the ones
 /// owned by the caller.
-impl<'a> Drop for CompileContextWrapper<'a> {
+impl Drop for CompileContextWrapper<'_> {
     fn drop(&mut self) {
         self.switch();
     }

@@ -40,7 +40,7 @@ fn smoke_test_cse_optimization() {
     let parsed = parse_sexp(srcloc.clone(), source.bytes()).expect("should parse");
     let bodyform = compile_bodyform(opts.clone(), parsed[0].clone()).expect("should compile");
     let cse_transformed =
-        cse_optimize_bodyform(&srcloc, b"test", &bodyform).expect("should cse optimize");
+        cse_optimize_bodyform(&srcloc, b"test", true, &bodyform).expect("should cse optimize");
     let re_def = r"(let ((cse_[$]_[0-9]+ ([*] ([+] 1 Q) R))) (a (i Q (com (G (- Q 1) cse_[$]_[0-9]+)) (com cse_[$]_[0-9]+)) 1))".replace("(", r"\(").replace(")",r"\)");
     let re = Regex::new(&re_def).expect("should become a regex");
     assert!(re.is_match(&cse_transformed.to_sexp().to_string()));
@@ -685,35 +685,35 @@ fn test_if_with_gate_generate_0() {
 impl GenerateTrickyCSE {
     fn new<R: Rng + ?Sized>(rng: &mut R) -> Self {
         // Generate number tree.
-        let number_of_numbers = 5 + rng.gen::<usize>() % 11;
-        let numbers_set: BTreeSet<u16> = (0..number_of_numbers).map(|_| rng.gen()).collect();
+        let number_of_numbers = 5 + (rng.random::<u64>() as usize) % 11;
+        let numbers_set: BTreeSet<u16> = (0..number_of_numbers).map(|_| rng.random()).collect();
         let numbers: Vec<u16> = numbers_set.iter().copied().collect();
         let mut number_tree = TreeNode::default();
         create_number_tree(&mut number_tree, &numbers);
 
         // Now we have a number tree.  Choose some random values and find their
         // paths in the tree.
-        let num_choices = 3 + (rng.gen::<usize>() % 7);
+        let num_choices = 3 + ((rng.random::<u64>() as usize) % 7);
         let mut choices: Vec<CheckAndRetrieve> = (0..num_choices)
             .map(|_| {
                 let retrieve = choose_in_tree(
                     &number_tree,
-                    numbers[rng.gen::<usize>() % number_of_numbers],
+                    numbers[(rng.random::<u64>() as usize) % number_of_numbers],
                 );
-                let gate = if rng.gen() {
+                let gate = if rng.random() {
                     Some(choose_in_tree(
                         &number_tree,
-                        numbers[rng.gen::<usize>() % number_of_numbers],
+                        numbers[(rng.random::<u64>() as usize) % number_of_numbers],
                     ))
                 } else {
                     None
                 };
-                let num_checks = rng.gen::<usize>() % 3;
+                let num_checks = (rng.random::<u64>() as usize) % 3;
                 let checks: Vec<TreeChoice> = (0..num_checks)
                     .map(|_| {
                         choose_in_tree(
                             &number_tree,
-                            numbers[rng.gen::<usize>() % number_of_numbers],
+                            numbers[(rng.random::<u64>() as usize) % number_of_numbers],
                         )
                     })
                     .collect();
@@ -852,11 +852,13 @@ fn test_generated_cse(n: u32) {
     let opts21 = opts.set_dialect(AcceptedDialect {
         stepping: Some(21),
         strict: true,
+        int_fix: false,
     });
     let opts23 = opts
         .set_dialect(AcceptedDialect {
             stepping: Some(23),
             strict: true,
+            int_fix: false,
         })
         .set_optimize(true);
     let mut allocator = Allocator::new();
@@ -899,7 +901,7 @@ fn test_generated_cse(n: u32) {
         .numbers
         .iter()
         .filter(|_| {
-            let check: u8 = rng.gen();
+            let check: u8 = rng.random();
             check & 15 >= 1
         })
         .copied()

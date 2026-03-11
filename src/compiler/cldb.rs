@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use clvm_rs::allocator;
 use clvm_rs::allocator::{Allocator, NodePtr};
-use clvm_rs::reduction::EvalErr;
+use clvm_rs::error::EvalErr;
 use num_bigint::ToBigInt;
 
 use crate::classic::clvm::__type_compatibility__::{
@@ -23,6 +23,8 @@ use crate::compiler::sexp::SExp;
 use crate::compiler::srcloc::Srcloc;
 use crate::util::u8_from_number;
 use crate::util::Number;
+
+pub const FAVOR_HEX: u32 = 1;
 
 fn print_atom() -> SExp {
     SExp::Atom(Srcloc::start("*print*"), b"$print$".to_vec())
@@ -109,6 +111,7 @@ pub struct CldbRun {
     in_expr: bool,
     row: usize,
     print_only: bool,
+    flags: u32,
 
     outputs_to_step: HashMap<Number, PriorResult>,
 }
@@ -128,6 +131,37 @@ fn humanize(a: Rc<SExp>) -> Rc<SExp> {
             let new_a = humanize(a.clone());
             let new_b = humanize(b.clone());
             Rc::new(SExp::Cons(l.clone(), new_a, new_b))
+        }
+        _ => a.clone(),
+    }
+}
+
+pub fn improve_presentation(a: Rc<SExp>, flags: u32) -> Rc<SExp> {
+    match a.borrow() {
+        SExp::Atom(l, av) => {
+            if av.len() > 2 && (flags & FAVOR_HEX) != 0 {
+                Rc::new(SExp::QuotedString(l.clone(), b'x', av.clone()))
+            } else {
+                a.clone()
+            }
+        }
+        SExp::Integer(l, i) => {
+            // If it has a nice string representation then show that.
+            let bytes_of_int = u8_from_number(i.clone());
+            if bytes_of_int.len() > 2 && (flags & FAVOR_HEX) != 0 {
+                Rc::new(SExp::QuotedString(l.clone(), b'x', bytes_of_int))
+            } else {
+                a.clone()
+            }
+        }
+        SExp::Cons(loc, l, r) => {
+            let new_l = improve_presentation(l.clone(), flags);
+            let new_r = improve_presentation(r.clone(), flags);
+            if Rc::as_ptr(&new_l) == Rc::as_ptr(l) && Rc::as_ptr(&new_r) == Rc::as_ptr(r) {
+                return a.clone();
+            }
+
+            Rc::new(SExp::Cons(loc.clone(), new_l, new_r))
         }
         _ => a.clone(),
     }
@@ -166,7 +200,12 @@ impl CldbRun {
             row: 0,
             outputs_to_step: HashMap::<Number, PriorResult>::new(),
             print_only: false,
+            flags: 0,
         }
+    }
+
+    pub fn set_flags(&mut self, flags: u32) {
+        self.flags = flags;
     }
 
     pub fn set_print_only(&mut self, pronly: bool) {
@@ -207,7 +246,10 @@ impl CldbRun {
                     if self.should_print_basic_output() {
                         self.to_print
                             .insert("Result-Location".to_string(), l.to_string());
-                        self.to_print.insert("Value".to_string(), x.to_string());
+                        self.to_print.insert(
+                            "Value".to_string(),
+                            improve_presentation(x.clone(), self.flags).to_string(),
+                        );
                         self.to_print
                             .insert("Row".to_string(), self.row.to_string());
 
@@ -228,12 +270,14 @@ impl CldbRun {
                 }
             }
             Ok(RunStep::Done(l, x)) => {
+                let final_value = improve_presentation(x.clone(), self.flags);
                 self.to_print
                     .insert("Final-Location".to_string(), l.to_string());
-                self.to_print.insert("Final".to_string(), x.to_string());
+                self.to_print
+                    .insert("Final".to_string(), final_value.to_string());
 
                 self.ended = true;
-                self.final_result = Some(x.clone());
+                self.final_result = Some(final_value);
                 swap(&mut self.to_print, &mut result);
                 produce_result = true;
             }
@@ -269,8 +313,8 @@ impl CldbRun {
                 if should_print_basic_output {
                     self.env.add_context(
                         sexp.borrow(),
-                        c.borrow(),
-                        Some(a.clone()),
+                        improve_presentation(c.clone(), self.flags).borrow(),
+                        Some(improve_presentation(a.clone(), self.flags)),
                         &mut self.to_print,
                     );
                     self.env.add_function(sexp, &mut self.to_print);
@@ -281,7 +325,10 @@ impl CldbRun {
             Err(RunFailure::RunExn(l, s)) => {
                 self.to_print
                     .insert("Throw-Location".to_string(), l.to_string());
-                self.to_print.insert("Throw".to_string(), s.to_string());
+                self.to_print.insert(
+                    "Throw".to_string(),
+                    improve_presentation(s.clone(), self.flags).to_string(),
+                );
 
                 swap(&mut self.to_print, &mut result);
                 self.ended = true;
@@ -562,10 +609,7 @@ fn hex_to_modern_sexp_inner(
             hex_to_modern_sexp_inner(allocator, symbol_table, srcloc, b)?,
         ))),
         _ => convert_from_clvm_rs(allocator, srcloc, program).map_err(|_| {
-            EvalErr(
-                Allocator::null(allocator),
-                "clvm_rs allocator failed".to_string(),
-            )
+            EvalErr::InternalError(NodePtr::NIL, "clvm_rs allocator failed".to_string())
         }),
     }
 }

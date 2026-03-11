@@ -106,7 +106,7 @@ fn build_default_macro_lookup(
     macros_src: &[String],
 ) -> NodePtr {
     let run = assemble(allocator, "(a (com 2 3) 1)").unwrap();
-    let mut default_macro_lookup: NodePtr = allocator.null();
+    let mut default_macro_lookup: NodePtr = NodePtr::NIL;
     for macro_src in macros_src {
         let macro_sexp = assemble(allocator, macro_src).unwrap();
         let env = allocator

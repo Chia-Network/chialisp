@@ -11,9 +11,9 @@ impl ArgumentValueConv for PathJoin {
     fn convert(&self, arg: &str) -> Result<ArgumentValue, String> {
         let mut p = PathBuf::new();
         p.push(arg);
-        return Ok(ArgumentValue::ArgString(
+        Ok(ArgumentValue::ArgString(
             None,
             p.as_path().to_str().unwrap().to_string(),
-        ));
+        ))
     }
 }

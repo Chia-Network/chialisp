@@ -1,6 +1,7 @@
 use std::borrow::Borrow;
 use std::cmp::min;
 use std::collections::{BTreeMap, HashSet};
+use std::fmt::{Debug, Error, Formatter};
 use std::rc::Rc;
 
 use crate::compiler::clvm::sha256tree;
@@ -9,6 +10,7 @@ use crate::compiler::comptypes::{
     LetFormKind,
 };
 use crate::compiler::evaluate::{is_apply_atom, is_i_atom};
+use crate::compiler::frontend::{collect_used_names_bodyform, collect_used_names_sexp};
 use crate::compiler::gensym::gensym;
 use crate::compiler::lambda::make_cons;
 use crate::compiler::optimize::bodyform::{
@@ -32,7 +34,7 @@ pub struct CSEDetectionWithoutConditions {
     pub instances: Vec<CSEInstance>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CSEDetection {
     pub hash: Vec<u8>,
     pub root: Vec<BodyformPathArc>,
@@ -41,10 +43,30 @@ pub struct CSEDetection {
     pub instances: Vec<CSEInstance>,
 }
 
+impl Debug for CSEDetection {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(
+            f,
+            "CSEDetection {{ hash: {:?}, root: {:?}, saturated: {}, subexp: {}, instances: {:?} }}",
+            self.hash,
+            self.root,
+            self.saturated,
+            self.subexp.to_sexp(),
+            self.instances
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CSECondition {
     pub path: Vec<BodyformPathArc>,
     pub canonical: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct BindingStackEntry {
+    pub binding: Rc<Binding>,
+    pub merge: bool,
 }
 
 // in a chain of conditions:
@@ -499,11 +521,83 @@ impl CSEBindingInfo {
     }
 }
 
-type CSEReplacementTargetAndBindings<'a> = Vec<&'a (Vec<BodyformPathArc>, Vec<Rc<Binding>>)>;
+fn detect_merge_into_host_assign(
+    target: &[BodyformPathArc],
+    body: &BodyForm,
+    binding: Rc<Binding>,
+) -> bool {
+    let root_expr =
+        if let Some(root_expr) = retrieve_bodyform(target, body, &|b: &BodyForm| b.clone()) {
+            root_expr
+        } else {
+            return false;
+        };
 
+    // Lifting out of a parallel let can't cause bound variables to move out
+    // of their scope.
+    if let BodyForm::Let(kind, letdata) = &root_expr {
+        // Sequential let forms are degraded to parallel let stacks earlier.
+        // Parallel let forms don't have interdependent bindings, so no need to
+        // treat them here.
+        debug_assert!(!matches!(kind, LetFormKind::Sequential));
+        if matches!(kind, LetFormKind::Parallel) {
+            return false;
+        }
+
+        let used_names: HashSet<Vec<u8>> = collect_used_names_bodyform(binding.body.borrow())
+            .iter()
+            .cloned()
+            .collect();
+
+        let mut provided_names: Vec<Vec<u8>> = Vec::new();
+        for b in letdata.bindings.iter() {
+            match b.pattern.borrow() {
+                BindingPattern::Name(name) => {
+                    provided_names.push(name.clone());
+                }
+                BindingPattern::Complex(pat) => {
+                    provided_names.append(&mut collect_used_names_sexp(pat.clone()));
+                }
+            }
+        }
+
+        // If one of the bindings defines a name used in the proposed binding,
+        // it needs merging.
+        return provided_names.iter().any(|p| used_names.contains(p));
+    }
+
+    false
+}
+
+fn merge_cse_binding(body: &BodyForm, binding: Rc<Binding>) -> BodyForm {
+    if let BodyForm::Let(kind, letdata) = body {
+        if matches!(kind, LetFormKind::Assign) {
+            let mut new_bindings = letdata.bindings.clone();
+            new_bindings.push(binding.clone());
+            return BodyForm::Let(
+                kind.clone(),
+                Box::new(LetData {
+                    bindings: new_bindings,
+                    ..*letdata.clone()
+                }),
+            );
+        }
+    }
+
+    body.clone()
+}
+
+type CSEReplacementTargetAndBindings<'a> = Vec<&'a (Vec<BodyformPathArc>, Vec<BindingStackEntry>)>;
+
+/// Given a bodyform, CSE analyze and produce a semantically equivalent bodyform
+/// that has common expressions removed into assignments to variables prefixed
+/// with cse.
+///
+/// Note: allow_merge is an option only for regression testing.
 pub fn cse_optimize_bodyform(
     loc: &Srcloc,
     name: &[u8],
+    allow_merge: bool,
     b: &BodyForm,
 ) -> Result<BodyForm, CompileErr> {
     let conditions = detect_conditions(b)?;
@@ -516,7 +610,7 @@ pub fn cse_optimize_bodyform(
         sorted_cse_detections_by_applicability(&cse_detections);
 
     let mut function_body = b.clone();
-    let mut new_binding_stack: Vec<(Vec<BodyformPathArc>, Vec<Rc<Binding>>)> = Vec::new();
+    let mut new_binding_stack: Vec<(Vec<BodyformPathArc>, Vec<BindingStackEntry>)> = Vec::new();
 
     while !detections_with_dependencies.is_empty() {
         let detections_to_apply: Vec<CSEDetection> = detections_with_dependencies
@@ -658,9 +752,27 @@ pub fn cse_optimize_bodyform(
                 .iter()
                 .rev()
                 .map(|(target_path, sites)| {
-                    let bindings: Vec<Rc<Binding>> = sites
+                    let bindings: Vec<BindingStackEntry> = sites
                         .iter()
-                        .map(|site| Rc::new(site.binding.clone()))
+                        .map(|site| {
+                            // Detect whether this binding should be merged into its own
+                            // host assign form.  That depends on whether
+                            // (1) target_path names that assign form. let* forms
+                            //   have been broken down by this point into a stack
+                            //   of let forms.
+                            // (2) it uses bindings from that assign form.
+                            let rc_binding = Rc::new(site.binding.clone());
+                            let should_merge = allow_merge
+                                && detect_merge_into_host_assign(
+                                    target_path,
+                                    &function_body,
+                                    rc_binding.clone(),
+                                );
+                            BindingStackEntry {
+                                binding: rc_binding,
+                                merge: should_merge,
+                            }
+                        })
                         .collect();
                     (target_path.clone(), bindings)
                 })
@@ -679,7 +791,7 @@ pub fn cse_optimize_bodyform(
     // replacements.
     //
     // Sort the target paths so we put in deeper paths before outer ones.
-    let mut sorted_bindings: Vec<(Vec<BodyformPathArc>, Vec<Rc<Binding>>)> = Vec::new();
+    let mut sorted_bindings: Vec<(Vec<BodyformPathArc>, Vec<BindingStackEntry>)> = Vec::new();
 
     // We'll do this by finding bindings that are not dominated and processing
     // them last.
@@ -693,10 +805,10 @@ pub fn cse_optimize_bodyform(
                 t_other != t && path_overlap_one_way(t_other, t)
             })
         });
-        let mut not_dominated_vec: Vec<(Vec<BodyformPathArc>, Vec<Rc<Binding>>)> =
+        let mut not_dominated_vec: Vec<(Vec<BodyformPathArc>, Vec<BindingStackEntry>)> =
             not_dominated.into_iter().cloned().collect();
         sorted_bindings.append(&mut not_dominated_vec);
-        let still_dominated_vec: Vec<(Vec<BodyformPathArc>, Vec<Rc<Binding>>)> =
+        let still_dominated_vec: Vec<(Vec<BodyformPathArc>, Vec<BindingStackEntry>)> =
             still_dominated.into_iter().cloned().collect();
         new_binding_stack = still_dominated_vec;
     }
@@ -709,23 +821,43 @@ pub fn cse_optimize_bodyform(
             subexp: function_body.clone(),
             context: (),
         }];
+        let (to_merge, not_to_merge): (Vec<&BindingStackEntry>, Vec<&BindingStackEntry>) =
+            binding_list.iter().partition(|b| b.merge);
+
         if let Some(res) = replace_in_bodyform(
             replacement_spec,
             &function_body,
             &|_v: &PathDetectVisitorResult<()>, b| {
+                let mut output_body = b.clone();
+
+                // If any bindings need to be merged, merge them.
+                // This will not change any code that previously compiled because
+                // the result would have previously been a compile error:
+                // Unbound use of bound_name_$_238 as a variable name.
+                // This is because rename has already happened on the let forms
+                // and caused downstream bindings to have names uniquely present
+                // in the binding patterns.
+                for b in to_merge.iter() {
+                    output_body = merge_cse_binding(&output_body, b.binding.clone());
+                }
+
+                if not_to_merge.is_empty() {
+                    return output_body;
+                }
+
                 BodyForm::Let(
                     LetFormKind::Parallel,
                     Box::new(LetData {
                         loc: function_body.loc(),
                         kw: None,
                         inline_hint: Some(LetFormInlineHint::NonInline(loc.clone())),
-                        bindings: binding_list.clone(),
-                        body: Rc::new(b.clone()),
+                        bindings: not_to_merge.iter().map(|b| b.binding.clone()).collect(),
+                        body: Rc::new(output_body.clone()),
                     }),
                 )
             },
         ) {
-            assert!(res.to_sexp() != function_body.to_sexp());
+            debug_assert!(res.to_sexp() != function_body.to_sexp());
             function_body = res;
         } else {
             return Err(CompileErr(

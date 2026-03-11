@@ -228,3 +228,22 @@ it('can uncurry an example program', async () => {
     assert.equal(uncurried[1][1].toString(), 'a06d95dae356e32a71db5ddcb42224754a02524c615c5fc35f568c2af04774e589');
     assert.equal(uncurried[1][2].toString(), cat2_curried_program);
 });
+
+// Thanks: fcoleman
+describe('Program', () => {
+    it('preserves the representation across js and hex representations', () => {
+        const puzzle1 = Program.to([0]);
+        const puzzleHash1 = Buffer.from(puzzle1.sha256tree()).toString('hex');
+
+        const puzzle2 = Program.from_hex(puzzle1.toString());
+        const puzzleHash2 = Buffer.from(puzzle2.sha256tree()).toString('hex');
+
+        const puzzle3 = Program.from_hex('ff8080');
+        const puzzleHash3 = Buffer.from(puzzle3.sha256tree()).toString('hex');
+
+        expect(puzzle1.toString()).toEqual(puzzle2.toString());
+        expect(puzzle1.toString()).toEqual(puzzle3.toString());
+        expect(puzzleHash1).toEqual(puzzleHash2);
+        expect(puzzleHash1).toEqual(puzzleHash3);
+    });
+})

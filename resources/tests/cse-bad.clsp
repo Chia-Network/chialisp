@@ -1,0 +1,12 @@
+(mod (blob)
+  (include *standard-cl-23*)
+  
+  (defun test-f (blob)
+    (assign
+      first (list 1 2 3)
+      copies (list (r first) (r first))
+      (c (r first) copies)
+      )
+    )
+  (test-f blob)
+)

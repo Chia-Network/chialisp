@@ -4,9 +4,9 @@ use std::rc::Rc;
 
 use clvmr::allocator::Allocator;
 
-use crate::classic::clvm_tools::cmds::{cldb_hierarchy, YamlElement};
+use crate::classic::clvm_tools::cmds::{cldb_hierarchy, CldbHierarchyArgs, YamlElement};
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
-use crate::compiler::cldb::{hex_to_modern_sexp, CldbNoOverride, CldbRun, CldbRunEnv};
+use crate::compiler::cldb::{hex_to_modern_sexp, CldbNoOverride, CldbRun, CldbRunEnv, FAVOR_HEX};
 use crate::compiler::clvm::{start_step, RunStep};
 use crate::compiler::compiler::{compile_file, DefaultCompilerOpts};
 use crate::compiler::comptypes::CompilerOpts;
@@ -49,6 +49,7 @@ fn run_clvm_in_cldb<V>(
     symbols: HashMap<String, String>,
     args: Rc<SExp>,
     viewer: &mut V,
+    flags: u32,
 ) -> Option<String>
 where
     V: StepOfCldbViewer,
@@ -67,6 +68,8 @@ where
         Box::new(CldbNoOverride::new_symbols(symbols)),
     );
     let mut cldbrun = CldbRun::new(runner, Rc::new(prim_map), Box::new(cldbenv), step);
+    cldbrun.set_flags(flags);
+
     let mut output: BTreeMap<String, String> = BTreeMap::new();
 
     loop {
@@ -116,6 +119,7 @@ fn test_run_clvm_in_cldb() {
             symbols,
             args,
             &mut DoesntWatchCldb {},
+            0,
         ),
         Some("120".to_string())
     );
@@ -169,6 +173,7 @@ fn compile_and_run_program_with_tree(
     input_program_text: &str,
     args_text: &str,
     search_paths: &[String],
+    flags: u32,
 ) -> Vec<BTreeMap<String, YamlElement>> {
     let mut allocator = Allocator::new();
     let runner = Rc::new(DefaultProgramRunner::new());
@@ -197,15 +202,16 @@ fn compile_and_run_program_with_tree(
     let program_lines: Rc<Vec<String>> =
         Rc::new(input_program_text.lines().map(|x| x.to_string()).collect());
 
-    cldb_hierarchy(
+    cldb_hierarchy(CldbHierarchyArgs {
         runner,
-        Rc::new(prim_map),
-        Some(input_file.to_owned()),
-        program_lines,
-        Rc::new(use_symbol_table),
-        Rc::new(program),
+        prim_map: Rc::new(prim_map),
+        input_file_name: Some(input_file.to_owned()),
+        lines: program_lines,
+        symbol_table: Rc::new(use_symbol_table),
+        prog: Rc::new(program),
         args,
-    )
+        flags,
+    })
 }
 
 fn run_program_as_tree_from_hex(
@@ -240,15 +246,16 @@ fn run_program_as_tree_from_hex(
     }
     let program_lines = Rc::new(vec![]);
     let runner = Rc::new(DefaultProgramRunner::new());
-    cldb_hierarchy(
+    cldb_hierarchy(CldbHierarchyArgs {
         runner,
-        Rc::new(prim_map),
-        Some(file_name.to_owned()),
-        program_lines,
-        Rc::new(symbol_table),
-        program,
+        prim_map: Rc::new(prim_map),
+        input_file_name: Some(file_name.to_owned()),
+        lines: program_lines,
+        symbol_table: Rc::new(symbol_table),
+        prog: program,
         args,
-    )
+        flags: 0,
+    })
 }
 
 fn compare_run_output(
@@ -275,7 +282,8 @@ fn test_cldb_hierarchy_mode() {
         .expect("test resources should exist: test_rec_1.cl");
     let input_file = "./test_rec_1.cl";
 
-    let result = compile_and_run_program_with_tree(&input_file, &input_program, "(3 2)", &vec![]);
+    let result =
+        compile_and_run_program_with_tree(&input_file, &input_program, "(3 2)", &vec![], 0);
 
     compare_run_output(result, run_entries);
 }
@@ -326,7 +334,6 @@ impl ExpectFailure {
 
 impl StepOfCldbViewer for ExpectFailure {
     fn show(&mut self, _step: &RunStep, output: Option<BTreeMap<String, String>>) -> bool {
-        eprintln!("{:?}", output);
         if let Some(o) = output {
             if let Some(_) = o.get("Failure") {
                 let did_throw = o.get("Operator") == Some(&"8".to_string());
@@ -362,7 +369,8 @@ fn test_cldb_explicit_throw() {
             program,
             HashMap::new(),
             args,
-            &mut watcher
+            &mut watcher,
+            0
         ),
         None
     );
@@ -387,7 +395,110 @@ fn test_clvm_operator_with_weird_tail() {
             HashMap::new(),
             args,
             &mut DoesntWatchCldb {},
+            0,
         ),
         Some("8".to_string())
     );
+}
+
+#[test]
+fn test_cldb_with_favor_hex() {
+    let filename = "favor_hex.clvm";
+    let loc = Srcloc::start(filename);
+    let program = "(concat (1 . 1) (1 . 1122334455))";
+    let parsed = parse_sexp(loc.clone(), program.as_bytes().iter().copied()).expect("should parse");
+    let args = Rc::new(SExp::Nil(loc));
+    let program_lines = Rc::new(vec![program.to_string()]);
+
+    assert_eq!(
+        run_clvm_in_cldb(
+            filename,
+            program_lines,
+            parsed[0].clone(),
+            HashMap::new(),
+            args,
+            &mut DoesntWatchCldb {},
+            FAVOR_HEX,
+        ),
+        Some("0x0142e576f7".to_string())
+    );
+}
+
+#[test]
+fn test_cldb_hierarchy_hex() {
+    let json_text = fs::read_to_string("resources/tests/cldb_tree/hex.json")
+        .expect("test resources should exist: test.json");
+    let run_entries: Vec<serde_json::Value> =
+        serde_json::from_str(&json_text).expect("should contain json");
+    let input_program = "(mod () (concat 1 1122334455))".to_string();
+
+    let input_file = "test_with_hex.clsp";
+
+    let result =
+        compile_and_run_program_with_tree(&input_file, &input_program, "()", &vec![], FAVOR_HEX);
+
+    compare_run_output(result, run_entries);
+}
+
+#[test]
+fn test_cldb_hierarchy_before_hex() {
+    let json_text = fs::read_to_string("resources/tests/cldb_tree/pre_hex.json")
+        .expect("test resources should exist: test.json");
+    let run_entries: Vec<serde_json::Value> =
+        serde_json::from_str(&json_text).expect("should contain json");
+    let input_program = "(mod () (concat 1 1122334455))".to_string();
+
+    let input_file = "test_with_hex.clsp";
+
+    let result = compile_and_run_program_with_tree(&input_file, &input_program, "()", &vec![], 0);
+
+    compare_run_output(result, run_entries);
+}
+
+#[test]
+fn test_cldb_operators_outside_guard() {
+    let filename = "coinid.clvm";
+    let loc = Srcloc::start(filename);
+    let inputs_outputs = [
+        (
+            "(coinid (sha256 (q . 3)) (sha256 (q . 3)) (q . 4))",
+            "()",
+            "0x9f7f12b86a583805a4442879b7b5b531469e45c7e753e5fd431058e90bf3fbec"
+        ),
+        (
+            "(modpow (q . 2) (q . 8) (q . 10))",
+            "()",
+            "6"
+        ),
+        (
+            "(% (q . 13) (q . 5))",
+            "()",
+            "3"
+        ),
+        (
+            // resources/tests/bls/modern-bls-verify-signature.clsp
+            "(2 (1 59 (1 . 0xb00ab9a8af54804b43067531d96c176710c05980fccf8eee1ae12a4fd543df929cce860273af931fe4fdbc407d495f73114ab7d17ef08922e56625daada0497582340ecde841a9e997f2f557653c21c070119662dd2efa47e2d6c5e2de00eefa) (1 . 0x86243290bbcbfd9ae75bdece7981965350208eb5e99b04d5cd24e955ada961f8c0a162dee740be7bdc6c3c0613ba2eb1) 5) (4 (1) 1))",
+            "(0x0102030405)",
+            "()"
+        )
+    ];
+
+    for (program, arg_str, expected) in inputs_outputs {
+        let parsed = parse_sexp(loc.clone(), program.bytes()).expect("should parse");
+        let args_parsed = parse_sexp(loc.clone(), arg_str.bytes()).expect("should parse");
+        let program_lines = Rc::new(vec![program.to_string()]);
+
+        assert_eq!(
+            run_clvm_in_cldb(
+                filename,
+                program_lines,
+                parsed[0].clone(),
+                HashMap::new(),
+                args_parsed[0].clone(),
+                &mut DoesntWatchCldb {},
+                FAVOR_HEX,
+            ),
+            Some(expected.to_string())
+        );
+    }
 }

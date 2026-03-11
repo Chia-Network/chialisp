@@ -1,0 +1,49 @@
+[
+    {
+        "Compute": [
+            {
+                "Function-Args": {},
+                "Function-Name": "test_with_hex.clsp",
+                "Output": {
+                    "Arguments": "(() ())",
+                    "Operator": "4",
+                    "Operator-Location": "test_with_hex.clsp(1):10-test_with_hex.clsp(1):16",
+                    "Result-Location": "test_with_hex.clsp(1):10-test_with_hex.clsp(1):16",
+                    "Function": "concat",
+                    "Row": "0",
+                    "Value": "(())"
+                }
+            }
+        ]
+    },
+    {
+        "Compute": [
+            {
+                "Function-Args": {},
+                "Function-Name": "test_with_hex.clsp",
+                "Output": {
+                    "Arguments": "(1 1122334455)",
+                    "Function-Context": "()",
+                    "Function": "concat",
+                    "Operator": "14",
+                    "Operator-Location": "test_with_hex.clsp(1):17",
+                    "Result-Location": "test_with_hex.clsp(1):10-test_with_hex.clsp(1):16",
+                    "Row": "1",
+                    "Value": "5417301751"
+                }
+            }
+        ]
+    },
+    {
+        "Compute": [
+            {
+                "Function-Args": {},
+                "Function-Name": "test_with_hex.clsp",
+                "Output": {
+                    "Final": "5417301751",
+                    "Final-Location": "test_with_hex.clsp(1):10-test_with_hex.clsp(1):16"
+                }
+            }
+        ]
+    }
+]

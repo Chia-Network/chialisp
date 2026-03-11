@@ -1,6 +1,3 @@
-use bls12_381::hash_to_curve::{ExpandMsgXmd, HashToCurve};
-use bls12_381::{G1Affine, G1Projective};
-
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
 use crate::tests::classic::run::{do_basic_brun, do_basic_run};
 
@@ -11,9 +8,8 @@ const MSG1: &[u8] = &[
 ];
 
 fn bls_map_to_g1(msg: &[u8]) -> Vec<u8> {
-    let dst: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_AUG_";
-    let point = <G1Projective as HashToCurve<ExpandMsgXmd<sha2::Sha256>>>::hash_to_curve(msg, dst);
-    let expected_output: [u8; 48] = G1Affine::from(point).to_compressed();
+    let point = chia_bls::hash_to_g1(msg);
+    let expected_output: [u8; 48] = point.to_bytes();
     expected_output.to_vec()
 }
 

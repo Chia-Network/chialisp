@@ -1,20 +1,21 @@
 use num_bigint::ToBigInt;
 
-use rand::distributions::Standard;
+use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use std::borrow::Borrow;
 use std::collections::{BTreeSet, HashMap};
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::rc::Rc;
 
 use clvmr::Allocator;
 
 use crate::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
-use crate::compiler::clvm::run;
-use crate::compiler::compiler::DefaultCompilerOpts;
-use crate::compiler::comptypes::{BodyForm, CompileErr, CompilerOpts};
+use crate::compiler::clvm::{convert_to_clvm_rs, run};
+use crate::compiler::compiler::{compile_file, DefaultCompilerOpts};
+use crate::compiler::comptypes::{BodyForm, CompileErr, CompilerOpts, HasCompilerOptsDelegation};
+use crate::compiler::dialect::detect_modern;
 use crate::compiler::fuzz::{ExprModifier, FuzzChoice, FuzzGenerator, FuzzTypeParams, Rule};
 use crate::compiler::prims::primquote;
 use crate::compiler::sexp::{enlist, extract_atom_replacement, parse_sexp, SExp};
@@ -34,6 +35,85 @@ impl From<&str> for GenError {
 
 pub fn compose_sexp(loc: Srcloc, s: &str) -> Rc<SExp> {
     parse_sexp(loc, s.bytes()).expect("should parse")[0].clone()
+}
+
+#[derive(Clone)]
+pub struct TestModuleCompilerOpts {
+    opts: Rc<dyn CompilerOpts>,
+    // Future use.
+    // written_files: Rc<RefCell<HashMap<String, Vec<u8>>>>,
+}
+
+impl TestModuleCompilerOpts {
+    pub fn new(opts: Rc<dyn CompilerOpts>) -> Self {
+        TestModuleCompilerOpts {
+            opts,
+            // Future use.
+            // written_files: Rc::new(RefCell::new(HashMap::new())),
+        }
+    }
+}
+
+impl HasCompilerOptsDelegation for TestModuleCompilerOpts {
+    fn compiler_opts(&self) -> Rc<dyn CompilerOpts> {
+        self.opts.clone()
+    }
+    fn update_compiler_opts<F: FnOnce(Rc<dyn CompilerOpts>) -> Rc<dyn CompilerOpts>>(
+        &self,
+        f: F,
+    ) -> Rc<dyn CompilerOpts> {
+        let new_opts = f(self.opts.clone());
+        Rc::new(TestModuleCompilerOpts {
+            opts: new_opts,
+            ..self.clone()
+        })
+    }
+}
+
+pub struct PerformCompileResult {
+    pub compiled: Rc<SExp>,
+    pub source_opts: TestModuleCompilerOpts,
+}
+
+pub fn perform_compile_of_file(
+    allocator: &mut Allocator,
+    runner: Rc<dyn TRunProgram>,
+    filename: &str,
+    content: &str,
+) -> Result<PerformCompileResult, CompileErr> {
+    let loc = Srcloc::start(filename);
+    let parsed: Vec<Rc<SExp>> = parse_sexp(loc.clone(), content.bytes()).expect("should parse");
+    let listed = Rc::new(enlist(loc.clone(), &parsed));
+    let nodeptr = convert_to_clvm_rs(allocator, listed.clone()).expect("should convert");
+    let dialect = detect_modern(allocator, nodeptr);
+    let orig_opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename))
+        .set_optimize(true)
+        .set_frontend_opt(false)
+        .set_dialect(dialect)
+        .set_search_paths(&["resources/tests/module".to_string()]);
+    let source_opts = TestModuleCompilerOpts::new(orig_opts);
+    let opts: Rc<dyn CompilerOpts> = Rc::new(source_opts.clone());
+    let mut symbol_table = HashMap::new();
+    let compiled = compile_file(allocator, runner.clone(), opts, &content, &mut symbol_table)?;
+    Ok(PerformCompileResult {
+        compiled: Rc::new(compiled),
+        source_opts,
+    })
+}
+
+#[test]
+fn test_perform_compile_of_file() {
+    let mut allocator = Allocator::new();
+    let runner = Rc::new(DefaultProgramRunner::new());
+    let result = perform_compile_of_file(
+        &mut allocator,
+        runner,
+        "test.clsp",
+        "(mod (A) (include *standard-cl-23*) (+ A 1))",
+    )
+    .expect("should compile");
+    assert_eq!(result.source_opts.dialect().stepping, Some(23));
+    assert_eq!(result.compiled.to_string(), "(16 2 (1 . 1))");
 }
 
 pub fn simple_run(
@@ -66,6 +146,94 @@ pub fn simple_seeded_rng(seed: u32) -> ChaCha8Rng {
     ChaCha8Rng::from_seed(seed_data)
 }
 
+pub trait PropertyTestState<FT: FuzzTypeParams> {
+    fn new_state<R: Rng>(rng: &mut R) -> Self;
+    fn examine(&self, _result: &FT::Expr) {}
+}
+pub trait PropertyTestRun {
+    fn filename(&self) -> String {
+        "test.clsp".to_string()
+    }
+    fn run_args(&self) -> String {
+        "()".to_string()
+    }
+    fn check(&self, _run_result: Rc<SExp>) {}
+}
+
+pub struct PropertyTest<FT: FuzzTypeParams> {
+    pub run_times: usize,
+    pub run_cutoff: usize,
+    pub run_expansion: usize,
+
+    pub top_node: FT::Expr,
+    pub rules: Vec<Rc<dyn Rule<FT>>>,
+}
+
+impl<FT: FuzzTypeParams> PropertyTest<FT> {
+    pub fn run<R>(&self, rng: &mut R)
+    where
+        R: Rng + Sized,
+        FT::State: PropertyTestState<FT> + PropertyTestRun,
+        FT::Error: Debug,
+        FT::Expr: ToString + Display,
+    {
+        for _ in 0..self.run_times {
+            let (mc, result) = self.make_result(rng);
+            let program_text = result.to_string();
+
+            let mut allocator = Allocator::new();
+            let runner = Rc::new(DefaultProgramRunner::new());
+            eprintln!("program_text {program_text}");
+            let compiled = perform_compile_of_file(
+                &mut allocator,
+                runner.clone(),
+                &mc.filename(),
+                &program_text,
+            )
+            .expect("should compile");
+
+            // Collect output values from compiled.
+            let srcloc = Srcloc::start("*value*");
+            let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new("*test*"));
+            let run_args = mc.run_args();
+            let arg = compose_sexp(srcloc.clone(), &run_args);
+            let run_result =
+                simple_run(opts.clone(), compiled.compiled.clone(), arg).expect("should run");
+            mc.check(run_result);
+        }
+
+        // We've checked all predicted values.
+    }
+
+    fn make_result<R>(&self, rng: &mut R) -> (FT::State, FT::Expr)
+    where
+        R: Rng + Sized,
+        FT::Error: Debug,
+        FT::State: PropertyTestState<FT>,
+    {
+        let mut idx = 0;
+        let mut fuzzgen = FuzzGenerator::new(self.top_node.clone(), &self.rules);
+        let mut mc = FT::State::new_state(rng);
+        while fuzzgen
+            .expand(&mut mc, idx > self.run_expansion, rng)
+            .expect("should expand")
+        {
+            let mut fuzzgen = FuzzGenerator::new(self.top_node.clone(), &self.rules);
+            let mut mc = FT::State::new_state(rng);
+            while fuzzgen
+                .expand(&mut mc, idx > self.run_expansion, rng)
+                .expect("should expand")
+            {
+                idx += 1;
+                mc.examine(fuzzgen.result());
+                assert!(idx < self.run_cutoff);
+            }
+        }
+
+        (mc, fuzzgen.result().clone())
+    }
+}
+
 // A generic, simple representation of expressions that allow us to evaluate
 // simple expressions.  We can add stuff that increases this capability for
 // all consumers.
@@ -93,9 +261,9 @@ impl SupportedOperators {
     }
 }
 
-impl Distribution<SupportedOperators> for Standard {
+impl Distribution<SupportedOperators> for StandardUniform {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> SupportedOperators {
-        match rng.gen::<u8>() % 3 {
+        match rng.random::<u8>() % 3 {
             0 => SupportedOperators::Plus,
             1 => SupportedOperators::Minus,
             _ => SupportedOperators::Times,

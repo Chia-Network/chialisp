@@ -790,7 +790,7 @@ fn test_repl_01() {
     );
 }
 
-const REPL_TEST_SUM: &'static str = indoc! {"
+const REPL_TEST_SUM: &str = indoc! {"
 (defun sum (Xs)
     (if Xs
       (+ (f Xs) (sum (r Xs)))

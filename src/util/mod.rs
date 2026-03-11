@@ -40,7 +40,7 @@ where
 }
 
 pub fn skip_leading(s: &str, dash: &str) -> String {
-    return s.graphemes(true).skip_while(|ch| dash == *ch).collect();
+    s.graphemes(true).skip_while(|ch| dash == *ch).collect()
 }
 
 pub fn collapse<A>(r: Result<A, A>) -> A {

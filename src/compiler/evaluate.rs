@@ -49,7 +49,7 @@ trait VisitedInfoAccess {
     fn insert_function(&mut self, name: Vec<u8>, body: Rc<BodyForm>);
 }
 
-impl<'info> VisitedInfoAccess for VisitedMarker<'info, VisitedInfo> {
+impl VisitedInfoAccess for VisitedMarker<'_, VisitedInfo> {
     fn get_function(&mut self, name: &[u8]) -> Option<Rc<BodyForm>> {
         if let Some(ref mut info) = self.info {
             info.functions.get(name).cloned()

@@ -8,7 +8,8 @@ use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::chia_dialect::{ChiaDialect, NO_UNKNOWN_OPS};
 use clvm_rs::cost::Cost;
 use clvm_rs::dialect::{Dialect, OperatorSet};
-use clvm_rs::reduction::{EvalErr, Reduction, Response};
+use clvm_rs::error::EvalErr;
+use clvm_rs::reduction::{Reduction, Response};
 use clvm_rs::run_program::run_program_with_pre_eval;
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, Stream};
@@ -22,7 +23,7 @@ use crate::classic::clvm_tools::ir::reader::read_ir;
 use crate::classic::clvm_tools::ir::writer::write_ir_to_stream;
 use crate::classic::clvm_tools::sha256tree::TreeHash;
 use crate::classic::clvm_tools::stages::stage_0::{
-    DefaultProgramRunner, RunProgramOption, TRunProgram,
+    DefaultProgramRunner, OriginalDialect, RunProgramOption, TRunProgram,
 };
 use crate::classic::clvm_tools::stages::stage_2::compile::do_com_prog_for_dialect;
 use crate::classic::clvm_tools::stages::stage_2::optimize::do_optimize;
@@ -47,7 +48,6 @@ impl AllocatorRefOrTreeHash {
 }
 
 pub struct CompilerOperatorsInternal {
-    base_dialect: Rc<dyn Dialect>,
     source_file: String,
     search_paths: Vec<String>,
     symbols_extra_info: bool,
@@ -81,7 +81,7 @@ pub fn full_path_for_filename(
                 .map(|x| x.to_owned())
                 .map(Ok)
                 .unwrap_or_else(|| {
-                    Err(EvalErr(
+                    Err(EvalErr::InternalError(
                         parent_sexp,
                         format!("could not compute absolute path for the combination of search path {path} and file name {filename} during text conversion from path_buf")
                     ))
@@ -89,7 +89,10 @@ pub fn full_path_for_filename(
         }
     }
 
-    Err(EvalErr(parent_sexp, "can't open file".to_string()))
+    Err(EvalErr::InternalError(
+        parent_sexp,
+        "can't open file".to_string(),
+    ))
 }
 
 pub struct CompilerOperators {
@@ -122,10 +125,8 @@ impl Drop for CompilerOperators {
 
 impl CompilerOperatorsInternal {
     pub fn new(source_file: &str, search_paths: Vec<String>, symbols_extra_info: bool) -> Self {
-        let base_dialect = Rc::new(ChiaDialect::new(NO_UNKNOWN_OPS));
         let base_runner = Rc::new(DefaultProgramRunner::new());
         CompilerOperatorsInternal {
-            base_dialect,
             source_file: source_file.to_owned(),
             search_paths,
             symbols_extra_info,
@@ -146,7 +147,7 @@ impl CompilerOperatorsInternal {
         if self.symbols_extra_info {
             Ok(Reduction(1, allocator.new_atom(&[1])?))
         } else {
-            Ok(Reduction(1, allocator.null()))
+            Ok(Reduction(1, NodePtr::NIL))
         }
     }
 
@@ -179,10 +180,10 @@ impl CompilerOperatorsInternal {
         let ops_version = self
             .get_operators_version()
             .unwrap_or(OPERATORS_LATEST_VERSION);
-        if ops_version == 0 {
-            OperatorSet::Default
-        } else {
-            OperatorSet::BLS
+        match ops_version {
+            0 => OperatorSet::Default,
+            1 => OperatorSet::Bls,
+            _ => OperatorSet::Keccak,
         }
     }
 
@@ -195,7 +196,7 @@ impl CompilerOperatorsInternal {
         // return EvalErr.
         let parse_file_content = |allocator: &mut Allocator, content: &String| {
             read_ir(content)
-                .map_err(|e| EvalErr(allocator.null(), e.to_string()))
+                .map_err(|e| EvalErr::InternalError(NodePtr::NIL, e.to_string()))
                 .and_then(|ir| {
                     assemble_from_ir(allocator, Rc::new(ir)).map(|ir_sexp| Reduction(1, ir_sexp))
                 })
@@ -204,8 +205,9 @@ impl CompilerOperatorsInternal {
         match allocator.sexp(sexp) {
             SExp::Pair(f, _) => match allocator.sexp(f) {
                 SExp::Atom => {
+                    let atom = allocator.atom(f);
                     let filename =
-                        Bytes::new(Some(BytesFromType::Raw(allocator.atom(f).to_vec()))).decode();
+                        Bytes::new(Some(BytesFromType::Raw(atom.as_ref().to_vec()))).decode();
                     // Use the read interface in CompilerOpts if we have one.
                     if let Some(opts) = self.get_compiler_opts() {
                         if let Ok((_, content)) =
@@ -217,17 +219,22 @@ impl CompilerOperatorsInternal {
 
                     // Use the filesystem like normal if the opts couldn't find
                     // the file.
-                    fs::read_to_string(filename)
-                        .map_err(|_| EvalErr(allocator.null(), "Failed to read file".to_string()))
+                    fs::read_to_string(&filename)
+                        .map_err(|_| {
+                            EvalErr::InternalError(
+                                NodePtr::NIL,
+                                format!("Failed to read file {filename}"),
+                            )
+                        })
                         .and_then(|content| parse_file_content(allocator, &content))
                 }
-                _ => Err(EvalErr(
-                    allocator.null(),
+                _ => Err(EvalErr::InternalError(
+                    NodePtr::NIL,
                     "filename is not an atom".to_string(),
                 )),
             },
-            _ => Err(EvalErr(
-                allocator.null(),
+            _ => Err(EvalErr::InternalError(
+                NodePtr::NIL,
                 "given a program that is an atom".to_string(),
             )),
         }
@@ -237,9 +244,9 @@ impl CompilerOperatorsInternal {
         if let SExp::Pair(filename_sexp, r) = allocator.sexp(sexp) {
             if let SExp::Pair(data, _) = allocator.sexp(r) {
                 if let SExp::Atom = allocator.sexp(filename_sexp) {
-                    let filename_buf = allocator.atom(filename_sexp);
+                    let filename_atom = allocator.atom(filename_sexp);
                     let filename_bytes =
-                        Bytes::new(Some(BytesFromType::Raw(filename_buf.to_vec())));
+                        Bytes::new(Some(BytesFromType::Raw(filename_atom.as_ref().to_vec())));
                     let ir = disassemble_to_ir_with_kw(
                         allocator,
                         data,
@@ -250,14 +257,20 @@ impl CompilerOperatorsInternal {
                     write_ir_to_stream(Rc::new(ir), &mut stream);
                     return fs::write(filename_bytes.decode(), stream.get_value().decode())
                         .map_err(|_| {
-                            EvalErr(sexp, format!("failed to write {}", filename_bytes.decode()))
+                            EvalErr::InternalError(
+                                sexp,
+                                format!("failed to write {}", filename_bytes.decode()),
+                            )
                         })
-                        .map(|_| Reduction(1, allocator.null()));
+                        .map(|_| Reduction(1, NodePtr::NIL));
                 }
             }
         }
 
-        Err(EvalErr(sexp, "failed to write data".to_string()))
+        Err(EvalErr::InternalError(
+            sexp,
+            "failed to write data".to_string(),
+        ))
     }
 
     fn get_compile_filename(&self, allocator: &mut Allocator) -> Response {
@@ -266,7 +279,7 @@ impl CompilerOperatorsInternal {
     }
 
     fn get_include_paths(&self, allocator: &mut Allocator) -> Response {
-        let mut converted_search_paths = allocator.null();
+        let mut converted_search_paths = NodePtr::NIL;
         for s in self.search_paths.iter().rev() {
             let search_path_string = allocator.new_atom(s.as_bytes())?;
             converted_search_paths =
@@ -285,8 +298,9 @@ impl CompilerOperatorsInternal {
         if let SExp::Pair(l, _r) = allocator.sexp(sexp) {
             if let SExp::Atom = allocator.sexp(l) {
                 // l most relevant in scope.
+                let atom = allocator.atom(l);
                 let filename =
-                    Bytes::new(Some(BytesFromType::Raw(allocator.atom(l).to_vec()))).decode();
+                    Bytes::new(Some(BytesFromType::Raw(atom.as_ref().to_vec()))).decode();
                 // If we have a compiler opts injected, let that handle reading
                 // files.  The name will bubble up to the _read function.
                 if self.get_compiler_opts().is_some() {
@@ -298,7 +312,7 @@ impl CompilerOperatorsInternal {
             }
         }
 
-        Err(EvalErr(sexp, "can't open file".to_string()))
+        Err(EvalErr::InternalError(sexp, "can't open file".to_string()))
     }
 
     fn get_source_file(&self, allocator: &mut Allocator) -> Result<Reduction, EvalErr> {
@@ -319,11 +333,13 @@ impl CompilerOperatorsInternal {
                 if let SExp::Pair(hash, name) = allocator.sexp(*kv) {
                     if let (SExp::Atom, SExp::Atom) = (allocator.sexp(hash), allocator.sexp(name)) {
                         // hash and name in scope.
+                        let hash_atom = allocator.atom(hash);
                         let hash_text =
-                            Bytes::new(Some(BytesFromType::Raw(allocator.atom(hash).to_vec())))
+                            Bytes::new(Some(BytesFromType::Raw(hash_atom.as_ref().to_vec())))
                                 .decode();
+                        let name_atom = allocator.atom(name);
                         let name_text =
-                            Bytes::new(Some(BytesFromType::Raw(allocator.atom(name).to_vec())))
+                            Bytes::new(Some(BytesFromType::Raw(name_atom.as_ref().to_vec())))
                                 .decode();
 
                         self.compile_outcomes.replace_with(|co| {
@@ -336,7 +352,7 @@ impl CompilerOperatorsInternal {
             }
         }
 
-        Ok(Reduction(1, allocator.null()))
+        Ok(Reduction(1, NodePtr::NIL))
     }
 
     fn get_disassembly_ver(&self) -> usize {
@@ -347,22 +363,22 @@ impl CompilerOperatorsInternal {
 }
 
 impl Dialect for CompilerOperatorsInternal {
-    fn quote_kw(&self) -> &[u8] {
-        &[1]
+    fn quote_kw(&self) -> u32 {
+        1
     }
 
-    fn apply_kw(&self) -> &[u8] {
-        &[2]
+    fn apply_kw(&self) -> u32 {
+        2
     }
 
-    fn softfork_kw(&self) -> &[u8] {
-        &[36]
+    fn softfork_kw(&self) -> u32 {
+        36
     }
 
     // The softfork operator comes with an extension argument.
     fn softfork_extension(&self, ext: u32) -> OperatorSet {
         match ext {
-            0 => OperatorSet::BLS,
+            0 => OperatorSet::Bls,
             // new extensions go here
             _ => OperatorSet::Default,
         }
@@ -376,6 +392,16 @@ impl Dialect for CompilerOperatorsInternal {
         max_cost: Cost,
         _extension: OperatorSet,
     ) -> Response {
+        let new_operators = self
+            .get_operators_version()
+            .unwrap_or(OPERATORS_LATEST_VERSION);
+        let base_dialect = if new_operators > 0 {
+            let rc: Box<dyn Dialect> = Box::new(ChiaDialect::new(NO_UNKNOWN_OPS));
+            rc
+        } else {
+            let rc: Box<dyn Dialect> = Box::new(OriginalDialect::new(NO_UNKNOWN_OPS));
+            rc
+        };
         // Ensure we have at least the bls extensions available.
         // The extension passed in above is based on the state of whether
         // we're approaching from within softfork...  As the compiler author
@@ -387,29 +413,30 @@ impl Dialect for CompilerOperatorsInternal {
         match allocator.sexp(op) {
             SExp::Atom => {
                 // use of op obvious.
-                let opbuf = allocator.atom(op);
-                if opbuf == "_read".as_bytes() {
+                let op_atom = allocator.atom(op);
+                let opbuf = op_atom.as_ref();
+                if opbuf == b"_read" {
                     self.read(allocator, sexp)
-                } else if opbuf == "_write".as_bytes() {
+                } else if opbuf == b"_write" {
                     self.write(allocator, sexp)
-                } else if opbuf == "com".as_bytes() {
+                } else if opbuf == b"com" {
                     do_com_prog_for_dialect(self.get_runner(), allocator, sexp)
-                } else if opbuf == "opt".as_bytes() {
+                } else if opbuf == b"opt" {
                     do_optimize(self.get_runner(), allocator, &self.opt_memo, sexp)
-                } else if opbuf == "_set_symbol_table".as_bytes() {
+                } else if opbuf == b"_set_symbol_table" {
                     self.set_symbol_table(allocator, sexp)
-                } else if opbuf == "_get_compile_filename".as_bytes() {
+                } else if opbuf == b"_get_compile_filename" {
                     self.get_compile_filename(allocator)
-                } else if opbuf == "_get_include_paths".as_bytes() {
+                } else if opbuf == b"_get_include_paths" {
                     self.get_include_paths(allocator)
-                } else if opbuf == "_full_path_for_name".as_bytes() {
+                } else if opbuf == b"_full_path_for_name" {
                     self.get_full_path_for_filename(allocator, sexp)
-                } else if opbuf == "_symbols_extra_info".as_bytes() {
+                } else if opbuf == b"_symbols_extra_info" {
                     self.symbols_extra_info(allocator)
-                } else if opbuf == "_get_source_file".as_bytes() {
+                } else if opbuf == b"_get_source_file" {
                     self.get_source_file(allocator)
                 } else {
-                    self.base_dialect.op(
+                    base_dialect.op(
                         allocator,
                         op,
                         sexp,
@@ -418,7 +445,7 @@ impl Dialect for CompilerOperatorsInternal {
                     )
                 }
             }
-            _ => self.base_dialect.op(
+            _ => base_dialect.op(
                 allocator,
                 op,
                 sexp,

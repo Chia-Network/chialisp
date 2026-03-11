@@ -6,14 +6,14 @@ use std::rc::Rc;
 
 use clvm_rs::allocator::Allocator;
 
-use clvm_tools_rs::compiler::compiler::DefaultCompilerOpts;
-use clvm_tools_rs::compiler::evaluate::{Evaluator, EVAL_STACK_LIMIT};
-use clvm_tools_rs::compiler::frontend::frontend;
-use clvm_tools_rs::compiler::sexp::parse_sexp;
-use clvm_tools_rs::compiler::srcloc::Srcloc;
+use chialisp::compiler::compiler::DefaultCompilerOpts;
+use chialisp::compiler::evaluate::{Evaluator, EVAL_STACK_LIMIT};
+use chialisp::compiler::frontend::frontend;
+use chialisp::compiler::sexp::parse_sexp;
+use chialisp::compiler::srcloc::Srcloc;
 
-use clvm_tools_rs::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
-use clvm_tools_rs::util::ErrInto;
+use chialisp::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
+use chialisp::util::ErrInto;
 
 fn main() {
     let mut allocator = Allocator::new();

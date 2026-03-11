@@ -1,5 +1,4 @@
 use rand::prelude::*;
-use rand::Error;
 use std::collections::HashSet;
 
 use crate::util::toposort;
@@ -142,10 +141,5 @@ impl RngCore for RngLFSR {
             let a = self.next();
             dest[dest.len() - 1] = (a & 0xff) as u8;
         }
-    }
-
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Error> {
-        self.fill_bytes(dest);
-        Ok(())
     }
 }

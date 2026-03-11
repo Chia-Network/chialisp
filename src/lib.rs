@@ -2,9 +2,6 @@
 extern crate lazy_static;
 
 #[macro_use]
-extern crate derivative;
-
-#[macro_use]
 extern crate indoc;
 
 #[macro_use]
