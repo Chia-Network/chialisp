@@ -1,0 +1,8 @@
+(defun reduce (fun i lst)
+    (if lst
+        (reduce fun (a fun (list i (f lst))) (r lst))
+        i
+    )
+)
+
+    
