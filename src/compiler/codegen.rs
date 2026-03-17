@@ -499,7 +499,7 @@ fn compute_parent_of_path(mut path: Number, mut steps: Number) -> Number {
     let mut bit = bi_one();
     let two = 2_u32.to_bigint().unwrap();
 
-    while bit < path {
+    while bit <= path {
         bit *= two.clone();
     }
 
