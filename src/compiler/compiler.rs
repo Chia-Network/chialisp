@@ -2,22 +2,26 @@ use num_bigint::ToBigInt;
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
 
 use clvm_rs::allocator::Allocator;
+use id_arena::Arena;
 use indexmap::IndexMap;
 use rue_diagnostic::Name;
 use rue_hir::{
-    BinaryOp, Database, FunctionCall, FunctionKind, FunctionSymbol, Hir, HirId, ParameterSymbol,
-    Scope, ScopeId, Symbol, SymbolId, UnaryOp,
+    BinaryOp, Database, DependencyGraph, Environment, FunctionCall, FunctionKind, FunctionSymbol,
+    Hir, HirId, Lowerer, ParameterSymbol, Scope, ScopeId, Symbol, SymbolId, UnaryOp,
 };
+use rue_lir::Lir;
+use rue_options::CompilerOptions as RueCompilerOptions;
 use rue_types::{Type, TypeId};
 
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 
-use crate::compiler::clvm::{sha256tree, NewStyleIntConversion};
+use crate::compiler::clvm::{convert_from_clvm_rs, sha256tree, NewStyleIntConversion};
 use crate::compiler::codegen::{codegen, hoist_body_let_binding, process_helper_let_bindings};
 use crate::compiler::comptypes::{
     BodyForm, CompileErr, CompileForm, CompilerOpts, HelperForm, PrimaryCodegen,
@@ -155,6 +159,130 @@ fn lookup_symbol_in_scope(db: &Database, scope: ScopeId, name: &str) -> Option<S
     None
 }
 
+fn verify_no_unresolved_hir(db: &Database, root: SymbolId) -> Result<(), String> {
+    fn visit_symbol(
+        db: &Database,
+        symbol: SymbolId,
+        visited_symbols: &mut HashSet<SymbolId>,
+        visited_hir: &mut HashSet<HirId>,
+    ) -> Result<(), String> {
+        if !visited_symbols.insert(symbol) {
+            return Ok(());
+        }
+        if let Symbol::Function(function) = db.symbol(symbol) {
+            visit_hir(db, function.body, visited_symbols, visited_hir).map_err(|ctx| {
+                format!(
+                    "unresolved hir in function `{}` ({ctx})",
+                    function
+                        .name
+                        .as_ref()
+                        .map(|n| n.text().to_string())
+                        .unwrap_or_else(|| "<unnamed>".to_string())
+                )
+            })?;
+        }
+        Ok(())
+    }
+
+    fn visit_hir(
+        db: &Database,
+        hir: HirId,
+        visited_symbols: &mut HashSet<SymbolId>,
+        visited_hir: &mut HashSet<HirId>,
+    ) -> Result<(), String> {
+        if !visited_hir.insert(hir) {
+            return Ok(());
+        }
+
+        match db.hir(hir).clone() {
+            Hir::Unresolved => Err(format!("hir id {}", hir.index())),
+            Hir::Reference(symbol) => visit_symbol(db, symbol, visited_symbols, visited_hir),
+            Hir::Pair(a, b) | Hir::Binary(_, a, b) => {
+                visit_hir(db, a, visited_symbols, visited_hir)?;
+                visit_hir(db, b, visited_symbols, visited_hir)
+            }
+            Hir::Unary(_, inner) => visit_hir(db, inner, visited_symbols, visited_hir),
+            Hir::FunctionCall(call) => {
+                visit_hir(db, call.function, visited_symbols, visited_hir)?;
+                for arg in call.args {
+                    visit_hir(db, arg, visited_symbols, visited_hir)?;
+                }
+                Ok(())
+            }
+            Hir::Block(block) => {
+                for stmt in block.statements {
+                    match stmt {
+                        rue_hir::Statement::Expr(expr) => {
+                            visit_hir(db, expr.hir, visited_symbols, visited_hir)?
+                        }
+                        rue_hir::Statement::If(if_stmt) => {
+                            visit_hir(db, if_stmt.condition, visited_symbols, visited_hir)?;
+                            visit_hir(db, if_stmt.then, visited_symbols, visited_hir)?;
+                        }
+                        rue_hir::Statement::Return(h) => {
+                            visit_hir(db, h, visited_symbols, visited_hir)?
+                        }
+                        rue_hir::Statement::Assert(h, _)
+                        | rue_hir::Statement::Debug(h, _)
+                        | rue_hir::Statement::Raise(Some(h), _) => {
+                            visit_hir(db, h, visited_symbols, visited_hir)?
+                        }
+                        rue_hir::Statement::Raise(None, _) | rue_hir::Statement::Let(_) => {}
+                    }
+                }
+                if let Some(body) = block.body {
+                    visit_hir(db, body, visited_symbols, visited_hir)?;
+                }
+                Ok(())
+            }
+            Hir::If(a, b, c, _) | Hir::CoinId(a, b, c) | Hir::Modpow(a, b, c) => {
+                visit_hir(db, a, visited_symbols, visited_hir)?;
+                visit_hir(db, b, visited_symbols, visited_hir)?;
+                visit_hir(db, c, visited_symbols, visited_hir)
+            }
+            Hir::Substr(a, b, c) => {
+                visit_hir(db, a, visited_symbols, visited_hir)?;
+                visit_hir(db, b, visited_symbols, visited_hir)?;
+                if let Some(c) = c {
+                    visit_hir(db, c, visited_symbols, visited_hir)?;
+                }
+                Ok(())
+            }
+            Hir::G1Map(a, b) | Hir::G2Map(a, b) => {
+                visit_hir(db, a, visited_symbols, visited_hir)?;
+                if let Some(b) = b {
+                    visit_hir(db, b, visited_symbols, visited_hir)?;
+                }
+                Ok(())
+            }
+            Hir::BlsPairingIdentity(args) | Hir::BlsVerify(_, args) => {
+                for arg in args {
+                    visit_hir(db, arg, visited_symbols, visited_hir)?;
+                }
+                Ok(())
+            }
+            Hir::Secp256K1Verify(a, b, c) | Hir::Secp256R1Verify(a, b, c) => {
+                visit_hir(db, a, visited_symbols, visited_hir)?;
+                visit_hir(db, b, visited_symbols, visited_hir)?;
+                visit_hir(db, c, visited_symbols, visited_hir)
+            }
+            Hir::ClvmOp(_, args) => visit_hir(db, args, visited_symbols, visited_hir),
+            Hir::Lambda(symbol) => visit_symbol(db, symbol, visited_symbols, visited_hir),
+            Hir::String(_)
+            | Hir::Nil
+            | Hir::Int(_)
+            | Hir::Bytes(_)
+            | Hir::Bool(_)
+            | Hir::InfinityG1
+            | Hir::InfinityG2 => Ok(()),
+        }
+    }
+
+    let mut visited_symbols = HashSet::new();
+    let mut visited_hir = HashSet::new();
+    visit_symbol(db, root, &mut visited_symbols, &mut visited_hir)
+}
+
 fn intern_sexp_hir(db: &mut Database, s: &SExp) -> HirId {
     match s {
         SExp::Nil(_) => db.alloc_hir(Hir::Nil),
@@ -180,21 +308,15 @@ fn intern_expr_hir(db: &mut Database, scope: ScopeId, e: &BodyForm) -> Result<Hi
         BodyForm::Value(SExp::Atom(l, atom)) => {
             let symbol_name = decode_string(atom);
             if let Some(symbol) = lookup_symbol_in_scope(db, scope, &symbol_name) {
-                let call_accessor = matches!(
-                    db.symbol(symbol),
-                    Symbol::Function(function)
-                        if function.kind == FunctionKind::Inline && function.parameters.is_empty()
-                );
-                if call_accessor {
-                    let function = db.alloc_hir(Hir::Reference(symbol));
-                    Ok(db.alloc_hir(Hir::FunctionCall(FunctionCall {
-                        function,
-                        args: Vec::new(),
-                        nil_terminated: true,
-                    })))
-                } else {
-                    Ok(db.alloc_hir(Hir::Reference(symbol)))
+                if let Symbol::Function(function) = db.symbol(symbol) {
+                    if function.kind == FunctionKind::Inline
+                        && function.parameters.is_empty()
+                        && !matches!(db.hir(function.body), Hir::Unresolved)
+                    {
+                        return Ok(function.body);
+                    }
                 }
+                Ok(db.alloc_hir(Hir::Reference(symbol)))
             } else {
                 Err(rue_err(
                     l.clone(),
@@ -395,6 +517,29 @@ fn create_param_helper(
     (target.to_vec(), symbol_id)
 }
 
+fn create_inline_value_helper(
+    db: &mut Database,
+    scope_id: ScopeId,
+    any_type_id: TypeId,
+    name: &str,
+    body: HirId,
+) -> SymbolId {
+    let symbol_id = db.alloc_symbol(Symbol::Function(FunctionSymbol {
+        name: Some(Name::new(name.to_string(), None)),
+        ty: any_type_id,
+        scope: scope_id,
+        vars: Default::default(),
+        parameters: IndexMap::default(),
+        nil_terminated: true,
+        return_type: any_type_id,
+        body,
+        kind: FunctionKind::Inline,
+    }));
+    db.scope_mut(scope_id)
+        .insert_symbol(name.to_string(), symbol_id, false);
+    symbol_id
+}
+
 fn install_tree_arg_accessors(
     db: &mut Database,
     scope_id: ScopeId,
@@ -405,6 +550,21 @@ fn install_tree_arg_accessors(
     for (path, name) in param_names_and_paths(args_spec) {
         let _ = create_param_helper(db, scope_id, any_type_id, args_symbol, &path, &name);
     }
+}
+
+fn install_env_alias_helpers(
+    db: &mut Database,
+    scope_id: ScopeId,
+    any_type_id: TypeId,
+    env_symbol: SymbolId,
+) {
+    // In classic codegen, @*env* is used as the current environment path (1),
+    // and (r @*env*) addresses the user argument subtree. Model that directly.
+    let env_ref = db.alloc_hir(Hir::Reference(env_symbol));
+    let env_nil = db.alloc_hir(Hir::Nil);
+    let env_value = db.alloc_hir(Hir::Pair(env_nil, env_ref));
+    let _ = create_inline_value_helper(db, scope_id, any_type_id, "@*env*", env_value);
+    let _ = create_inline_value_helper(db, scope_id, any_type_id, "@", env_value);
 }
 
 type PredeclaredHelperSymbols = HashMap<Vec<u8>, (SymbolId, ScopeId, bool)>;
@@ -433,7 +593,7 @@ fn predeclare_helper_symbols(
             ty: any_type_id,
             scope: function_scope,
             vars: Default::default(),
-            nil_terminated: true,
+            nil_terminated: *inline,
             return_type: any_type_id,
             body: unresolved_body,
             parameters: IndexMap::default(),
@@ -481,27 +641,41 @@ fn intern_helper_hir(
                         ),
                     )
                 })?;
-                for p in params {
-                    let SExp::Atom(ploc, atom_name) = p else {
-                        return Err(rue_err(
-                            p.loc(),
-                            format!(
-                                "destructured inline defun args are not yet supported in phase 1: {}",
-                                data.args
-                            ),
-                        ));
-                    };
-                    let param_name = decode_string(&atom_name);
-                    let param_symbol = db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
-                        name: Some(Name::new(param_name.clone(), Some(ploc.clone().into()))),
-                        ty: any_type_id,
-                    }));
-                    db.scope_mut(*function_scope).insert_symbol(
-                        param_name.clone(),
-                        param_symbol,
-                        false,
-                    );
-                    plist.insert(param_name, param_symbol);
+                for (arg_index, p) in params.into_iter().enumerate() {
+                    if let SExp::Atom(ploc, atom_name) = p {
+                        let param_name = decode_string(&atom_name);
+                        let param_symbol = db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
+                            name: Some(Name::new(param_name.clone(), Some(ploc.clone().into()))),
+                            ty: any_type_id,
+                        }));
+                        db.scope_mut(*function_scope).insert_symbol(
+                            param_name.clone(),
+                            param_symbol,
+                            false,
+                        );
+                        plist.insert(param_name, param_symbol);
+                    } else {
+                        // Inline helpers may still destructure argument trees.
+                        // Bind the incoming argument, then create accessor helpers for leaves.
+                        let param_name = format!("_$_arg_{arg_index}");
+                        let param_symbol = db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
+                            name: Some(Name::new(param_name.clone(), Some(p.loc().into()))),
+                            ty: any_type_id,
+                        }));
+                        db.scope_mut(*function_scope).insert_symbol(
+                            param_name.clone(),
+                            param_symbol,
+                            false,
+                        );
+                        plist.insert(param_name, param_symbol);
+                        install_tree_arg_accessors(
+                            db,
+                            *function_scope,
+                            any_type_id,
+                            Rc::new(p.clone()),
+                            param_symbol,
+                        );
+                    }
                 }
             } else {
                 // Chialisp allows an arbitrary argument tree which specifies the exact environment
@@ -537,7 +711,7 @@ fn intern_helper_hir(
                 ty: any_type_id,
                 scope: *function_scope,
                 vars: Default::default(),
-                nil_terminated: true,
+                nil_terminated: *is_inline,
                 return_type: any_type_id,
                 body: body_hir,
                 parameters: plist,
@@ -563,34 +737,54 @@ fn intern_hir(
     db: &mut Database,
     any_type_id: TypeId,
     program: &CompileForm,
-) -> Result<HirId, CompileErr> {
+) -> Result<SymbolId, CompileErr> {
     let main_scope_id: ScopeId = db.alloc_scope(Scope::new(None));
     let predeclared = predeclare_helper_symbols(db, main_scope_id, any_type_id, &program.helpers)?;
     for h in program.helpers.iter() {
         intern_helper_hir(db, any_type_id, h, &predeclared)?;
     }
 
+    let program_scope = db.alloc_scope(Scope::new(Some(main_scope_id)));
     // Program arguments are tree-shaped in chialisp, so model them the same way as
     // non-inline defun arguments: one binary-tree parameter and atom accessors.
     let main_args_symbol = db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
         name: Some(Name::new("_$_args__", Some(program.args.loc().into()))),
         ty: any_type_id,
     }));
-    db.scope_mut(main_scope_id)
+    db.scope_mut(program_scope)
         .insert_symbol("_$_args__".to_string(), main_args_symbol, false);
     install_tree_arg_accessors(
         db,
-        main_scope_id,
+        program_scope,
         any_type_id,
         program.args.clone(),
         main_args_symbol,
     );
+    install_env_alias_helpers(db, program_scope, any_type_id, main_args_symbol);
 
-    intern_expr_hir(db, main_scope_id, &program.exp)
+    let main_body = intern_expr_hir(db, program_scope, &program.exp)?;
+    let mut main_params: IndexMap<String, SymbolId> = IndexMap::default();
+    main_params.insert("_$_args__".to_string(), main_args_symbol);
+    let main_symbol = db.alloc_symbol(Symbol::Function(FunctionSymbol {
+        name: Some(Name::new("__chia_main__", Some(program.loc.clone().into()))),
+        ty: any_type_id,
+        scope: program_scope,
+        vars: Default::default(),
+        parameters: main_params,
+        nil_terminated: false,
+        return_type: any_type_id,
+        body: main_body,
+        kind: FunctionKind::BinaryTree,
+    }));
+    db.scope_mut(main_scope_id)
+        .insert_symbol("__chia_main__".to_string(), main_symbol, false);
+    Ok(main_symbol)
 }
 
 fn rue_cg(opts: Rc<dyn CompilerOpts>) -> bool {
     matches!(opts.dialect().stepping, Some(1000000))
+        && opts.stdenv()
+        && !opts.filename().starts_with("*macros*")
 }
 
 pub fn compile_from_compileform(
@@ -607,11 +801,50 @@ pub fn compile_from_compileform(
             let types_arena = hir_db.types_mut();
             types_arena.alloc(any_type)
         };
-        let _hir_program = intern_hir(&mut hir_db, any_type_id, &p3)?;
-        return Err(rue_err(
-            p3.loc.clone(),
-            "HIR->LIR->CLVM lowering is not implemented yet (phase 3)",
-        ));
+        let main_symbol = intern_hir(&mut hir_db, any_type_id, &p3)?;
+        verify_no_unresolved_hir(&hir_db, main_symbol).map_err(|e| {
+            rue_err(
+                p3.loc.clone(),
+                format!("unresolved hir after translation: {e}"),
+            )
+        })?;
+
+        let rue_options = RueCompilerOptions {
+            optimize_lir: opts.optimize(),
+            ..RueCompilerOptions::default()
+        };
+        let graph = DependencyGraph::build(&hir_db, main_symbol, rue_options);
+        let mut lir_arena: Arena<Lir> = Arena::new();
+        let base_path = Path::new(&opts.filename())
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let mut lowerer = Lowerer::new(
+            &mut hir_db,
+            &mut lir_arena,
+            &graph,
+            rue_options,
+            main_symbol,
+            base_path,
+        );
+        let mut lir = lowerer.lower_symbol_value(&Environment::default(), main_symbol);
+        if rue_options.optimize_lir {
+            lir = rue_lir::optimize(&mut lir_arena, lir);
+        }
+        let node = rue_lir::codegen(&lir_arena, &mut context.allocator, lir).map_err(|e| {
+            rue_err(
+                p3.loc.clone(),
+                format!("rue codegen failed while generating clvm: {e}"),
+            )
+        })?;
+        let output =
+            convert_from_clvm_rs(&mut context.allocator, p3.loc.clone(), node).map_err(|e| {
+                rue_err(
+                    p3.loc.clone(),
+                    format!("failed to convert rue output back to sexp: {e}"),
+                )
+            })?;
+        return Ok(output.as_ref().clone());
     }
 
     // generate code from AST, optionally with optimization
