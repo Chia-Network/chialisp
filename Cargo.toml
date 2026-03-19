@@ -37,9 +37,9 @@ sha2 = "0.10.9"
 tempfile = "3.26.0"
 unicode-segmentation = "1.12.0"
 yaml-rust2 = "0.11.0"
-rue-hir = { git = "https://github.com/xch-dev/rue" }
-rue-diagnostic = { git = "https://github.com/xch-dev/rue" }
-rue-types = { git = "https://github.com/xch-dev/rue" }
+rue-hir = { git = "https://github.com/xch-dev/rue", version = "0.8.4" }
+rue-diagnostic = { git = "https://github.com/xch-dev/rue", version = "0.8.4" }
+rue-types = { git = "https://github.com/xch-dev/rue", version = "0.8.4" }
 indexmap = "2.13.0"
 id-arena = "2.3.0"
 rue-lir = { git = "https://github.com/xch-dev/rue", version = "0.8.4" }
