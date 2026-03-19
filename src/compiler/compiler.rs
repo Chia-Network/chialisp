@@ -395,40 +395,83 @@ fn create_param_helper(
     (target.to_vec(), symbol_id)
 }
 
-fn intern_helper_hir(
+fn install_tree_arg_accessors(
+    db: &mut Database,
+    scope_id: ScopeId,
+    any_type_id: TypeId,
+    args_spec: Rc<SExp>,
+    args_symbol: SymbolId,
+) {
+    for (path, name) in param_names_and_paths(args_spec) {
+        let _ = create_param_helper(db, scope_id, any_type_id, args_symbol, &path, &name);
+    }
+}
+
+type PredeclaredHelperSymbols = HashMap<Vec<u8>, (SymbolId, ScopeId, bool)>;
+
+fn predeclare_helper_symbols(
     db: &mut Database,
     main_scope: ScopeId,
     any_type_id: TypeId,
+    helpers: &[HelperForm],
+) -> Result<PredeclaredHelperSymbols, CompileErr> {
+    let mut result = HashMap::new();
+
+    for helper in helpers {
+        let HelperForm::Defun(inline, data) = helper else {
+            continue;
+        };
+
+        let function_scope = db.alloc_scope(Scope::new(Some(main_scope)));
+        let unresolved_body = db.alloc_hir(Hir::Unresolved);
+        let function_name = decode_string(helper.name());
+        let function_sym = db.alloc_symbol(Symbol::Function(FunctionSymbol {
+            name: Some(Name::new(
+                function_name.clone(),
+                Some(data.nl.clone().into()),
+            )),
+            ty: any_type_id,
+            scope: function_scope,
+            vars: Default::default(),
+            nil_terminated: true,
+            return_type: any_type_id,
+            body: unresolved_body,
+            parameters: IndexMap::default(),
+            kind: if *inline {
+                FunctionKind::Inline
+            } else {
+                FunctionKind::BinaryTree
+            },
+        }));
+        db.scope_mut(main_scope)
+            .insert_symbol(function_name, function_sym, false);
+
+        result.insert(data.name.clone(), (function_sym, function_scope, *inline));
+    }
+
+    Ok(result)
+}
+
+fn intern_helper_hir(
+    db: &mut Database,
+    any_type_id: TypeId,
     h: &HelperForm,
+    predeclared: &PredeclaredHelperSymbols,
 ) -> Result<HirId, CompileErr> {
     match h {
-        HelperForm::Defun(inline, data) => {
-            let function_scope = db.alloc_scope(Scope::new(Some(main_scope)));
-            let unresolved_body = db.alloc_hir(Hir::Unresolved);
-            let function_name = decode_string(h.name());
-            let function_sym = db.alloc_symbol(Symbol::Function(FunctionSymbol {
-                name: Some(Name::new(
-                    function_name.clone(),
-                    Some(data.nl.clone().into()),
-                )),
-                ty: any_type_id,
-                scope: function_scope,
-                vars: Default::default(),
-                nil_terminated: true,
-                return_type: any_type_id,
-                body: unresolved_body,
-                parameters: IndexMap::default(),
-                kind: if *inline {
-                    FunctionKind::Inline
-                } else {
-                    FunctionKind::BinaryTree
-                },
-            }));
-            db.scope_mut(main_scope)
-                .insert_symbol(function_name, function_sym, false);
+        HelperForm::Defun(_, data) => {
+            let Some((function_sym, function_scope, is_inline)) = predeclared.get(h.name()) else {
+                return Err(rue_err(
+                    data.loc.clone(),
+                    format!(
+                        "missing predeclared symbol for helper `{}`",
+                        decode_string(h.name())
+                    ),
+                ));
+            };
 
             let mut plist: IndexMap<String, SymbolId> = IndexMap::default();
-            if *inline {
+            if *is_inline {
                 let params = data.args.proper_list().ok_or_else(|| {
                     rue_err(
                         data.args.loc(),
@@ -453,7 +496,7 @@ fn intern_helper_hir(
                         name: Some(Name::new(param_name.clone(), Some(ploc.clone().into()))),
                         ty: any_type_id,
                     }));
-                    db.scope_mut(function_scope).insert_symbol(
+                    db.scope_mut(*function_scope).insert_symbol(
                         param_name.clone(),
                         param_symbol,
                         false,
@@ -470,42 +513,35 @@ fn intern_helper_hir(
                     ty: any_type_id,
                 }));
                 plist.insert("_$_args__".to_string(), main_arg_symbol);
-                db.scope_mut(function_scope).insert_symbol(
+                db.scope_mut(*function_scope).insert_symbol(
                     "_$_args__".to_string(),
                     main_arg_symbol,
                     false,
                 );
                 // Construct inline helper functions for each printable atom in the argument tree.
-                let _param_functions: HashMap<Vec<u8>, SymbolId> =
-                    param_names_and_paths(data.args.clone())
-                        .into_iter()
-                        .map(|(path, name)| {
-                            create_param_helper(
-                                db,
-                                function_scope,
-                                any_type_id,
-                                main_arg_symbol,
-                                &path,
-                                &name,
-                            )
-                        })
-                        .collect();
+                install_tree_arg_accessors(
+                    db,
+                    *function_scope,
+                    any_type_id,
+                    data.args.clone(),
+                    main_arg_symbol,
+                );
             }
 
-            let body_hir = intern_expr_hir(db, function_scope, &data.body)?;
-            *db.symbol_mut(function_sym) = Symbol::Function(FunctionSymbol {
+            let body_hir = intern_expr_hir(db, *function_scope, &data.body)?;
+            *db.symbol_mut(*function_sym) = Symbol::Function(FunctionSymbol {
                 name: Some(Name::new(
                     decode_string(h.name()),
                     Some(data.nl.clone().into()),
                 )),
                 ty: any_type_id,
-                scope: function_scope,
+                scope: *function_scope,
                 vars: Default::default(),
                 nil_terminated: true,
                 return_type: any_type_id,
                 body: body_hir,
                 parameters: plist,
-                kind: if *inline {
+                kind: if *is_inline {
                     FunctionKind::Inline
                 } else {
                     FunctionKind::BinaryTree
@@ -529,9 +565,26 @@ fn intern_hir(
     program: &CompileForm,
 ) -> Result<HirId, CompileErr> {
     let main_scope_id: ScopeId = db.alloc_scope(Scope::new(None));
+    let predeclared = predeclare_helper_symbols(db, main_scope_id, any_type_id, &program.helpers)?;
     for h in program.helpers.iter() {
-        intern_helper_hir(db, main_scope_id, any_type_id, h)?;
+        intern_helper_hir(db, any_type_id, h, &predeclared)?;
     }
+
+    // Program arguments are tree-shaped in chialisp, so model them the same way as
+    // non-inline defun arguments: one binary-tree parameter and atom accessors.
+    let main_args_symbol = db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
+        name: Some(Name::new("_$_args__", Some(program.args.loc().into()))),
+        ty: any_type_id,
+    }));
+    db.scope_mut(main_scope_id)
+        .insert_symbol("_$_args__".to_string(), main_args_symbol, false);
+    install_tree_arg_accessors(
+        db,
+        main_scope_id,
+        any_type_id,
+        program.args.clone(),
+        main_args_symbol,
+    );
 
     intern_expr_hir(db, main_scope_id, &program.exp)
 }
