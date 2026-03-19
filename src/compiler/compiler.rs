@@ -26,7 +26,7 @@ use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
 use crate::compiler::frontend::frontend;
 use crate::compiler::optimize::get_optimizer;
 use crate::compiler::prims;
-use crate::compiler::sexp::{decode_string, parse_sexp, SExp};
+use crate::compiler::sexp::{decode_string, parse_sexp, printable, SExp};
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::{BasicCompileContext, CompileContextWrapper};
 use crate::util::Number;
@@ -180,7 +180,21 @@ fn intern_expr_hir(db: &mut Database, scope: ScopeId, e: &BodyForm) -> Result<Hi
         BodyForm::Value(SExp::Atom(l, atom)) => {
             let symbol_name = decode_string(atom);
             if let Some(symbol) = lookup_symbol_in_scope(db, scope, &symbol_name) {
-                Ok(db.alloc_hir(Hir::Reference(symbol)))
+                let call_accessor = matches!(
+                    db.symbol(symbol),
+                    Symbol::Function(function)
+                        if function.kind == FunctionKind::Inline && function.parameters.is_empty()
+                );
+                if call_accessor {
+                    let function = db.alloc_hir(Hir::Reference(symbol));
+                    Ok(db.alloc_hir(Hir::FunctionCall(FunctionCall {
+                        function,
+                        args: Vec::new(),
+                        nil_terminated: true,
+                    })))
+                } else {
+                    Ok(db.alloc_hir(Hir::Reference(symbol)))
+                }
             } else {
                 Err(rue_err(
                     l.clone(),
@@ -311,13 +325,17 @@ impl From<Srcloc> for rue_diagnostic::SrcLoc {
 }
 
 #[allow(dead_code)]
-fn param_names_and_paths_(vec: &mut Vec<(Number, String)>, env: Rc<SExp>) {
+fn param_names_and_paths_(vec: &mut Vec<(Number, Vec<u8>)>, env: Rc<SExp>, path: Number) {
     match env.borrow() {
-        SExp::Atom(_, a) => vec.push((bi_one(), decode_string(a))),
-        SExp::Integer(_, i) => vec.push((bi_one(), i.to_string())),
+        SExp::Atom(_, a) => {
+            if printable(a, false) {
+                vec.push((path, a.clone()));
+            }
+        }
         SExp::Cons(_, left, right) => {
-            param_names_and_paths_(vec, left.clone());
-            param_names_and_paths_(vec, right.clone());
+            let two = 2_i32.to_bigint().unwrap();
+            param_names_and_paths_(vec, left.clone(), path.clone() * two.clone());
+            param_names_and_paths_(vec, right.clone(), path * two + bi_one());
         }
         _ => {}
     }
@@ -326,10 +344,28 @@ fn param_names_and_paths_(vec: &mut Vec<(Number, String)>, env: Rc<SExp>) {
 #[allow(dead_code)]
 fn param_names_and_paths(env: Rc<SExp>) -> Vec<(Number, Vec<u8>)> {
     let mut raw = Vec::new();
-    param_names_and_paths_(&mut raw, env);
-    raw.into_iter()
-        .map(|(path, name)| (path, name.into_bytes()))
-        .collect()
+    param_names_and_paths_(&mut raw, env, bi_one());
+    raw
+}
+
+fn accessor_hir_for_path(db: &mut Database, args_symbol: SymbolId, path: &Number) -> HirId {
+    let two = 2_i32.to_bigint().unwrap();
+    let mut selectors = Vec::new();
+    let mut cursor = path.clone();
+    while cursor > bi_one() {
+        selectors.push((cursor.clone() % two.clone()) != bi_zero());
+        cursor /= two.clone();
+    }
+
+    let mut result = db.alloc_hir(Hir::Reference(args_symbol));
+    for is_right in selectors.into_iter().rev() {
+        result = if is_right {
+            db.alloc_hir(Hir::Unary(UnaryOp::Rest, result))
+        } else {
+            db.alloc_hir(Hir::Unary(UnaryOp::First, result))
+        };
+    }
+    result
 }
 
 #[allow(dead_code)]
@@ -337,11 +373,12 @@ fn create_param_helper(
     db: &mut Database,
     scope_id: ScopeId,
     any_type_id: TypeId,
+    args_symbol: SymbolId,
     path: &Number,
     target: &[u8],
 ) -> (Vec<u8>, SymbolId) {
     let target_name = decode_string(target);
-    let unresolved_body = db.alloc_hir(Hir::Unresolved);
+    let accessor_body = accessor_hir_for_path(db, args_symbol, path);
     let symbol_id = db.alloc_symbol(Symbol::Function(FunctionSymbol {
         name: Some(Name::new(target_name.clone(), None)),
         ty: any_type_id,
@@ -350,12 +387,11 @@ fn create_param_helper(
         parameters: IndexMap::default(),
         nil_terminated: true,
         return_type: any_type_id,
-        body: unresolved_body,
+        body: accessor_body,
         kind: FunctionKind::Inline,
     }));
     db.scope_mut(scope_id)
         .insert_symbol(target_name, symbol_id, false);
-    let _ = path;
     (target.to_vec(), symbol_id)
 }
 
@@ -367,16 +403,6 @@ fn intern_helper_hir(
 ) -> Result<HirId, CompileErr> {
     match h {
         HelperForm::Defun(inline, data) => {
-            if !*inline {
-                return Err(rue_err(
-                    data.loc.clone(),
-                    format!(
-                        "non-inline defun translation is not implemented yet for `{}`",
-                        decode_string(&data.name)
-                    ),
-                ));
-            }
-
             let function_scope = db.alloc_scope(Scope::new(Some(main_scope)));
             let unresolved_body = db.alloc_hir(Hir::Unresolved);
             let function_name = decode_string(h.name());
@@ -392,39 +418,78 @@ fn intern_helper_hir(
                 return_type: any_type_id,
                 body: unresolved_body,
                 parameters: IndexMap::default(),
-                kind: FunctionKind::Inline,
+                kind: if *inline {
+                    FunctionKind::Inline
+                } else {
+                    FunctionKind::BinaryTree
+                },
             }));
             db.scope_mut(main_scope)
                 .insert_symbol(function_name, function_sym, false);
 
             let mut plist: IndexMap<String, SymbolId> = IndexMap::default();
-            let params = data.args.proper_list().ok_or_else(|| {
-                rue_err(
-                    data.args.loc(),
-                    format!(
-                        "inline defun args must be a simple list for phase 1: {}",
-                        data.args
-                    ),
-                )
-            })?;
-            for p in params {
-                let SExp::Atom(ploc, atom_name) = p else {
-                    return Err(rue_err(
-                        p.loc(),
+            if *inline {
+                let params = data.args.proper_list().ok_or_else(|| {
+                    rue_err(
+                        data.args.loc(),
                         format!(
-                            "destructured inline defun args are not yet supported in phase 1: {}",
+                            "inline defun args must be a simple list for phase 1: {}",
                             data.args
                         ),
-                    ));
-                };
-                let param_name = decode_string(&atom_name);
-                let param_symbol = db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
-                    name: Some(Name::new(param_name.clone(), Some(ploc.clone().into()))),
+                    )
+                })?;
+                for p in params {
+                    let SExp::Atom(ploc, atom_name) = p else {
+                        return Err(rue_err(
+                            p.loc(),
+                            format!(
+                                "destructured inline defun args are not yet supported in phase 1: {}",
+                                data.args
+                            ),
+                        ));
+                    };
+                    let param_name = decode_string(&atom_name);
+                    let param_symbol = db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
+                        name: Some(Name::new(param_name.clone(), Some(ploc.clone().into()))),
+                        ty: any_type_id,
+                    }));
+                    db.scope_mut(function_scope).insert_symbol(
+                        param_name.clone(),
+                        param_symbol,
+                        false,
+                    );
+                    plist.insert(param_name, param_symbol);
+                }
+            } else {
+                // Chialisp allows an arbitrary argument tree which specifies the exact environment
+                // shape. Rue uses either sequential or tree shaped and choose the tree shape at
+                // lowering time. The right approach is to use a single argument in BinaryTree
+                // mode and make accessors for the individual destructurings chialisp would allow.
+                let main_arg_symbol = db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
+                    name: Some(Name::new("_$_args__", Some(data.args.loc().into()))),
                     ty: any_type_id,
                 }));
-                db.scope_mut(function_scope)
-                    .insert_symbol(param_name.clone(), param_symbol, false);
-                plist.insert(param_name, param_symbol);
+                plist.insert("_$_args__".to_string(), main_arg_symbol);
+                db.scope_mut(function_scope).insert_symbol(
+                    "_$_args__".to_string(),
+                    main_arg_symbol,
+                    false,
+                );
+                // Construct inline helper functions for each printable atom in the argument tree.
+                let _param_functions: HashMap<Vec<u8>, SymbolId> =
+                    param_names_and_paths(data.args.clone())
+                        .into_iter()
+                        .map(|(path, name)| {
+                            create_param_helper(
+                                db,
+                                function_scope,
+                                any_type_id,
+                                main_arg_symbol,
+                                &path,
+                                &name,
+                            )
+                        })
+                        .collect();
             }
 
             let body_hir = intern_expr_hir(db, function_scope, &data.body)?;
@@ -440,7 +505,11 @@ fn intern_helper_hir(
                 return_type: any_type_id,
                 body: body_hir,
                 parameters: plist,
-                kind: FunctionKind::Inline,
+                kind: if *inline {
+                    FunctionKind::Inline
+                } else {
+                    FunctionKind::BinaryTree
+                },
             });
             Ok(body_hir)
         }
