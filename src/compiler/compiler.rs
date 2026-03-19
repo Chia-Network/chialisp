@@ -6,18 +6,22 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use clvm_rs::allocator::Allocator;
+use indexmap::IndexMap;
+use rue_diagnostic::Name;
+use rue_hir::{Database, HirId, ScopeId, Symbol, FunctionSymbol, Declaration, FunctionKind, SymbolId, Scope, ParameterSymbol};
+use rue_types::{Type, TypeId};
 
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 
 use crate::compiler::clvm::{sha256tree, NewStyleIntConversion};
 use crate::compiler::codegen::{codegen, hoist_body_let_binding, process_helper_let_bindings};
-use crate::compiler::comptypes::{CompileErr, CompileForm, CompilerOpts, PrimaryCodegen};
+use crate::compiler::comptypes::{BodyForm, CompileErr, CompileForm, CompilerOpts, HelperForm, PrimaryCodegen};
 use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
 use crate::compiler::frontend::frontend;
 use crate::compiler::optimize::get_optimizer;
 use crate::compiler::prims;
-use crate::compiler::sexp::{parse_sexp, SExp};
+use crate::compiler::sexp::{decode_string, parse_sexp, SExp};
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::{BasicCompileContext, CompileContextWrapper};
 use crate::util::Number;
@@ -130,12 +134,107 @@ pub fn desugar_pre_forms(
     do_desugar(&p1)
 }
 
+fn intern_expr_hir(db: &mut Database, e: &BodyForm) -> HirId {
+    match e {
+        _ => todo!()
+    }
+}
+
+impl Into<rue_diagnostic::SrcLoc> for Srcloc {
+    fn into(self) -> rue_diagnostic::SrcLoc {
+        todo!();
+    }
+}
+
+fn param_names_and_paths_(vec: &mut Vec<(Number, String)>, env: Rc<SExp>) {
+    todo!();
+}
+
+fn param_names_and_paths(env: Rc<SExp>) -> Vec<(Number, Vec<u8>)> {
+    todo!();
+}
+
+fn create_param_helper(db: &mut Database, scope_id: ScopeId, any_type_id: TypeId, path: &Number, target: &[u8]) -> (Vec<u8>, SymbolId) {
+    todo!();
+}
+
+fn intern_helper_hir(db: &mut Database, main_scope: ScopeId, any_type_id: TypeId, h: &HelperForm) -> HirId {
+    match h {
+        HelperForm::Defun(inline, data) => {
+            let function_scope = db.alloc_scope(Scope::new(Some(main_scope)));
+            let mut plist: IndexMap<String, SymbolId> = IndexMap::default();
+            if !*inline {
+                // Chialisp allows an arbitrary argument tree which specifies the exact environment
+                // shape. Rue uses either sequential or tree shaped and choose the tree shape at
+                // lowering time.  The right approach is to use a single argument in BinaryTree
+                // mode and make accessors for the individual destructurings chialisp would allow.
+                let main_arg_symbol = db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
+                    name: Some(Name::new("_$_args__", Some(data.args.loc().into()))),
+                    ty: any_type_id,
+                }));
+                plist.insert("_$_args__".to_string(), main_arg_symbol);
+                // Now construct the inline functions.
+                let param_functions: HashMap<Vec<u8>, SymbolId> = param_names_and_paths(data.args.clone()).into_iter().map(|(path, name)| {
+                    create_param_helper(db, function_scope, any_type_id, &path, &name)
+                }).collect();
+                // Now we have param helpers.  When we generate references to our parameters, we'll
+                // substitute invocations of these.
+                todo!();
+            };
+            let body_hir = intern_expr_hir(db, &data.body);
+            let function_sym = db.alloc_symbol(Symbol::Function(FunctionSymbol {
+                name: Some(Name::new(decode_string(h.name()), Some(data.nl.clone().into()))),
+                ty: any_type_id,
+                scope: main_scope,
+                vars: Default::default(),
+                nil_terminated: true,
+                return_type: any_type_id,
+                body: body_hir,
+                parameters: plist,
+                kind:
+                if *inline {
+                    FunctionKind::Inline
+                } else {
+                    FunctionKind::BinaryTree
+                }
+            }));
+            todo!();
+        }
+        _ => todo!()
+    }
+}
+
+fn intern_hir(db: &mut Database, any_type_id: TypeId, program: &CompileForm) -> HirId {
+    let main_scope_id: ScopeId = db.alloc_scope(Scope::new(None));
+    for h in program.helpers.iter() {
+        intern_helper_hir(db, main_scope_id, any_type_id, h);
+    }
+
+    intern_expr_hir(db, &program.exp)
+}
+
+fn rue_cg(opts: Rc<dyn CompilerOpts>) -> bool {
+    matches!(opts.dialect().stepping, Some(1000000))
+}
+
 pub fn compile_from_compileform(
     context: &mut BasicCompileContext,
     opts: Rc<dyn CompilerOpts>,
     p2: CompileForm,
 ) -> Result<SExp, CompileErr> {
     let p3 = context.post_desugar_optimization(opts.clone(), p2)?;
+
+    if rue_cg(opts.clone()) {
+        let mut hir_db = Database::new();
+        let any_type = Type::Any;
+        let any_type_id =
+        {
+            let types_arena = hir_db.types_mut();
+            types_arena.alloc(any_type)
+        };
+        let mut hir_program = intern_hir(&mut hir_db, any_type_id, &p3);
+        todo!();
+    }
 
     // generate code from AST, optionally with optimization
     let generated = codegen(context, opts.clone(), &p3)?;

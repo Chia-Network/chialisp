@@ -37,6 +37,10 @@ sha2 = "0.10.9"
 tempfile = "3.26.0"
 unicode-segmentation = "1.12.0"
 yaml-rust2 = "0.11.0"
+rue-hir = { git = "https://github.com/xch-dev/rue" }
+rue-diagnostic = { git = "https://github.com/xch-dev/rue" }
+rue-types = { git = "https://github.com/xch-dev/rue" }
+indexmap = "2.13.0"
 
 [dependencies.pyo3]
 version = "0.25.1"
@@ -60,7 +64,7 @@ default = []
 [target.'cfg(target_family="wasm")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
 js-sys = "0.3.77"
-wasm-bindgen = { version = "^0.2.100", features = ["serde-serialize"] }
+wasm-bindgen = { version = "=0.2.100", features = ["serde-serialize"] }
 
 [target.'cfg(not(target_family="wasm"))'.dependencies]
 getrandom = { version = "0.2" }

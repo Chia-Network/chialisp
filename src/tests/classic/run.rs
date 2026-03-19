@@ -2648,3 +2648,17 @@ fn test_reproduce_variable_repr_bug_deinline() {
         assert_eq!(output, compile(&new_program));
     }
 }
+
+#[test]
+fn run_test_let_star_3_deep_rue() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (a) (include *standard-cl-rue1*) (let* ((x (+ a 1)) (y (+ x 1)) (z (* a y))) (+ x y z)))".to_string(),
+    ]);
+    let result = do_basic_brun(&vec![
+        "brun".to_string(),
+        program,
+        "(3)".to_string()
+    ]);
+    assert_eq!(result.to_string(), "10403".to_string());
+}
