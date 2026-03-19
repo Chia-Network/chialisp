@@ -271,16 +271,17 @@ fn intern_expr_hir(db: &mut Database, scope: ScopeId, e: &BodyForm) -> Result<Hi
     }
 }
 
-impl Into<rue_diagnostic::SrcLoc> for Srcloc {
-    fn into(self) -> rue_diagnostic::SrcLoc {
+impl From<Srcloc> for rue_diagnostic::SrcLoc {
+    fn from(value: Srcloc) -> rue_diagnostic::SrcLoc {
         let source = rue_diagnostic::Source::new(
             "".into(),
-            rue_diagnostic::SourceKind::File(self.file.as_ref().clone()),
+            rue_diagnostic::SourceKind::File(value.file.as_ref().clone()),
         );
         rue_diagnostic::SrcLoc::new(source, 0..0)
     }
 }
 
+#[allow(dead_code)]
 fn param_names_and_paths_(vec: &mut Vec<(Number, String)>, env: Rc<SExp>) {
     match env.borrow() {
         SExp::Atom(_, a) => vec.push((bi_one(), decode_string(a))),
@@ -293,6 +294,7 @@ fn param_names_and_paths_(vec: &mut Vec<(Number, String)>, env: Rc<SExp>) {
     }
 }
 
+#[allow(dead_code)]
 fn param_names_and_paths(env: Rc<SExp>) -> Vec<(Number, Vec<u8>)> {
     let mut raw = Vec::new();
     param_names_and_paths_(&mut raw, env);
@@ -301,6 +303,7 @@ fn param_names_and_paths(env: Rc<SExp>) -> Vec<(Number, Vec<u8>)> {
         .collect()
 }
 
+#[allow(dead_code)]
 fn create_param_helper(
     db: &mut Database,
     scope_id: ScopeId,
