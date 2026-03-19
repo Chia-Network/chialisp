@@ -272,11 +272,41 @@ fn intern_expr_hir(db: &mut Database, scope: ScopeId, e: &BodyForm) -> Result<Hi
 
 impl From<Srcloc> for rue_diagnostic::SrcLoc {
     fn from(value: Srcloc) -> rue_diagnostic::SrcLoc {
+        let start_line = value.line.max(1);
+        let start_col = value.col.max(1);
+        let (mut end_line, mut end_col) = value
+            .until
+            .as_ref()
+            .map(|u| (u.line.max(1), u.col.max(1)))
+            .unwrap_or((start_line, start_col.saturating_add(1)));
+        // Rue diagnostics expect a forward, non-empty span.
+        if (end_line, end_col) <= (start_line, start_col) {
+            end_line = start_line;
+            end_col = start_col.saturating_add(1);
+        }
+
+        let max_line = start_line.max(end_line);
+        let mut line_widths = vec![0usize; max_line + 1];
+        line_widths[start_line] = line_widths[start_line].max(start_col.saturating_sub(1));
+        line_widths[end_line] = line_widths[end_line].max(end_col.saturating_sub(1));
+
+        let mut text = String::new();
+        let mut line_starts = vec![0usize; max_line + 1];
+        for line in 1..=max_line {
+            line_starts[line] = text.len();
+            text.push_str(&" ".repeat(line_widths[line]));
+            if line < max_line {
+                text.push('\n');
+            }
+        }
+
+        let start_offset = line_starts[start_line] + start_col.saturating_sub(1);
+        let end_offset = line_starts[end_line] + end_col.saturating_sub(1);
         let source = rue_diagnostic::Source::new(
-            "".into(),
+            text.into(),
             rue_diagnostic::SourceKind::File(value.file.as_ref().clone()),
         );
-        rue_diagnostic::SrcLoc::new(source, 0..0)
+        rue_diagnostic::SrcLoc::new(source, start_offset..end_offset)
     }
 }
 
