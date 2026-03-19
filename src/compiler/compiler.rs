@@ -8,7 +8,10 @@ use std::rc::Rc;
 use clvm_rs::allocator::Allocator;
 use indexmap::IndexMap;
 use rue_diagnostic::Name;
-use rue_hir::{Database, HirId, ScopeId, Symbol, FunctionSymbol, Declaration, FunctionKind, SymbolId, Scope, ParameterSymbol};
+use rue_hir::{
+    BinaryOp, Database, FunctionCall, FunctionKind, FunctionSymbol, Hir, HirId, ParameterSymbol,
+    Scope, ScopeId, Symbol, SymbolId, UnaryOp,
+};
 use rue_types::{Type, TypeId};
 
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
@@ -16,7 +19,9 @@ use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 
 use crate::compiler::clvm::{sha256tree, NewStyleIntConversion};
 use crate::compiler::codegen::{codegen, hoist_body_let_binding, process_helper_let_bindings};
-use crate::compiler::comptypes::{BodyForm, CompileErr, CompileForm, CompilerOpts, HelperForm, PrimaryCodegen};
+use crate::compiler::comptypes::{
+    BodyForm, CompileErr, CompileForm, CompilerOpts, HelperForm, PrimaryCodegen,
+};
 use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
 use crate::compiler::frontend::frontend;
 use crate::compiler::optimize::get_optimizer;
@@ -134,83 +139,302 @@ pub fn desugar_pre_forms(
     do_desugar(&p1)
 }
 
-fn intern_expr_hir(db: &mut Database, e: &BodyForm) -> HirId {
+fn rue_err(loc: Srcloc, msg: impl Into<String>) -> CompileErr {
+    CompileErr(loc, format!("rue translation: {}", msg.into()))
+}
+
+fn lookup_symbol_in_scope(db: &Database, scope: ScopeId, name: &str) -> Option<SymbolId> {
+    let mut current = Some(scope);
+    while let Some(scope_id) = current {
+        let this_scope = db.scope(scope_id);
+        if let Some(symbol) = this_scope.symbol(name) {
+            return Some(symbol);
+        }
+        current = this_scope.parent();
+    }
+    None
+}
+
+fn intern_sexp_hir(db: &mut Database, s: &SExp) -> HirId {
+    match s {
+        SExp::Nil(_) => db.alloc_hir(Hir::Nil),
+        SExp::Integer(_, i) => db.alloc_hir(Hir::Int(i.clone())),
+        SExp::QuotedString(_, _, bytes) => db.alloc_hir(Hir::Bytes(bytes.clone())),
+        SExp::Atom(_, bytes) => db.alloc_hir(Hir::Bytes(bytes.clone())),
+        SExp::Cons(_, a, b) => {
+            let first = intern_sexp_hir(db, a);
+            let rest = intern_sexp_hir(db, b);
+            db.alloc_hir(Hir::Pair(first, rest))
+        }
+    }
+}
+
+fn intern_expr_hir(db: &mut Database, scope: ScopeId, e: &BodyForm) -> Result<HirId, CompileErr> {
     match e {
-        _ => todo!()
+        BodyForm::Quoted(s) => Ok(intern_sexp_hir(db, s)),
+        BodyForm::Value(SExp::Nil(_)) => Ok(db.alloc_hir(Hir::Nil)),
+        BodyForm::Value(SExp::Integer(_, i)) => Ok(db.alloc_hir(Hir::Int(i.clone()))),
+        BodyForm::Value(SExp::QuotedString(_, _, bytes)) => {
+            Ok(db.alloc_hir(Hir::Bytes(bytes.clone())))
+        }
+        BodyForm::Value(SExp::Atom(l, atom)) => {
+            let symbol_name = decode_string(atom);
+            if let Some(symbol) = lookup_symbol_in_scope(db, scope, &symbol_name) {
+                Ok(db.alloc_hir(Hir::Reference(symbol)))
+            } else {
+                Err(rue_err(
+                    l.clone(),
+                    format!("unresolved symbol `{symbol_name}` in `{}`", e.to_sexp()),
+                ))
+            }
+        }
+        BodyForm::Value(v) => Ok(intern_sexp_hir(db, v)),
+        BodyForm::Call(_, forms, tail) => {
+            if forms.is_empty() {
+                return Err(rue_err(e.loc(), "empty call expression"));
+            }
+            if tail.is_some() {
+                return Err(rue_err(
+                    e.loc(),
+                    format!("rest-tail call form not yet supported: {}", e.to_sexp()),
+                ));
+            }
+
+            let op_atom = if let BodyForm::Value(SExp::Atom(_, atom)) = &*forms[0] {
+                Some(atom.as_slice())
+            } else {
+                None
+            };
+            if let Some(op_name) = op_atom {
+                if (op_name == b"+" || op_name == b"*" || op_name == b"-") && forms.len() > 1 {
+                    let mut args = forms.iter().skip(1);
+                    let first = intern_expr_hir(db, scope, args.next().expect("has first"))?;
+                    let folded = if op_name == b"-" && forms.len() == 2 {
+                        db.alloc_hir(Hir::Unary(UnaryOp::Neg, first))
+                    } else {
+                        args.try_fold(first, |acc, arg| {
+                            let next = intern_expr_hir(db, scope, arg)?;
+                            let op = if op_name == b"+" {
+                                BinaryOp::Add
+                            } else if op_name == b"*" {
+                                BinaryOp::Mul
+                            } else {
+                                BinaryOp::Sub
+                            };
+                            Ok::<HirId, CompileErr>(db.alloc_hir(Hir::Binary(op, acc, next)))
+                        })?
+                    };
+                    return Ok(folded);
+                }
+                if op_name == b"f" && forms.len() == 2 {
+                    let inner = intern_expr_hir(db, scope, &forms[1])?;
+                    return Ok(db.alloc_hir(Hir::Unary(UnaryOp::First, inner)));
+                }
+                if op_name == b"r" && forms.len() == 2 {
+                    let inner = intern_expr_hir(db, scope, &forms[1])?;
+                    return Ok(db.alloc_hir(Hir::Unary(UnaryOp::Rest, inner)));
+                }
+                if op_name == b"c" && forms.len() == 3 {
+                    let left = intern_expr_hir(db, scope, &forms[1])?;
+                    let right = intern_expr_hir(db, scope, &forms[2])?;
+                    return Ok(db.alloc_hir(Hir::Pair(left, right)));
+                }
+            }
+
+            let function = intern_expr_hir(db, scope, &forms[0])?;
+            let mut args = Vec::new();
+            for arg in forms.iter().skip(1) {
+                args.push(intern_expr_hir(db, scope, arg)?);
+            }
+            Ok(db.alloc_hir(Hir::FunctionCall(FunctionCall {
+                function,
+                args,
+                nil_terminated: true,
+            })))
+        }
+        BodyForm::Let(_, _) => Err(rue_err(
+            e.loc(),
+            format!(
+                "let forms should be desugared before rue translation: {}",
+                e.to_sexp()
+            ),
+        )),
+        BodyForm::Mod(_, _) => Err(rue_err(
+            e.loc(),
+            format!("embedded mod expression not yet supported: {}", e.to_sexp()),
+        )),
+        BodyForm::Lambda(_) => Err(rue_err(
+            e.loc(),
+            format!("lambda expression not yet supported: {}", e.to_sexp()),
+        )),
     }
 }
 
-impl Into<rue_diagnostic::SrcLoc> for Srcloc {
-    fn into(self) -> rue_diagnostic::SrcLoc {
-        todo!();
+impl From<Srcloc> for rue_diagnostic::SrcLoc {
+    fn from(value: Srcloc) -> rue_diagnostic::SrcLoc {
+        let source = rue_diagnostic::Source::new(
+            "".into(),
+            rue_diagnostic::SourceKind::File(value.file.as_ref().clone()),
+        );
+        rue_diagnostic::SrcLoc::new(source, 0..0)
     }
 }
 
+#[allow(dead_code)]
 fn param_names_and_paths_(vec: &mut Vec<(Number, String)>, env: Rc<SExp>) {
-    todo!();
+    match env.borrow() {
+        SExp::Atom(_, a) => vec.push((bi_one(), decode_string(a))),
+        SExp::Integer(_, i) => vec.push((bi_one(), i.to_string())),
+        SExp::Cons(_, left, right) => {
+            param_names_and_paths_(vec, left.clone());
+            param_names_and_paths_(vec, right.clone());
+        }
+        _ => {}
+    }
 }
 
+#[allow(dead_code)]
 fn param_names_and_paths(env: Rc<SExp>) -> Vec<(Number, Vec<u8>)> {
-    todo!();
+    let mut raw = Vec::new();
+    param_names_and_paths_(&mut raw, env);
+    raw.into_iter()
+        .map(|(path, name)| (path, name.into_bytes()))
+        .collect()
 }
 
-fn create_param_helper(db: &mut Database, scope_id: ScopeId, any_type_id: TypeId, path: &Number, target: &[u8]) -> (Vec<u8>, SymbolId) {
-    todo!();
+#[allow(dead_code)]
+fn create_param_helper(
+    db: &mut Database,
+    scope_id: ScopeId,
+    any_type_id: TypeId,
+    path: &Number,
+    target: &[u8],
+) -> (Vec<u8>, SymbolId) {
+    let target_name = decode_string(target);
+    let unresolved_body = db.alloc_hir(Hir::Unresolved);
+    let symbol_id = db.alloc_symbol(Symbol::Function(FunctionSymbol {
+        name: Some(Name::new(target_name.clone(), None)),
+        ty: any_type_id,
+        scope: scope_id,
+        vars: Default::default(),
+        parameters: IndexMap::default(),
+        nil_terminated: true,
+        return_type: any_type_id,
+        body: unresolved_body,
+        kind: FunctionKind::Inline,
+    }));
+    db.scope_mut(scope_id)
+        .insert_symbol(target_name, symbol_id, false);
+    let _ = path;
+    (target.to_vec(), symbol_id)
 }
 
-fn intern_helper_hir(db: &mut Database, main_scope: ScopeId, any_type_id: TypeId, h: &HelperForm) -> HirId {
+fn intern_helper_hir(
+    db: &mut Database,
+    main_scope: ScopeId,
+    any_type_id: TypeId,
+    h: &HelperForm,
+) -> Result<HirId, CompileErr> {
     match h {
         HelperForm::Defun(inline, data) => {
-            let function_scope = db.alloc_scope(Scope::new(Some(main_scope)));
-            let mut plist: IndexMap<String, SymbolId> = IndexMap::default();
             if !*inline {
-                // Chialisp allows an arbitrary argument tree which specifies the exact environment
-                // shape. Rue uses either sequential or tree shaped and choose the tree shape at
-                // lowering time.  The right approach is to use a single argument in BinaryTree
-                // mode and make accessors for the individual destructurings chialisp would allow.
-                let main_arg_symbol = db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
-                    name: Some(Name::new("_$_args__", Some(data.args.loc().into()))),
+                return Err(rue_err(
+                    data.loc.clone(),
+                    format!(
+                        "non-inline defun translation is not implemented yet for `{}`",
+                        decode_string(&data.name)
+                    ),
+                ));
+            }
+
+            let function_scope = db.alloc_scope(Scope::new(Some(main_scope)));
+            let unresolved_body = db.alloc_hir(Hir::Unresolved);
+            let function_name = decode_string(h.name());
+            let function_sym = db.alloc_symbol(Symbol::Function(FunctionSymbol {
+                name: Some(Name::new(
+                    function_name.clone(),
+                    Some(data.nl.clone().into()),
+                )),
+                ty: any_type_id,
+                scope: function_scope,
+                vars: Default::default(),
+                nil_terminated: true,
+                return_type: any_type_id,
+                body: unresolved_body,
+                parameters: IndexMap::default(),
+                kind: FunctionKind::Inline,
+            }));
+            db.scope_mut(main_scope)
+                .insert_symbol(function_name, function_sym, false);
+
+            let mut plist: IndexMap<String, SymbolId> = IndexMap::default();
+            let params = data.args.proper_list().ok_or_else(|| {
+                rue_err(
+                    data.args.loc(),
+                    format!(
+                        "inline defun args must be a simple list for phase 1: {}",
+                        data.args
+                    ),
+                )
+            })?;
+            for p in params {
+                let SExp::Atom(ploc, atom_name) = p else {
+                    return Err(rue_err(
+                        p.loc(),
+                        format!(
+                            "destructured inline defun args are not yet supported in phase 1: {}",
+                            data.args
+                        ),
+                    ));
+                };
+                let param_name = decode_string(&atom_name);
+                let param_symbol = db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
+                    name: Some(Name::new(param_name.clone(), Some(ploc.clone().into()))),
                     ty: any_type_id,
                 }));
-                plist.insert("_$_args__".to_string(), main_arg_symbol);
-                // Now construct the inline functions.
-                let param_functions: HashMap<Vec<u8>, SymbolId> = param_names_and_paths(data.args.clone()).into_iter().map(|(path, name)| {
-                    create_param_helper(db, function_scope, any_type_id, &path, &name)
-                }).collect();
-                // Now we have param helpers.  When we generate references to our parameters, we'll
-                // substitute invocations of these.
-                todo!();
-            };
-            let body_hir = intern_expr_hir(db, &data.body);
-            let function_sym = db.alloc_symbol(Symbol::Function(FunctionSymbol {
-                name: Some(Name::new(decode_string(h.name()), Some(data.nl.clone().into()))),
+                db.scope_mut(function_scope)
+                    .insert_symbol(param_name.clone(), param_symbol, false);
+                plist.insert(param_name, param_symbol);
+            }
+
+            let body_hir = intern_expr_hir(db, function_scope, &data.body)?;
+            *db.symbol_mut(function_sym) = Symbol::Function(FunctionSymbol {
+                name: Some(Name::new(
+                    decode_string(h.name()),
+                    Some(data.nl.clone().into()),
+                )),
                 ty: any_type_id,
-                scope: main_scope,
+                scope: function_scope,
                 vars: Default::default(),
                 nil_terminated: true,
                 return_type: any_type_id,
                 body: body_hir,
                 parameters: plist,
-                kind:
-                if *inline {
-                    FunctionKind::Inline
-                } else {
-                    FunctionKind::BinaryTree
-                }
-            }));
-            todo!();
+                kind: FunctionKind::Inline,
+            });
+            Ok(body_hir)
         }
-        _ => todo!()
+        _ => Err(rue_err(
+            h.loc(),
+            format!(
+                "only defun helpers are currently translatable in phase 1: {}",
+                h.to_sexp()
+            ),
+        )),
     }
 }
 
-fn intern_hir(db: &mut Database, any_type_id: TypeId, program: &CompileForm) -> HirId {
+fn intern_hir(
+    db: &mut Database,
+    any_type_id: TypeId,
+    program: &CompileForm,
+) -> Result<HirId, CompileErr> {
     let main_scope_id: ScopeId = db.alloc_scope(Scope::new(None));
     for h in program.helpers.iter() {
-        intern_helper_hir(db, main_scope_id, any_type_id, h);
+        intern_helper_hir(db, main_scope_id, any_type_id, h)?;
     }
 
-    intern_expr_hir(db, &program.exp)
+    intern_expr_hir(db, main_scope_id, &program.exp)
 }
 
 fn rue_cg(opts: Rc<dyn CompilerOpts>) -> bool {
@@ -227,13 +451,15 @@ pub fn compile_from_compileform(
     if rue_cg(opts.clone()) {
         let mut hir_db = Database::new();
         let any_type = Type::Any;
-        let any_type_id =
-        {
+        let any_type_id = {
             let types_arena = hir_db.types_mut();
             types_arena.alloc(any_type)
         };
-        let mut hir_program = intern_hir(&mut hir_db, any_type_id, &p3);
-        todo!();
+        let _hir_program = intern_hir(&mut hir_db, any_type_id, &p3)?;
+        return Err(rue_err(
+            p3.loc.clone(),
+            "HIR->LIR->CLVM lowering is not implemented yet (phase 3)",
+        ));
     }
 
     // generate code from AST, optionally with optimization
