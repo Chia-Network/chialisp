@@ -2655,6 +2655,6 @@ fn run_test_let_star_3_deep_rue() {
         "run".to_string(),
         "(mod (a) (include *standard-cl-rue1*) (let* ((x (+ a 1)) (y (+ x 1)) (z (* a y))) (+ x y z)))".to_string(),
     ]);
-    let result = do_basic_brun(&vec!["brun".to_string(), program, "(3)".to_string()]);
-    assert_eq!(result.to_string(), "10403".to_string());
+    let result = do_basic_brun(&vec!["brun".to_string(), program, "(100)".to_string()]);
+    assert_eq!(result.trim().to_string(), "10403".to_string());
 }
