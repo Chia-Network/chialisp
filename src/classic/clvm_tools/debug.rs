@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::error::EvalErr;
+use clvmr::serde::node_from_bytes;
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, Stream};
 use crate::classic::clvm::serialize::sexp_to_stream;
@@ -281,7 +282,7 @@ pub fn trace_to_table(
 
 pub fn trace_pre_eval(
     allocator: &mut Allocator,
-    append_log: &dyn Fn(&mut Allocator, NodePtr),
+    append_log: &dyn Fn(&mut Allocator, NodePtr) -> Result<(), EvalErr>,
     symbol_table: Option<HashMap<String, String>>,
     sexp: NodePtr,
     args: NodePtr,
@@ -336,20 +337,20 @@ pub fn program_hash_from_program_env_cons(
 pub fn start_log_after(
     allocator: &mut Allocator,
     maybe_program_hash: Option<Bytes>,
-    log: Vec<NodePtr>,
-) -> Vec<NodePtr> {
+    log: Vec<Vec<u8>>,
+) -> Result<Vec<Vec<u8>>, EvalErr> {
+    let mut after = 0;
     if let Some(hash) = maybe_program_hash {
-        log.into_iter()
-            .skip_while(|e| {
-                if let Ok(program_hash) = program_hash_from_program_env_cons(allocator, *e) {
-                    // Skip while we haven't found the hash we want.
-                    program_hash.data() != hash.data()
-                } else {
-                    true
+        for (i,e) in log.iter().enumerate() {
+            let converted = node_from_bytes(allocator, &e)?;
+            if let Ok(program_hash) = program_hash_from_program_env_cons(allocator, converted) {
+                // Skip while we haven't found the hash we want.
+                if program_hash.data() == hash.data() {
+                    after = i;
+                    break;
                 }
-            })
-            .collect()
-    } else {
-        log
+            }
+        }
     }
+    return Ok(log.into_iter().skip(after).collect());
 }

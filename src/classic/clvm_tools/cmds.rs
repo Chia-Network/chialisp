@@ -7,9 +7,7 @@ use std::io;
 use std::io::Write;
 use std::mem::swap;
 use std::rc::Rc;
-use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::SystemTime;
 
 use core::cmp::max;
@@ -20,6 +18,7 @@ use yaml_rust2::{Yaml, YamlEmitter};
 use clvm_rs::allocator::{Allocator, NodePtr};
 use clvm_rs::error::EvalErr;
 use clvm_rs::run_program::PreEval;
+use clvm_rs::serde::{node_to_bytes, node_from_bytes};
 
 use crate::classic::clvm::__type_compatibility__::{
     t, Bytes, BytesFromType, Stream, Tuple, UnvalidatedBytesFromType,
@@ -824,23 +823,33 @@ fn calculate_cost_offset(
 
 fn fix_log(
     allocator: &mut Allocator,
-    log_result: &mut [NodePtr],
-    log_updates: &[(NodePtr, Option<NodePtr>)],
-) {
-    let mut update_map: HashMap<NodePtr, Option<NodePtr>> = HashMap::new();
+    log_result: &[Vec<u8>],
+    log_updates: &[(Vec<u8>, Option<Vec<u8>>)],
+) -> Result<Vec<NodePtr>, EvalErr> {
+    let mut update_map: HashMap<Vec<u8>, Option<NodePtr>> = HashMap::new();
+    let mut node_log_result = Vec::new();
+    for entry in log_result.iter() {
+        let entry_node = node_from_bytes(allocator, &entry)?;
+        node_log_result.push(entry_node);
+    }
     for update in log_updates {
-        update_map.insert(update.0, update.1);
+        if let Some(ubytes) = update.1.as_ref() {
+            update_map.insert(update.0.clone(), Some(node_from_bytes(allocator, &ubytes)?));
+        } else {
+            update_map.insert(update.0.clone(), None);
+        }
     }
 
-    for (i, entry) in log_result.to_vec().iter().enumerate() {
-        update_map.get(entry).and_then(|v| *v).map(|v| {
+    for (i, entry) in node_log_result.to_vec().iter().enumerate() {
+        update_map.get(&log_result[i]).and_then(|v| *v).map(|v| {
             proper_list(allocator, *entry, true).map(|list| {
                 let mut updated = list.to_vec();
                 updated.push(v);
-                log_result[i] = enlist(allocator, &updated).unwrap();
+                node_log_result[i] = enlist(allocator, &updated).unwrap();
             })
         });
     }
+    Ok(node_log_result)
 }
 
 // A function which performs preprocessing on a whole program and renders the
@@ -1261,45 +1270,34 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
     let mut pre_eval_f: Option<PreEval> = None;
 
     // Collections used to generate the run log.
-    let log_entries: Arc<Mutex<RunLog<NodePtr>>> = Arc::new(Mutex::new(RunLog {
+    let log_entries: Arc<Mutex<RunLog<Vec<u8>>>> = Arc::new(Mutex::new(RunLog {
         log_entries: RefCell::new(Vec::new()),
     }));
     #[allow(clippy::type_complexity)]
-    let log_updates: Arc<Mutex<RunLog<(NodePtr, Option<NodePtr>)>>> =
+    let log_updates: Arc<Mutex<RunLog<(Vec<u8>, Option<Vec<u8>>)>>> =
         Arc::new(Mutex::new(RunLog {
             log_entries: RefCell::new(Vec::new()),
         }));
 
-    // clvm_rs uses boxed callbacks with unspecified lifetimes so in order to
-    // support logging as intended, we must have values that can be moved so
-    // the callbacks can become immortal.  Our strategy is to use channels
-    // and threads for this.
-    let (pre_eval_req_out, pre_eval_req_in) = channel();
-    let (pre_eval_resp_out, pre_eval_resp_in): (Sender<()>, Receiver<()>) = channel();
-
-    let (post_eval_req_out, post_eval_req_in) = channel();
-    let (post_eval_resp_out, post_eval_resp_in): (Sender<()>, Receiver<()>) = channel();
-
-    let post_eval_fn: Rc<dyn Fn(NodePtr, Option<NodePtr>)> = Rc::new(move |at, n| {
-        post_eval_req_out.send((at, n)).ok();
-        post_eval_resp_in.recv().unwrap();
+    let log_updates_clone = log_updates.clone();
+    let post_eval_fn: Rc<dyn Fn(&mut Allocator, NodePtr, Option<NodePtr>) -> Result<(), EvalErr>> = Rc::new(move |allocator, at, n| {
+        let a = node_to_bytes(allocator, at)?;
+        let n =
+            if let Some(n) = n {
+                Some(node_to_bytes(allocator, n)?)
+            } else {
+                None
+            };
+        log_updates_clone.lock().map_err(|_| EvalErr::SerializationError)?.push((a, n));
+        Ok(())
     });
 
+    let log_entries_clone = log_entries.clone();
     #[allow(clippy::type_complexity)]
-    let pre_eval_fn: Rc<dyn Fn(&mut Allocator, NodePtr)> = Rc::new(move |_allocator, new_log| {
-        pre_eval_req_out.send(new_log).ok();
-        pre_eval_resp_in.recv().unwrap();
+    let pre_eval_fn: Rc<dyn Fn(&mut Allocator, NodePtr) -> Result<(), EvalErr>> = Rc::new(move |allocator, new_log| {
+        log_entries_clone.lock().map_err(|_| EvalErr::SerializationError)?.push(node_to_bytes(allocator, new_log)?);
+        Ok(())
     });
-
-    #[allow(clippy::type_complexity)]
-    let closure: Rc<dyn Fn(NodePtr) -> Box<dyn Fn(&mut Allocator, Option<NodePtr>)>> =
-        Rc::new(move |v| {
-            let post_eval_fn_clone = post_eval_fn.clone();
-            Box::new(move |_allocator, n| {
-                let post_eval_fn_clone_2 = post_eval_fn_clone.clone();
-                (*post_eval_fn_clone_2)(v, n)
-            })
-        });
 
     if emit_symbol_output {
         #[allow(clippy::type_complexity)]
@@ -1312,18 +1310,19 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
                 -> Result<Option<Box<dyn Fn(&mut Allocator, Option<NodePtr>)>>, EvalErr>,
         > = Box::new(move |allocator, sexp, args| {
             let pre_eval_clone = pre_eval_fn.clone();
-            trace_pre_eval(
+            let tpe: Option<NodePtr> = trace_pre_eval(
                 allocator,
                 &|allocator, n| (*pre_eval_clone)(allocator, n),
                 symbol_table_clone.clone(),
                 sexp,
                 args,
-            )
-            .map(|t| {
-                t.map(|log_ent| {
-                    let closure_clone = closure.clone();
-                    (*closure_clone)(log_ent)
-                })
+            )?;
+            Ok(if let Some(tpe) = tpe {
+                let tpe_clone = tpe.clone();
+                let post_eval_fn_clone = post_eval_fn.clone();
+                Some(Box::new(move |allocator, opfin| { (*post_eval_fn_clone)(allocator, tpe_clone, opfin).unwrap() }))
+            } else {
+                None
             })
         });
 
@@ -1345,36 +1344,6 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
         })
         .unwrap_or_else(|| 0);
     let max_cost = max(0, max_cost);
-
-    // Part 2 of doing pre_eval: Have a thing that receives the messages and
-    // performs some action.
-    let log_entries_clone = log_entries.clone();
-    thread::spawn(move || {
-        let pre_in = pre_eval_req_in;
-        let pre_out = pre_eval_resp_out;
-
-        while let Ok(received) = pre_in.recv() {
-            {
-                let locked = log_entries_clone.lock();
-                locked.unwrap().push(received);
-            }
-            pre_out.send(()).ok();
-        }
-    });
-
-    let log_updates_clone = log_updates.clone();
-    thread::spawn(move || {
-        let post_in = post_eval_req_in;
-        let post_out = post_eval_resp_out;
-
-        while let Ok(received) = post_in.recv() {
-            {
-                let locked = log_updates_clone.lock();
-                locked.unwrap().push(received);
-            }
-            post_out.send(()).ok();
-        }
-    });
 
     // In the case of table tracing, we don't want to emit the startup steps for
     // brun, which involves excuting (2 2 3) on the program and its args.
@@ -1490,13 +1459,13 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
     // and the pass doing the post callbacks, we can integrate them in the main
     // thread.  We didn't do this in the callbacks because we didn't want to
     // deal with a possibly escaping mutable allocator &.
-    let mut log_content = start_log_after(
+    let log_content = start_log_after(
         &mut allocator,
         maybe_program_hash,
         log_entries.lock().unwrap().finish(),
-    );
+    ).unwrap();
     let log_updates = log_updates.lock().unwrap().finish();
-    fix_log(&mut allocator, &mut log_content, &log_updates);
+    let log_updates = fix_log(&mut allocator, &log_content, &log_updates).unwrap();
 
     let only_exn = parsed_args
         .get("only_exn")
@@ -1509,7 +1478,7 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
                 &mut allocator,
                 stdout,
                 only_exn,
-                &log_content,
+                &log_updates,
                 symbol_table,
                 // Clippy: disassemble no longer requires mutability,
                 // but this callback interface delivers it.
@@ -1521,7 +1490,7 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
                 &mut allocator,
                 stdout,
                 only_exn,
-                &log_content,
+                &log_updates,
                 symbol_table,
                 // Same as above.
                 &|allocator, p| disassemble(allocator, p, disassembly_ver),

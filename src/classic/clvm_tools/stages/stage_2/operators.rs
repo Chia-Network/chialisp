@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
-use clvm_rs::chia_dialect::{ChiaDialect, NO_UNKNOWN_OPS};
+use clvm_rs::chia_dialect::{ChiaDialect}; // , NO_UNKNOWN_OPS};
 use clvm_rs::cost::Cost;
 use clvm_rs::dialect::{Dialect, OperatorSet};
 use clvm_rs::error::EvalErr;
@@ -30,6 +30,8 @@ use crate::classic::clvm_tools::stages::stage_2::optimize::do_optimize;
 
 use crate::compiler::comptypes::CompilerOpts;
 use crate::compiler::sexp::decode_string;
+
+use clvmr::ClvmFlags;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AllocatorRefOrTreeHash {
@@ -59,6 +61,7 @@ pub struct CompilerOperatorsInternal {
     compiler_opts: RefCell<Option<Rc<dyn CompilerOpts>>>,
     // The version of the operators selected by the user.  version 1 includes bls.
     operators_version: RefCell<Option<usize>>,
+    flags: ClvmFlags,
 }
 
 /// Given a list of search paths, find a full path to a file whose partial name
@@ -106,12 +109,13 @@ pub struct CompilerOperators {
 // down a reference became very hairy.  The downside is that a few objects had become fixed in
 // an Rc cycle.  The drop trait below corrects that.
 impl CompilerOperators {
-    pub fn new(source_file: &str, search_paths: Vec<String>, symbols_extra_info: bool) -> Self {
+    pub fn new(source_file: &str, search_paths: Vec<String>, symbols_extra_info: bool, flags: ClvmFlags) -> Self {
         CompilerOperators {
             parent: Rc::new(CompilerOperatorsInternal::new(
                 source_file,
                 search_paths,
                 symbols_extra_info,
+                flags,
             )),
         }
     }
@@ -124,7 +128,7 @@ impl Drop for CompilerOperators {
 }
 
 impl CompilerOperatorsInternal {
-    pub fn new(source_file: &str, search_paths: Vec<String>, symbols_extra_info: bool) -> Self {
+    pub fn new(source_file: &str, search_paths: Vec<String>, symbols_extra_info: bool, flags: ClvmFlags) -> Self {
         let base_runner = Rc::new(DefaultProgramRunner::new());
         CompilerOperatorsInternal {
             source_file: source_file.to_owned(),
@@ -135,6 +139,7 @@ impl CompilerOperatorsInternal {
             opt_memo: RefCell::new(HashMap::new()),
             compiler_opts: RefCell::new(None),
             operators_version: RefCell::new(None),
+            flags
         }
     }
 
@@ -375,6 +380,10 @@ impl Dialect for CompilerOperatorsInternal {
         36
     }
 
+    fn flags(&self) -> ClvmFlags {
+        self.flags
+    }
+
     // The softfork operator comes with an extension argument.
     fn softfork_extension(&self, ext: u32) -> OperatorSet {
         match ext {
@@ -396,10 +405,10 @@ impl Dialect for CompilerOperatorsInternal {
             .get_operators_version()
             .unwrap_or(OPERATORS_LATEST_VERSION);
         let base_dialect = if new_operators > 0 {
-            let rc: Box<dyn Dialect> = Box::new(ChiaDialect::new(NO_UNKNOWN_OPS));
+            let rc: Box<dyn Dialect> = Box::new(ChiaDialect::new(ClvmFlags::NO_UNKNOWN_OPS));
             rc
         } else {
-            let rc: Box<dyn Dialect> = Box::new(OriginalDialect::new(NO_UNKNOWN_OPS));
+            let rc: Box<dyn Dialect> = Box::new(OriginalDialect::new(ClvmFlags::NO_UNKNOWN_OPS));
             rc
         };
         // Ensure we have at least the bls extensions available.
@@ -521,6 +530,7 @@ pub fn run_program_for_search_paths(
         source_file,
         search_paths.to_vec(),
         symbols_extra_info,
+        ClvmFlags::NO_UNKNOWN_OPS,
     ));
     ops.parent.set_runner(ops.parent.clone());
     ops
