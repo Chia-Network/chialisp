@@ -304,6 +304,16 @@ fn intern_expr_hir(
     scope: ScopeId,
     e: &BodyForm,
 ) -> Result<HirId, CompileErr> {
+    fn binding_name(pattern: &BindingPattern) -> Option<Vec<u8>> {
+        match pattern {
+            BindingPattern::Name(name) => Some(name.clone()),
+            BindingPattern::Complex(pattern) => match pattern.borrow() {
+                SExp::Atom(_, name) => Some(name.clone()),
+                _ => None,
+            },
+        }
+    }
+
     match e {
         BodyForm::Quoted(s) => Ok(intern_sexp_hir(db, s)),
         BodyForm::Value(SExp::Nil(_)) => Ok(db.alloc_hir(Hir::Nil)),
@@ -402,7 +412,7 @@ fn intern_expr_hir(
             match let_kind {
                 LetFormKind::Parallel => {
                     for binding in let_data.bindings.iter() {
-                        let BindingPattern::Name(binding_name) = &binding.pattern else {
+                        let Some(binding_name) = binding_name(&binding.pattern) else {
                             return Err(rue_err(
                                 binding.loc.clone(),
                                 format!(
@@ -413,7 +423,7 @@ fn intern_expr_hir(
                         };
 
                         let value_hir = intern_expr_hir(db, any_type_id, scope, &binding.body)?;
-                        let symbol_name = decode_string(binding_name);
+                        let symbol_name = decode_string(&binding_name);
                         let symbol = db.alloc_symbol(Symbol::Binding(rue_hir::BindingSymbol {
                             name: Some(Name::new(
                                 symbol_name.clone(),
@@ -430,7 +440,7 @@ fn intern_expr_hir(
                 LetFormKind::Sequential | LetFormKind::Assign => {
                     body_scope = scope;
                     for binding in let_data.bindings.iter() {
-                        let BindingPattern::Name(binding_name) = &binding.pattern else {
+                        let Some(binding_name) = binding_name(&binding.pattern) else {
                             return Err(rue_err(
                                 binding.loc.clone(),
                                 format!(
@@ -442,7 +452,7 @@ fn intern_expr_hir(
 
                         let value_hir =
                             intern_expr_hir(db, any_type_id, body_scope, &binding.body)?;
-                        let symbol_name = decode_string(binding_name);
+                        let symbol_name = decode_string(&binding_name);
                         let symbol = db.alloc_symbol(Symbol::Binding(rue_hir::BindingSymbol {
                             name: Some(Name::new(
                                 symbol_name.clone(),

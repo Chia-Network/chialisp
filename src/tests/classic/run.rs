@@ -2658,3 +2658,33 @@ fn run_test_let_star_3_deep_rue() {
     let result = do_basic_brun(&vec!["brun".to_string(), program, "(100)".to_string()]);
     assert_eq!(result.trim().to_string(), "10403".to_string());
 }
+
+#[test]
+fn run_test_let_parallel_rue() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (a) (include *standard-cl-rue1*) (let ((x (+ a 1)) (y (+ a 2))) (+ x y)))"
+            .to_string(),
+    ]);
+    let result = do_basic_brun(&vec!["brun".to_string(), program, "(100)".to_string()]);
+    assert_eq!(result.trim().to_string(), "203".to_string());
+}
+
+#[test]
+fn run_test_assign_rue() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (a) (include *standard-cl-rue1*) (assign x (+ a 1) (+ x 1)))".to_string(),
+    ]);
+    let result = do_basic_brun(&vec!["brun".to_string(), program, "(100)".to_string()]);
+    assert_eq!(result.trim().to_string(), "102".to_string());
+}
+
+#[test]
+fn run_test_assign_destructure_reports_unsupported_rue() {
+    let result = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (a) (include *standard-cl-rue1*) (assign (x y) (list a a) (+ x y)))".to_string(),
+    ]);
+    assert!(result.contains("complex let binding patterns are not yet supported"));
+}
