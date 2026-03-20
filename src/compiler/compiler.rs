@@ -12,7 +12,7 @@ use indexmap::IndexMap;
 use rue_diagnostic::Name;
 use rue_hir::{
     BinaryOp, Database, DependencyGraph, Environment, FunctionCall, FunctionKind, FunctionSymbol,
-    Hir, HirId, Lowerer, ParameterSymbol, Scope, ScopeId, Symbol, SymbolId, UnaryOp,
+    Hir, HirId, Lowerer, ParameterSymbol, Scope, ScopeId, Symbol, SymbolId, UnaryOp, Value,
 };
 use rue_lir::Lir;
 use rue_options::CompilerOptions as RueCompilerOptions;
@@ -24,7 +24,8 @@ use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 use crate::compiler::clvm::{convert_from_clvm_rs, sha256tree, NewStyleIntConversion};
 use crate::compiler::codegen::{codegen, hoist_body_let_binding, process_helper_let_bindings};
 use crate::compiler::comptypes::{
-    BodyForm, CompileErr, CompileForm, CompilerOpts, HelperForm, PrimaryCodegen,
+    BindingPattern, BodyForm, CompileErr, CompileForm, CompilerOpts, HelperForm, LetFormKind,
+    PrimaryCodegen,
 };
 use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
 use crate::compiler::frontend::frontend;
@@ -297,7 +298,12 @@ fn intern_sexp_hir(db: &mut Database, s: &SExp) -> HirId {
     }
 }
 
-fn intern_expr_hir(db: &mut Database, scope: ScopeId, e: &BodyForm) -> Result<HirId, CompileErr> {
+fn intern_expr_hir(
+    db: &mut Database,
+    any_type_id: TypeId,
+    scope: ScopeId,
+    e: &BodyForm,
+) -> Result<HirId, CompileErr> {
     match e {
         BodyForm::Quoted(s) => Ok(intern_sexp_hir(db, s)),
         BodyForm::Value(SExp::Nil(_)) => Ok(db.alloc_hir(Hir::Nil)),
@@ -344,12 +350,13 @@ fn intern_expr_hir(db: &mut Database, scope: ScopeId, e: &BodyForm) -> Result<Hi
             if let Some(op_name) = op_atom {
                 if (op_name == b"+" || op_name == b"*" || op_name == b"-") && forms.len() > 1 {
                     let mut args = forms.iter().skip(1);
-                    let first = intern_expr_hir(db, scope, args.next().expect("has first"))?;
+                    let first =
+                        intern_expr_hir(db, any_type_id, scope, args.next().expect("has first"))?;
                     let folded = if op_name == b"-" && forms.len() == 2 {
                         db.alloc_hir(Hir::Unary(UnaryOp::Neg, first))
                     } else {
                         args.try_fold(first, |acc, arg| {
-                            let next = intern_expr_hir(db, scope, arg)?;
+                            let next = intern_expr_hir(db, any_type_id, scope, arg)?;
                             let op = if op_name == b"+" {
                                 BinaryOp::Add
                             } else if op_name == b"*" {
@@ -363,24 +370,24 @@ fn intern_expr_hir(db: &mut Database, scope: ScopeId, e: &BodyForm) -> Result<Hi
                     return Ok(folded);
                 }
                 if op_name == b"f" && forms.len() == 2 {
-                    let inner = intern_expr_hir(db, scope, &forms[1])?;
+                    let inner = intern_expr_hir(db, any_type_id, scope, &forms[1])?;
                     return Ok(db.alloc_hir(Hir::Unary(UnaryOp::First, inner)));
                 }
                 if op_name == b"r" && forms.len() == 2 {
-                    let inner = intern_expr_hir(db, scope, &forms[1])?;
+                    let inner = intern_expr_hir(db, any_type_id, scope, &forms[1])?;
                     return Ok(db.alloc_hir(Hir::Unary(UnaryOp::Rest, inner)));
                 }
                 if op_name == b"c" && forms.len() == 3 {
-                    let left = intern_expr_hir(db, scope, &forms[1])?;
-                    let right = intern_expr_hir(db, scope, &forms[2])?;
+                    let left = intern_expr_hir(db, any_type_id, scope, &forms[1])?;
+                    let right = intern_expr_hir(db, any_type_id, scope, &forms[2])?;
                     return Ok(db.alloc_hir(Hir::Pair(left, right)));
                 }
             }
 
-            let function = intern_expr_hir(db, scope, &forms[0])?;
+            let function = intern_expr_hir(db, any_type_id, scope, &forms[0])?;
             let mut args = Vec::new();
             for arg in forms.iter().skip(1) {
-                args.push(intern_expr_hir(db, scope, arg)?);
+                args.push(intern_expr_hir(db, any_type_id, scope, arg)?);
             }
             Ok(db.alloc_hir(Hir::FunctionCall(FunctionCall {
                 function,
@@ -388,13 +395,77 @@ fn intern_expr_hir(db: &mut Database, scope: ScopeId, e: &BodyForm) -> Result<Hi
                 nil_terminated: true,
             })))
         }
-        BodyForm::Let(_, _) => Err(rue_err(
-            e.loc(),
-            format!(
-                "let forms should be desugared before rue translation: {}",
-                e.to_sexp()
-            ),
-        )),
+        BodyForm::Let(let_kind, let_data) => {
+            let mut statements = Vec::new();
+            let mut body_scope = db.alloc_scope(Scope::new(Some(scope)));
+
+            match let_kind {
+                LetFormKind::Parallel => {
+                    for binding in let_data.bindings.iter() {
+                        let BindingPattern::Name(binding_name) = &binding.pattern else {
+                            return Err(rue_err(
+                                binding.loc.clone(),
+                                format!(
+                                    "complex let binding patterns are not yet supported: {}",
+                                    e.to_sexp()
+                                ),
+                            ));
+                        };
+
+                        let value_hir = intern_expr_hir(db, any_type_id, scope, &binding.body)?;
+                        let symbol_name = decode_string(binding_name);
+                        let symbol = db.alloc_symbol(Symbol::Binding(rue_hir::BindingSymbol {
+                            name: Some(Name::new(
+                                symbol_name.clone(),
+                                Some(binding.nl.clone().into()),
+                            )),
+                            value: Value::new(value_hir, any_type_id),
+                            inline: false,
+                        }));
+                        db.scope_mut(body_scope)
+                            .insert_symbol(symbol_name, symbol, false);
+                        statements.push(rue_hir::Statement::Let(symbol));
+                    }
+                }
+                LetFormKind::Sequential | LetFormKind::Assign => {
+                    body_scope = scope;
+                    for binding in let_data.bindings.iter() {
+                        let BindingPattern::Name(binding_name) = &binding.pattern else {
+                            return Err(rue_err(
+                                binding.loc.clone(),
+                                format!(
+                                    "complex let binding patterns are not yet supported: {}",
+                                    e.to_sexp()
+                                ),
+                            ));
+                        };
+
+                        let value_hir =
+                            intern_expr_hir(db, any_type_id, body_scope, &binding.body)?;
+                        let symbol_name = decode_string(binding_name);
+                        let symbol = db.alloc_symbol(Symbol::Binding(rue_hir::BindingSymbol {
+                            name: Some(Name::new(
+                                symbol_name.clone(),
+                                Some(binding.nl.clone().into()),
+                            )),
+                            value: Value::new(value_hir, any_type_id),
+                            inline: false,
+                        }));
+                        let next_scope = db.alloc_scope(Scope::new(Some(body_scope)));
+                        db.scope_mut(next_scope)
+                            .insert_symbol(symbol_name, symbol, false);
+                        body_scope = next_scope;
+                        statements.push(rue_hir::Statement::Let(symbol));
+                    }
+                }
+            }
+
+            let body_hir = intern_expr_hir(db, any_type_id, body_scope, &let_data.body)?;
+            Ok(db.alloc_hir(Hir::Block(rue_hir::Block {
+                statements,
+                body: Some(body_hir),
+            })))
+        }
         BodyForm::Mod(_, _) => Err(rue_err(
             e.loc(),
             format!("embedded mod expression not yet supported: {}", e.to_sexp()),
@@ -702,7 +773,7 @@ fn intern_helper_hir(
                 );
             }
 
-            let body_hir = intern_expr_hir(db, *function_scope, &data.body)?;
+            let body_hir = intern_expr_hir(db, any_type_id, *function_scope, &data.body)?;
             *db.symbol_mut(*function_sym) = Symbol::Function(FunctionSymbol {
                 name: Some(Name::new(
                     decode_string(h.name()),
@@ -762,7 +833,7 @@ fn intern_hir(
     );
     install_env_alias_helpers(db, program_scope, any_type_id, main_args_symbol);
 
-    let main_body = intern_expr_hir(db, program_scope, &program.exp)?;
+    let main_body = intern_expr_hir(db, any_type_id, program_scope, &program.exp)?;
     let mut main_params: IndexMap<String, SymbolId> = IndexMap::default();
     main_params.insert("_$_args__".to_string(), main_args_symbol);
     let main_symbol = db.alloc_symbol(Symbol::Function(FunctionSymbol {
@@ -787,6 +858,63 @@ fn rue_cg(opts: Rc<dyn CompilerOpts>) -> bool {
         && !opts.filename().starts_with("*macros*")
 }
 
+fn compile_with_rue_codegen(
+    context: &mut BasicCompileContext,
+    opts: Rc<dyn CompilerOpts>,
+    program: &CompileForm,
+) -> Result<SExp, CompileErr> {
+    let mut hir_db = Database::new();
+    let any_type = Type::Any;
+    let any_type_id = {
+        let types_arena = hir_db.types_mut();
+        types_arena.alloc(any_type)
+    };
+    let main_symbol = intern_hir(&mut hir_db, any_type_id, program)?;
+    verify_no_unresolved_hir(&hir_db, main_symbol).map_err(|e| {
+        rue_err(
+            program.loc.clone(),
+            format!("unresolved hir after translation: {e}"),
+        )
+    })?;
+
+    let rue_options = RueCompilerOptions {
+        optimize_lir: opts.optimize(),
+        ..RueCompilerOptions::default()
+    };
+    let graph = DependencyGraph::build(&hir_db, main_symbol, rue_options);
+    let mut lir_arena: Arena<Lir> = Arena::new();
+    let base_path = Path::new(&opts.filename())
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let mut lowerer = Lowerer::new(
+        &mut hir_db,
+        &mut lir_arena,
+        &graph,
+        rue_options,
+        main_symbol,
+        base_path,
+    );
+    let mut lir = lowerer.lower_symbol_value(&Environment::default(), main_symbol);
+    if rue_options.optimize_lir {
+        lir = rue_lir::optimize(&mut lir_arena, lir);
+    }
+    let node = rue_lir::codegen(&lir_arena, &mut context.allocator, lir).map_err(|e| {
+        rue_err(
+            program.loc.clone(),
+            format!("rue codegen failed while generating clvm: {e}"),
+        )
+    })?;
+    let output =
+        convert_from_clvm_rs(&mut context.allocator, program.loc.clone(), node).map_err(|e| {
+            rue_err(
+                program.loc.clone(),
+                format!("failed to convert rue output back to sexp: {e}"),
+            )
+        })?;
+    Ok(output.as_ref().clone())
+}
+
 pub fn compile_from_compileform(
     context: &mut BasicCompileContext,
     opts: Rc<dyn CompilerOpts>,
@@ -795,56 +923,7 @@ pub fn compile_from_compileform(
     let p3 = context.post_desugar_optimization(opts.clone(), p2)?;
 
     if rue_cg(opts.clone()) {
-        let mut hir_db = Database::new();
-        let any_type = Type::Any;
-        let any_type_id = {
-            let types_arena = hir_db.types_mut();
-            types_arena.alloc(any_type)
-        };
-        let main_symbol = intern_hir(&mut hir_db, any_type_id, &p3)?;
-        verify_no_unresolved_hir(&hir_db, main_symbol).map_err(|e| {
-            rue_err(
-                p3.loc.clone(),
-                format!("unresolved hir after translation: {e}"),
-            )
-        })?;
-
-        let rue_options = RueCompilerOptions {
-            optimize_lir: opts.optimize(),
-            ..RueCompilerOptions::default()
-        };
-        let graph = DependencyGraph::build(&hir_db, main_symbol, rue_options);
-        let mut lir_arena: Arena<Lir> = Arena::new();
-        let base_path = Path::new(&opts.filename())
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let mut lowerer = Lowerer::new(
-            &mut hir_db,
-            &mut lir_arena,
-            &graph,
-            rue_options,
-            main_symbol,
-            base_path,
-        );
-        let mut lir = lowerer.lower_symbol_value(&Environment::default(), main_symbol);
-        if rue_options.optimize_lir {
-            lir = rue_lir::optimize(&mut lir_arena, lir);
-        }
-        let node = rue_lir::codegen(&lir_arena, &mut context.allocator, lir).map_err(|e| {
-            rue_err(
-                p3.loc.clone(),
-                format!("rue codegen failed while generating clvm: {e}"),
-            )
-        })?;
-        let output =
-            convert_from_clvm_rs(&mut context.allocator, p3.loc.clone(), node).map_err(|e| {
-                rue_err(
-                    p3.loc.clone(),
-                    format!("failed to convert rue output back to sexp: {e}"),
-                )
-            })?;
-        return Ok(output.as_ref().clone());
+        return compile_with_rue_codegen(context, opts, &p3);
     }
 
     // generate code from AST, optionally with optimization
@@ -860,8 +939,16 @@ pub fn compile_pre_forms(
     opts: Rc<dyn CompilerOpts>,
     pre_forms: &[Rc<SExp>],
 ) -> Result<SExp, CompileErr> {
-    // Resolve includes, convert program source to lexemes
-    let p2 = desugar_pre_forms(context, opts.clone(), pre_forms)?;
+    // Resolve includes, convert program source to frontend representation.
+    let p0 = frontend(opts.clone(), pre_forms)?;
+    let p1 = context.frontend_optimization(opts.clone(), p0)?;
+
+    if rue_cg(opts.clone()) {
+        // Translate to Rue HIR before Chialisp desugaring.
+        return compile_with_rue_codegen(context, opts, &p1);
+    }
+
+    let p2 = do_desugar(&p1)?;
 
     compile_from_compileform(context, opts, p2)
 }
