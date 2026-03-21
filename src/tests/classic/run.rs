@@ -2940,11 +2940,26 @@ fn test_rue_clvm_operators() {
     let tested_operator_names: Vec<String> = specs.iter().map(|s| s.name.to_string()).collect();
     assert_eq!(tested_operator_names, prim_operator_names);
 
-    let render_body = |calls: &[String]| -> String {
+    let render_chialisp_body = |calls: &[String]| -> String {
         if calls.len() == 1 {
             calls[0].clone()
         } else {
-            format!("(list {})", calls.join(" "))
+            let mut out = "()".to_string();
+            for call in calls.iter().rev() {
+                out = format!("(c {call} {out})");
+            }
+            out
+        }
+    };
+    let render_clvm_list = |calls: &[String]| -> String {
+        if calls.len() == 1 {
+            calls[0].clone()
+        } else {
+            let mut out = "()".to_string();
+            for call in calls.iter().rev() {
+                out = format!("(c {call} {out})");
+            }
+            out
         }
     };
 
@@ -2976,11 +2991,11 @@ fn test_rue_clvm_operators() {
             call_text_by_value.push(format!("({} {})", spec.name, case_arg_values.join(" ")));
         }
 
-        let body_by_name = render_body(&call_text_by_name);
+        let body_by_name = render_chialisp_body(&call_text_by_name);
         let expected_body = if spec.name == "q" {
-            body_by_name.clone()
+            render_clvm_list(&call_text_by_name)
         } else {
-            render_body(&call_text_by_value)
+            render_clvm_list(&call_text_by_value)
         };
         let expected_result =
             do_basic_brun(&vec!["brun".to_string(), expected_body]).trim().to_string();
@@ -2992,8 +3007,12 @@ fn test_rue_clvm_operators() {
         let params = parameter_names.join(" ");
 
         let classic_program_source = format!("(mod ({params}) {body_by_name})");
-        let classic_compiled =
-            do_basic_run(&vec!["run".to_string(), classic_program_source]).trim().to_string();
+        let classic_compiled = do_basic_run(&vec![
+            "run".to_string(),
+            classic_program_source.clone(),
+        ])
+        .trim()
+        .to_string();
         assert!(
             !classic_compiled.starts_with("FAIL"),
             "classic compile failed for {}",
@@ -3001,32 +3020,39 @@ fn test_rue_clvm_operators() {
         );
         let classic_output = do_basic_brun(&vec![
             "brun".to_string(),
-            classic_compiled,
+            classic_compiled.clone(),
             run_input.clone(),
         ])
         .trim()
         .to_string();
         assert_eq!(
             classic_output, expected_result,
-            "classic output mismatch for operator {}",
-            spec.name
+            "classic output mismatch for operator {} with source {} and input {}",
+            spec.name, classic_program_source, run_input
         );
 
         let rue_program_source =
             format!("(mod ({params}) (include *standard-cl-rue1*) {body_by_name})");
         let rue_compiled =
-            do_basic_run(&vec!["run".to_string(), rue_program_source]).trim().to_string();
+            do_basic_run(&vec!["run".to_string(), rue_program_source.clone()])
+                .trim()
+                .to_string();
         assert!(
             !rue_compiled.starts_with("FAIL"),
             "rue compile failed for {}",
             spec.name
         );
-        let rue_output =
-            do_basic_brun(&vec!["brun".to_string(), rue_compiled, run_input]).trim().to_string();
+        let rue_output = do_basic_brun(&vec![
+            "brun".to_string(),
+            rue_compiled.clone(),
+            run_input.clone(),
+        ])
+        .trim()
+        .to_string();
         assert_eq!(
             rue_output, classic_output,
-            "rue output mismatch for operator {}",
-            spec.name
+            "rue output mismatch for operator {} with classic source {} and rue source {} and classic compiled {} and rue compiled {} and input {}",
+            spec.name, classic_program_source, rue_program_source, classic_compiled, rue_compiled, run_input
         );
     }
 }

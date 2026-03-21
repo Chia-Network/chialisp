@@ -130,7 +130,59 @@ const STATIC_LIR_PRIMS: [ClvmOp; 48] = [
     ClvmOp::Keccak256,
 ];
 
-fn match_prim(opts: Rc<dyn CompilerOpts>, prim: &[u8]) -> Option<ClvmOp> {
+fn match_prim(_opts: Rc<dyn CompilerOpts>, prim: &[u8]) -> Option<ClvmOp> {
+    match prim {
+        b"q" => return Some(ClvmOp::Quote),
+        b"a" => return Some(ClvmOp::Apply),
+        b"i" => return Some(ClvmOp::If),
+        b"c" => return Some(ClvmOp::Cons),
+        b"f" => return Some(ClvmOp::First),
+        b"r" => return Some(ClvmOp::Rest),
+        b"l" => return Some(ClvmOp::Listp),
+        b"x" => return Some(ClvmOp::Raise),
+        b"=" => return Some(ClvmOp::Eq),
+        b">s" => return Some(ClvmOp::GtBytes),
+        b"sha256" => return Some(ClvmOp::Sha256),
+        b"substr" => return Some(ClvmOp::Substr),
+        b"strlen" => return Some(ClvmOp::Strlen),
+        b"concat" => return Some(ClvmOp::Concat),
+        b"+" => return Some(ClvmOp::Add),
+        b"-" => return Some(ClvmOp::Sub),
+        b"*" => return Some(ClvmOp::Mul),
+        b"/" => return Some(ClvmOp::Div),
+        b"divmod" => return Some(ClvmOp::Divmod),
+        b">" => return Some(ClvmOp::Gt),
+        b"ash" => return Some(ClvmOp::Ash),
+        b"lsh" => return Some(ClvmOp::Lsh),
+        b"logand" => return Some(ClvmOp::Logand),
+        b"logior" => return Some(ClvmOp::Logior),
+        b"logxor" => return Some(ClvmOp::Logxor),
+        b"lognot" => return Some(ClvmOp::Lognot),
+        b"point_add" => return Some(ClvmOp::G1Add),
+        b"pubkey_for_exp" => return Some(ClvmOp::PubkeyForExp),
+        b"not" => return Some(ClvmOp::Not),
+        b"any" => return Some(ClvmOp::Any),
+        b"all" => return Some(ClvmOp::All),
+        b"coinid" => return Some(ClvmOp::CoinId),
+        b"g1_subtract" => return Some(ClvmOp::G1Subtract),
+        b"g1_multiply" => return Some(ClvmOp::G1Multiply),
+        b"g1_negate" => return Some(ClvmOp::G1Negate),
+        b"g2_add" => return Some(ClvmOp::G2Add),
+        b"g2_subtract" => return Some(ClvmOp::G2Subtract),
+        b"g2_multiply" => return Some(ClvmOp::G2Multiply),
+        b"g2_negate" => return Some(ClvmOp::G2Negate),
+        b"g1_map" => return Some(ClvmOp::G1Map),
+        b"g2_map" => return Some(ClvmOp::G2Map),
+        b"bls_pairing_identity" => return Some(ClvmOp::BlsPairingIdentity),
+        b"bls_verify" => return Some(ClvmOp::BlsVerify),
+        b"modpow" => return Some(ClvmOp::Modpow),
+        b"%" => return Some(ClvmOp::Mod),
+        b"keccak256" => return Some(ClvmOp::Keccak256),
+        b"secp256k1_verify" => return Some(ClvmOp::Secp256K1Verify),
+        b"secp256r1_verify" => return Some(ClvmOp::Secp256R1Verify),
+        _ => {}
+    }
+
     for p in STATIC_LIR_PRIMS.iter() {
         if p.to_atom() == prim {
             return Some(p.clone());
@@ -257,27 +309,6 @@ impl RueConversion {
                     None
                 };
                 if let Some(op_name) = op_atom {
-                    if (op_name == b"+" || op_name == b"*" || op_name == b"-") && forms.len() > 1 {
-                        let mut args = forms.iter().skip(1);
-                        let first =
-                            self.intern_expr_hir(scope, args.next().expect("has first"))?;
-                        let folded = if op_name == b"-" && forms.len() == 2 {
-                            self.db.alloc_hir(Hir::Unary(UnaryOp::Neg, first))
-                        } else {
-                            args.try_fold(first, |acc, arg| {
-                                let next = self.intern_expr_hir(scope, arg)?;
-                                let op = if op_name == b"+" {
-                                    BinaryOp::Add
-                                } else if op_name == b"*" {
-                                    BinaryOp::Mul
-                                } else {
-                                    BinaryOp::Sub
-                                };
-                                Ok::<HirId, CompileErr>(self.db.alloc_hir(Hir::Binary(op, acc, next)))
-                            })?
-                        };
-                        return Ok(folded);
-                    }
                     if op_name == b"f" && forms.len() == 2 {
                         let inner = self.intern_expr_hir(scope, &forms[1])?;
                         return Ok(self.db.alloc_hir(Hir::Unary(UnaryOp::First, inner)));
@@ -290,6 +321,9 @@ impl RueConversion {
                         let left = self.intern_expr_hir(scope, &forms[1])?;
                         let right = self.intern_expr_hir(scope, &forms[2])?;
                         return Ok(self.db.alloc_hir(Hir::Pair(left, right)));
+                    }
+                    if let Some(prim) = match_prim(self.opts.clone(), op_name) {
+                        return self.primcall(scope, prim, loc, &forms);
                     }
                 }
 
