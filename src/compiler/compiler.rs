@@ -2,7 +2,6 @@ use num_bigint::ToBigInt;
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -12,21 +11,16 @@ use clvm_rs::allocator::Allocator;
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 
-use crate::compiler::clvm::{convert_from_clvm_rs, sha256tree, NewStyleIntConversion};
-use crate::compiler::codegen::{
-    codegen, hoist_body_let_binding, process_helper_let_bindings, toposort_assign_bindings,
-};
+use crate::compiler::clvm::{sha256tree, NewStyleIntConversion};
+use crate::compiler::codegen::{codegen, hoist_body_let_binding, process_helper_let_bindings};
 
-use crate::compiler::comptypes::{
-    BindingPattern, BodyForm, CompileErr, CompileForm, CompilerOpts, HelperForm, LetFormKind,
-    PrimaryCodegen,
-};
+use crate::compiler::comptypes::{CompileErr, CompileForm, CompilerOpts, PrimaryCodegen};
 use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
 use crate::compiler::frontend::frontend;
 use crate::compiler::optimize::get_optimizer;
 use crate::compiler::prims;
 use crate::compiler::rue::{compile_with_rue_codegen, rue_cg};
-use crate::compiler::sexp::{decode_string, parse_sexp, printable, SExp};
+use crate::compiler::sexp::{parse_sexp, SExp};
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::{BasicCompileContext, CompileContextWrapper};
 use crate::util::Number;

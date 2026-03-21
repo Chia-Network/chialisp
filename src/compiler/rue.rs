@@ -11,8 +11,8 @@ use id_arena::Arena;
 use indexmap::IndexMap;
 use rue_diagnostic::Name;
 use rue_hir::{
-    BinaryOp, Database, DependencyGraph, Environment, FunctionCall, FunctionKind, FunctionSymbol,
-    Hir, HirId, Lowerer, ParameterSymbol, Scope, ScopeId, Symbol, SymbolId, UnaryOp, Value,
+    Database, DependencyGraph, Environment, FunctionCall, FunctionKind, FunctionSymbol, Hir, HirId,
+    Lowerer, ParameterSymbol, Scope, ScopeId, Symbol, SymbolId, UnaryOp, Value,
 };
 use rue_lir::{ClvmOp, Lir};
 use rue_options::CompilerOptions as RueCompilerOptions;
@@ -27,7 +27,6 @@ use crate::compiler::comptypes::{
 use crate::compiler::gensym::gensym;
 use crate::compiler::sexp::{decode_string, printable, SExp};
 use crate::compiler::srcloc::Srcloc;
-use crate::compiler::BasicCompileContext;
 use crate::util::Number;
 
 fn rue_err(loc: Srcloc, msg: impl Into<String>) -> CompileErr {
@@ -187,7 +186,7 @@ fn match_prim(_opts: Rc<dyn CompilerOpts>, prim: &[u8]) -> Option<ClvmOp> {
 
     for p in STATIC_LIR_PRIMS.iter() {
         if p.to_atom() == prim {
-            return Some(p.clone());
+            return Some(*p);
         }
     }
 
@@ -255,7 +254,7 @@ impl RueConversion {
 
         let mut result = self.db.alloc_hir(Hir::Nil);
         for arg in forms.iter().skip(1).rev() {
-            let arg_expr = self.intern_expr_hir(scope, &arg)?;
+            let arg_expr = self.intern_expr_hir(scope, arg)?;
             result = self.db.alloc_hir(Hir::Pair(arg_expr, result));
         }
 
@@ -321,17 +320,17 @@ impl RueConversion {
                         return Ok(self.db.alloc_hir(Hir::Pair(left, right)));
                     }
                     if let Some(prim) = match_prim(self.opts.clone(), op_name) {
-                        return self.primcall(scope, prim, loc, &forms);
+                        return self.primcall(scope, prim, loc, forms);
                     }
                 }
 
                 let function_result = self.intern_expr_hir(scope, &forms[0]);
                 let function = match &function_result {
                     Ok(f) => f,
-                    Err(e) => {
+                    Err(_e) => {
                         if let Some(atom) = &op_atom {
                             if let Some(prim) = match_prim(self.opts.clone(), atom) {
-                                return self.primcall(scope, prim, loc, &forms);
+                                return self.primcall(scope, prim, loc, forms);
                             }
                         }
                         return function_result;
@@ -485,8 +484,6 @@ impl RueConversion {
     }
 
     fn to_rue_srcloc(&self, value: Srcloc) -> rue_diagnostic::SrcLoc {
-        let start_line = value.line.max(1);
-        let start_col = value.col.max(1);
         // XXX Fix this.
         let start_offset = 0;
         let end_offset = 1;
@@ -828,7 +825,7 @@ impl RueConversion {
             optimize_lir: opts.optimize(),
             ..RueCompilerOptions::default()
         };
-        let graph = DependencyGraph::build(&mut self.db, main_symbol, rue_options);
+        let graph = DependencyGraph::build(&self.db, main_symbol, rue_options);
         let mut lir_arena: Arena<Lir> = Arena::new();
         let base_path = Path::new(&opts.filename())
             .parent()
