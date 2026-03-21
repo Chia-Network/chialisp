@@ -10,13 +10,15 @@ use serde::Serialize;
 pub struct Until {
     pub line: usize,
     pub col: usize,
+    pub offset: usize,
 }
 
 impl Until {
-    pub fn from_pair(p: (usize, usize)) -> Self {
+    pub fn new(line: usize, col: usize, offset: usize) -> Self {
         Until {
-            line: p.0,
-            col: p.1,
+            line,
+            col,
+            offset,
         }
     }
 }
@@ -35,6 +37,7 @@ pub struct Srcloc {
     pub file: Rc<String>,
     pub line: usize,
     pub col: usize,
+    pub offset: usize,
     pub until: Option<Until>,
 }
 
@@ -53,11 +56,12 @@ impl Display for Srcloc {
 impl Srcloc {
     /// Create a srcloc given a refcounted pointer to the filename (so they're
     /// always shareable) and the line number and column (1-based).
-    pub fn new(name: Rc<String>, line: usize, col: usize) -> Self {
+    pub fn new(name: Rc<String>, line: usize, col: usize, offset: usize) -> Self {
         Srcloc {
             file: name,
             line,
             col,
+            offset,
             until: None,
         }
     }
@@ -70,6 +74,7 @@ impl Srcloc {
                 file: self.file.clone(),
                 line: u.line,
                 col: u.col,
+                offset: u.offset,
                 until: None,
             };
         }
@@ -119,10 +124,10 @@ impl Srcloc {
                 false
             }
             (Some(my_until), Some(their_until)) => {
-                let self_start = Srcloc::new(self.file.clone(), self.line, self.col);
-                let self_until = Srcloc::new(self.file.clone(), my_until.line, my_until.col);
-                let other_start = Srcloc::new(self.file.clone(), other.line, other.col);
-                let other_until = Srcloc::new(self.file.clone(), their_until.line, their_until.col);
+                let self_start = Srcloc::new(self.file.clone(), self.line, self.col, self.offset);
+                let self_until = Srcloc::new(self.file.clone(), my_until.line, my_until.col, my_until.offset);
+                let other_start = Srcloc::new(self.file.clone(), other.line, other.col, my_until.offset);
+                let other_until = Srcloc::new(self.file.clone(), their_until.line, their_until.col, my_until.offset);
                 other.overlap(&self_start)
                     || other.overlap(&self_until)
                     || self.overlap(&other_start)
@@ -171,6 +176,7 @@ impl Srcloc {
                 col: 1,
                 line: self.line + 1,
                 until: self.until.clone(),
+                offset: self.offset + 1,
             },
             '\t' => {
                 let next_tab = (self.col + 8) & !7;
@@ -179,6 +185,7 @@ impl Srcloc {
                     col: next_tab,
                     line: self.line,
                     until: self.until.clone(),
+                    offset: self.offset + 1,
                 }
             }
             _ => Srcloc {
@@ -186,6 +193,7 @@ impl Srcloc {
                 col: self.col + 1,
                 line: self.line,
                 until: self.until.clone(),
+                offset: self.offset + 1,
             },
         }
     }
@@ -198,6 +206,7 @@ impl Srcloc {
             line: 1,
             col: 1,
             until: None,
+            offset: 0,
         }
     }
 
@@ -220,11 +229,10 @@ pub fn src_location_max(a: &Srcloc) -> (usize, usize) {
 }
 
 fn add_onto(x: &Srcloc, y: &Srcloc) -> Srcloc {
+    let (sm_row, sm_col) = src_location_max(y);
     Srcloc {
-        file: x.file.clone(),
-        line: x.line,
-        col: x.col,
-        until: Some(Until::from_pair(src_location_max(y))),
+        until: Some(Until::new(sm_row, sm_col, y.offset)),
+        .. x.clone()
     }
 }
 

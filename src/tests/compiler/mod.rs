@@ -25,11 +25,11 @@ fn test_sexp_parse_print() {
     let start = Srcloc::start(&"test.cl".to_string());
     let mut end = start.clone();
     end.col = 2;
-    end.until = Some(Until { line: 1, col: 8 });
+    end.until = Some(Until { line: 1, col: 8, offset: 0 });
 
     let mut atom_loc = start.clone();
     atom_loc.col = 2;
-    atom_loc.until = Some(Until { line: 1, col: 4 });
+    atom_loc.until = Some(Until { line: 1, col: 4, offset: 0 });
 
     let mut num_loc = start.clone();
     num_loc.col = 7;

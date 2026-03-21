@@ -966,7 +966,7 @@ fn check_parser_for_intermediate_result(
 
 #[cfg(test)]
 fn srcloc_range(name: &Rc<String>, start: usize, end: usize) -> Srcloc {
-    Srcloc::new(name.clone(), 1, start).ext(&Srcloc::new(name.clone(), 1, end))
+    Srcloc::new(name.clone(), 1, start, start).ext(&Srcloc::new(name.clone(), 1, end, end))
 }
 
 #[test]
