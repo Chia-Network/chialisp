@@ -14,7 +14,7 @@ use rue_hir::{
     BinaryOp, Database, DependencyGraph, Environment, FunctionCall, FunctionKind, FunctionSymbol,
     Hir, HirId, Lowerer, ParameterSymbol, Scope, ScopeId, Symbol, SymbolId, UnaryOp, Value,
 };
-use rue_lir::Lir;
+use rue_lir::{ClvmOp, Lir};
 use rue_options::CompilerOptions as RueCompilerOptions;
 use rue_types::{Type, TypeId};
 
@@ -79,16 +79,78 @@ pub fn rue_cg(opts: Rc<dyn CompilerOpts>) -> bool {
         && !opts.filename().starts_with("*macros*")
 }
 
+const STATIC_LIR_PRIMS: [ClvmOp; 48] = [
+    ClvmOp::Quote,
+    ClvmOp::Apply,
+    ClvmOp::If,
+    ClvmOp::Cons,
+    ClvmOp::First,
+    ClvmOp::Rest,
+    ClvmOp::Listp,
+    ClvmOp::Raise,
+    ClvmOp::Eq,
+    ClvmOp::GtBytes,
+    ClvmOp::Sha256,
+    ClvmOp::Substr,
+    ClvmOp::Strlen,
+    ClvmOp::Concat,
+    ClvmOp::Add,
+    ClvmOp::Sub,
+    ClvmOp::Mul,
+    ClvmOp::Div,
+    ClvmOp::Divmod,
+    ClvmOp::Gt,
+    ClvmOp::Ash,
+    ClvmOp::Lsh,
+    ClvmOp::Logand,
+    ClvmOp::Logior,
+    ClvmOp::Logxor,
+    ClvmOp::Lognot,
+    ClvmOp::Not,
+    ClvmOp::Any,
+    ClvmOp::All,
+    ClvmOp::Modpow,
+    ClvmOp::Mod,
+    ClvmOp::CoinId,
+    ClvmOp::PubkeyForExp,
+    ClvmOp::G1Add,
+    ClvmOp::G1Subtract,
+    ClvmOp::G1Multiply,
+    ClvmOp::G1Negate,
+    ClvmOp::G2Add,
+    ClvmOp::G2Subtract,
+    ClvmOp::G2Multiply,
+    ClvmOp::G2Negate,
+    ClvmOp::G1Map,
+    ClvmOp::G2Map,
+    ClvmOp::BlsPairingIdentity,
+    ClvmOp::BlsVerify,
+    ClvmOp::Secp256K1Verify,
+    ClvmOp::Secp256R1Verify,
+    ClvmOp::Keccak256,
+];
+
+fn match_prim(opts: Rc<dyn CompilerOpts>, prim: &[u8]) -> Option<ClvmOp> {
+    for p in STATIC_LIR_PRIMS.iter() {
+        if p.to_atom() == prim {
+            return Some(p.clone());
+        }
+    }
+
+    None
+}
+
 type PredeclaredHelperSymbols = HashMap<Vec<u8>, (SymbolId, ScopeId, bool)>;
 
 struct RueConversion {
     db: Database,
+    opts: Rc<dyn CompilerOpts>,
     text: Arc<str>,
     any_type_id: TypeId,
 }
 
 impl RueConversion {
-    fn new(text: Arc<str>) -> Self {
+    fn new(opts: Rc<dyn CompilerOpts>, text: Arc<str>) -> Self {
         let mut db = Database::new();
         let any_type = Type::Any;
         let any_type_id = {
@@ -97,6 +159,7 @@ impl RueConversion {
         };
         RueConversion {
             db,
+            opts: opts.clone(),
             text,
             any_type_id
         }
@@ -114,6 +177,35 @@ impl RueConversion {
                 self.db.alloc_hir(Hir::Pair(first, rest))
             }
         }
+    }
+
+    fn primcall(
+        &mut self,
+        scope: ScopeId,
+        clvm_op: ClvmOp,
+        loc: &Srcloc,
+        forms: &[Rc<BodyForm>]
+    ) -> Result<HirId, CompileErr> {
+        if matches!(clvm_op, ClvmOp::Cons) {
+            if forms.len() < 3 {
+                return Err(CompileErr(loc.clone(), "cons operator requires 2 arguments".to_string()));
+            }
+
+            let rest = self.intern_expr_hir(scope, &forms[2])?;
+            let first = self.intern_expr_hir(scope, &forms[1])?;
+            return Ok(self.db.alloc_hir(Hir::Pair(first, rest)));
+        }
+
+        let mut result = self.db.alloc_hir(Hir::Nil);
+        for arg in forms.iter().skip(1).rev() {
+            let arg_expr = self.intern_expr_hir(scope, &arg)?;
+            result = self.db.alloc_hir(Hir::Pair(
+                arg_expr,
+                result
+            ));
+        }
+
+        Ok(self.db.alloc_hir(Hir::ClvmOp(clvm_op, result)))
     }
 
     fn intern_expr_hir(
@@ -148,7 +240,7 @@ impl RueConversion {
                 }
             }
             BodyForm::Value(v) => Ok(self.intern_sexp_hir(v)),
-            BodyForm::Call(_, forms, tail) => {
+            BodyForm::Call(loc, forms, tail) => {
                 if forms.is_empty() {
                     return Err(rue_err(e.loc(), "empty call expression"));
                 }
@@ -201,13 +293,26 @@ impl RueConversion {
                     }
                 }
 
-                let function = self.intern_expr_hir(scope, &forms[0])?;
+                let function_result = self.intern_expr_hir(scope, &forms[0]);
+                let function =
+                    match &function_result {
+                        Ok(f) => f,
+                        Err(e) => {
+                            if let Some(atom) = &op_atom {
+                                if let Some(prim) = match_prim(self.opts.clone(), atom) {
+                                    return self.primcall(scope, prim, loc, &forms);
+                                }
+                            }
+                            return function_result;
+                        }
+                    };
+
                 let mut args = Vec::new();
                 for arg in forms.iter().skip(1) {
                     args.push(self.intern_expr_hir(scope, arg)?);
                 }
                 Ok(self.db.alloc_hir(Hir::FunctionCall(FunctionCall {
-                    function,
+                    function: *function,
                     args,
                     nil_terminated: true,
                 })))
@@ -245,38 +350,53 @@ impl RueConversion {
                         }
                     }
                     LetFormKind::Assign => {
-                        let mut body_scope = self.db.alloc_scope(Scope::new(Some(scope)));
+                        body_scope = self.db.alloc_scope(Scope::new(Some(scope)));
                         let sorted_bindings = toposort_assign_bindings(&let_data.loc, &let_data.bindings)?;
                         for b in sorted_bindings.iter() {
                             let binding = &let_data.bindings[b.index];
                             let value_hir =
                                 self.intern_expr_hir(body_scope, &binding.body)?;
-                            let inline_functions_to_emit =
+                            let (multiple_binding, binding_env_pattern) =
                                 match &binding.pattern {
                                     BindingPattern::Name(name) => {
-                                        vec![(bi_one(), name.to_vec())]
+                                        (false, Rc::new(SExp::Atom(let_data.loc.clone(), name.clone())))
                                     }
                                     BindingPattern::Complex(pattern) => {
-                                        param_names_and_paths(pattern.clone())
+                                        (matches!(pattern.borrow(), SExp::Atom(_, _)), pattern.clone())
                                     }
                                 };
 
-                            if inline_functions_to_emit.len() == 1 {
-                                let new_name = gensym(inline_functions_to_emit[0].1.clone());
-                            } else {
-                                let new_name = gensym(b"__assign_binding".to_vec());
-                                for element in inline_functions_to_emit.iter() {
-                                    // XXX
-                                    // create_param_helper(db, body_scope, any_type_id,
-                                    todo!();
-                                }
-                                todo!();
-                            }
+                            let new_name =
+                                if multiple_binding {
+                                    decode_string(&gensym(b"__assign_binding".to_vec()))
+                                } else {
+                                    binding_env_pattern.to_string()
+                                };
+
+                            let symbol = self.db.alloc_symbol(Symbol::Binding(rue_hir::BindingSymbol {
+                                name: Some(Name::new(
+                                    new_name.clone(),
+                                    Some(self.to_rue_srcloc(binding.nl.clone())),
+                                )),
+                                value: Value::new(value_hir, self.any_type_id),
+                                inline: false,
+                            }));
+
+                            self.install_tree_arg_accessors(
+                                body_scope,
+                                binding_env_pattern.clone(),
+                                symbol,
+                            );
+
+                            let next_scope = self.db.alloc_scope(Scope::new(Some(body_scope)));
+                            self.db.scope_mut(next_scope)
+                                .insert_symbol(new_name, symbol, false);
+                            body_scope = next_scope;
+                            statements.push(rue_hir::Statement::Let(symbol));
                         }
-                        todo!();
                     }
                     LetFormKind::Sequential => {
-                        let mut body_scope = self.db.alloc_scope(Scope::new(Some(scope)));
+                        body_scope = self.db.alloc_scope(Scope::new(Some(scope)));
                         for binding in let_data.bindings.iter() {
                             let Some(binding_name) = binding_name(&binding.pattern) else {
                                 return Err(rue_err(
@@ -819,6 +939,6 @@ pub fn compile_with_rue_codegen(
     text: Arc<str>,
     program: &CompileForm,
 ) -> Result<SExp, CompileErr> {
-    let mut rue_compiler = RueConversion::new(text);
+    let mut rue_compiler = RueConversion::new(opts.clone(), text);
     rue_compiler.transform(opts.clone(), program)
 }

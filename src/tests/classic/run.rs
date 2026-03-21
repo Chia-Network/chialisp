@@ -2682,9 +2682,10 @@ fn run_test_assign_rue() {
 
 #[test]
 fn run_test_assign_destructure_reports_unsupported_rue() {
-    let result = do_basic_run(&vec![
+    let program = do_basic_run(&vec![
         "run".to_string(),
         "(mod (a) (include *standard-cl-rue1*) (assign (x y) (list a a) (+ x y)))".to_string(),
     ]);
-    assert!(result.contains("complex let binding patterns are not yet supported"));
+    let result = do_basic_brun(&vec!["brun".to_string(), program, "(100)".to_string()]);
+    assert_eq!(result.trim().to_string(), "200".to_string());
 }
