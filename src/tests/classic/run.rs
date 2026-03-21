@@ -2611,23 +2611,17 @@ fn test_rue_clvm_operators() {
     const G1: &str = "0x97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb";
     const G1_ALT: &str = "0xb78f3c5f26a009143a3481dd09656ad7b3915e5ffd83aa2bc3ee49cd007a1f7a20791eb0036f86f457d3a6e80dbe5cde";
     const G2: &str = "0x8e955b28f90781845102a0e429c2684fc1e7585b0dc93fc127190f526397a48765f5126d60464b2298526e3cf629ea42128b704ce49fd029e0124eeb21156191662ff98cc0e8a304a8a1205fdada060b7f1181ace11dcc5d711a679b44b1df18";
-    const COIN_PARENT: &str =
-        "0x6e6561726c792d706172656e742d636f696e2d69640000000000000000000000";
-    const COIN_PUZZLE: &str =
-        "0x706172656e742d70757a7a6c652d686173680000000000000000000000000000";
+    const COIN_PARENT: &str = "0x6e6561726c792d706172656e742d636f696e2d69640000000000000000000000";
+    const COIN_PUZZLE: &str = "0x706172656e742d70757a7a6c652d686173680000000000000000000000000000";
     const BLS_PK: &str =
         "0x86243290bbcbfd9ae75bdece7981965350208eb5e99b04d5cd24e955ada961f8c0a162dee740be7bdc6c3c0613ba2eb1";
     const BLS_SIG: &str = "0xb00ab9a8af54804b43067531d96c176710c05980fccf8eee1ae12a4fd543df929cce860273af931fe4fdbc407d495f73114ab7d17ef08922e56625daada0497582340ecde841a9e997f2f557653c21c070119662dd2efa47e2d6c5e2de00eefa";
     const BLS_MSG: &str = "0x0102030405";
-    const K1_PK: &str =
-        "0x02390b19842e100324163334b16947f66125b76d4fa4a11b9ccdde9b7398e64076";
-    const K1_HASH: &str =
-        "0x85932e4d075615be881398cc765f9f78204033f0ef5f832ac37e732f5f0cbda2";
+    const K1_PK: &str = "0x02390b19842e100324163334b16947f66125b76d4fa4a11b9ccdde9b7398e64076";
+    const K1_HASH: &str = "0x85932e4d075615be881398cc765f9f78204033f0ef5f832ac37e732f5f0cbda2";
     const K1_SIG: &str = "0x481477e62a1d02268127ae89cc58929e09ad5d30229721965ae35965d098a5f630205a7e69f4cb8084f16c7407ed7312994ffbf87ba5eb1aee16682dd324943e";
-    const R1_PK: &str =
-        "0x033e1a1b2ccbc35883c60fdfc3f4a02175096ade6271fe85517ca5772594bbd0dc";
-    const R1_HASH: &str =
-        "0x85932e4d075615be881398cc765f9f78204033f0ef5f832ac37e732f5f0cbda2";
+    const R1_PK: &str = "0x033e1a1b2ccbc35883c60fdfc3f4a02175096ade6271fe85517ca5772594bbd0dc";
+    const R1_HASH: &str = "0x85932e4d075615be881398cc765f9f78204033f0ef5f832ac37e732f5f0cbda2";
     const R1_SIG: &str = "0xeae2f488080919bd0a7069c24cdd9c6ce2db423861b0c9d4236cdadbd0005f6d8f3709e6eb19249fd9c8bea664aba35218e67ea4b0f2239488dc3147f336e1e6";
     const G1_DST: &str = "\"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_AUG_\"";
     const G2_DST: &str = "\"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_AUG_\"";
@@ -2997,8 +2991,9 @@ fn test_rue_clvm_operators() {
         } else {
             render_clvm_list(&call_text_by_value)
         };
-        let expected_result =
-            do_basic_brun(&vec!["brun".to_string(), expected_body]).trim().to_string();
+        let expected_result = do_basic_brun(&vec!["brun".to_string(), expected_body])
+            .trim()
+            .to_string();
         let run_input = if run_values.is_empty() {
             "()".to_string()
         } else {
@@ -3007,12 +3002,10 @@ fn test_rue_clvm_operators() {
         let params = parameter_names.join(" ");
 
         let classic_program_source = format!("(mod ({params}) {body_by_name})");
-        let classic_compiled = do_basic_run(&vec![
-            "run".to_string(),
-            classic_program_source.clone(),
-        ])
-        .trim()
-        .to_string();
+        let classic_compiled =
+            do_basic_run(&vec!["run".to_string(), classic_program_source.clone()])
+                .trim()
+                .to_string();
         assert!(
             !classic_compiled.starts_with("FAIL"),
             "classic compile failed for {}",
@@ -3033,10 +3026,9 @@ fn test_rue_clvm_operators() {
 
         let rue_program_source =
             format!("(mod ({params}) (include *standard-cl-rue1*) {body_by_name})");
-        let rue_compiled =
-            do_basic_run(&vec!["run".to_string(), rue_program_source.clone()])
-                .trim()
-                .to_string();
+        let rue_compiled = do_basic_run(&vec!["run".to_string(), rue_program_source.clone()])
+            .trim()
+            .to_string();
         assert!(
             !rue_compiled.starts_with("FAIL"),
             "rue compile failed for {}",

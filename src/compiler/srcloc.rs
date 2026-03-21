@@ -15,11 +15,7 @@ pub struct Until {
 
 impl Until {
     pub fn new(line: usize, col: usize, offset: usize) -> Self {
-        Until {
-            line,
-            col,
-            offset,
-        }
+        Until { line, col, offset }
     }
 }
 
@@ -125,9 +121,20 @@ impl Srcloc {
             }
             (Some(my_until), Some(their_until)) => {
                 let self_start = Srcloc::new(self.file.clone(), self.line, self.col, self.offset);
-                let self_until = Srcloc::new(self.file.clone(), my_until.line, my_until.col, my_until.offset);
-                let other_start = Srcloc::new(self.file.clone(), other.line, other.col, my_until.offset);
-                let other_until = Srcloc::new(self.file.clone(), their_until.line, their_until.col, my_until.offset);
+                let self_until = Srcloc::new(
+                    self.file.clone(),
+                    my_until.line,
+                    my_until.col,
+                    my_until.offset,
+                );
+                let other_start =
+                    Srcloc::new(self.file.clone(), other.line, other.col, my_until.offset);
+                let other_until = Srcloc::new(
+                    self.file.clone(),
+                    their_until.line,
+                    their_until.col,
+                    my_until.offset,
+                );
                 other.overlap(&self_start)
                     || other.overlap(&self_until)
                     || self.overlap(&other_start)
@@ -232,7 +239,7 @@ fn add_onto(x: &Srcloc, y: &Srcloc) -> Srcloc {
     let (sm_row, sm_col) = src_location_max(y);
     Srcloc {
         until: Some(Until::new(sm_row, sm_col, y.offset)),
-        .. x.clone()
+        ..x.clone()
     }
 }
 

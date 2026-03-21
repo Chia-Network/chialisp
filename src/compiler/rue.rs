@@ -19,13 +19,15 @@ use rue_options::CompilerOptions as RueCompilerOptions;
 use rue_types::{Type, TypeId};
 
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
-use crate::compiler::BasicCompileContext;
 use crate::compiler::clvm::convert_from_clvm_rs;
-use crate::compiler::comptypes::{BindingPattern, BodyForm, CompileErr, CompileForm, CompilerOpts, HelperForm, LetFormKind};
 use crate::compiler::codegen::toposort_assign_bindings;
+use crate::compiler::comptypes::{
+    BindingPattern, BodyForm, CompileErr, CompileForm, CompilerOpts, HelperForm, LetFormKind,
+};
 use crate::compiler::gensym::gensym;
-use crate::compiler::srcloc::Srcloc;
 use crate::compiler::sexp::{decode_string, printable, SExp};
+use crate::compiler::srcloc::Srcloc;
+use crate::compiler::BasicCompileContext;
 use crate::util::Number;
 
 fn rue_err(loc: Srcloc, msg: impl Into<String>) -> CompileErr {
@@ -213,7 +215,7 @@ impl RueConversion {
             db,
             opts: opts.clone(),
             text,
-            any_type_id
+            any_type_id,
         }
     }
 
@@ -236,11 +238,14 @@ impl RueConversion {
         scope: ScopeId,
         clvm_op: ClvmOp,
         loc: &Srcloc,
-        forms: &[Rc<BodyForm>]
+        forms: &[Rc<BodyForm>],
     ) -> Result<HirId, CompileErr> {
         if matches!(clvm_op, ClvmOp::Cons) {
             if forms.len() < 3 {
-                return Err(CompileErr(loc.clone(), "cons operator requires 2 arguments".to_string()));
+                return Err(CompileErr(
+                    loc.clone(),
+                    "cons operator requires 2 arguments".to_string(),
+                ));
             }
 
             let rest = self.intern_expr_hir(scope, &forms[2])?;
@@ -251,20 +256,13 @@ impl RueConversion {
         let mut result = self.db.alloc_hir(Hir::Nil);
         for arg in forms.iter().skip(1).rev() {
             let arg_expr = self.intern_expr_hir(scope, &arg)?;
-            result = self.db.alloc_hir(Hir::Pair(
-                arg_expr,
-                result
-            ));
+            result = self.db.alloc_hir(Hir::Pair(arg_expr, result));
         }
 
         Ok(self.db.alloc_hir(Hir::ClvmOp(clvm_op, result)))
     }
 
-    fn intern_expr_hir(
-        &mut self,
-        scope: ScopeId,
-        e: &BodyForm,
-    ) -> Result<HirId, CompileErr> {
+    fn intern_expr_hir(&mut self, scope: ScopeId, e: &BodyForm) -> Result<HirId, CompileErr> {
         match e {
             BodyForm::Quoted(s) => Ok(self.intern_sexp_hir(s)),
             BodyForm::Value(SExp::Nil(_)) => Ok(self.db.alloc_hir(Hir::Nil)),
@@ -328,18 +326,17 @@ impl RueConversion {
                 }
 
                 let function_result = self.intern_expr_hir(scope, &forms[0]);
-                let function =
-                    match &function_result {
-                        Ok(f) => f,
-                        Err(e) => {
-                            if let Some(atom) = &op_atom {
-                                if let Some(prim) = match_prim(self.opts.clone(), atom) {
-                                    return self.primcall(scope, prim, loc, &forms);
-                                }
+                let function = match &function_result {
+                    Ok(f) => f,
+                    Err(e) => {
+                        if let Some(atom) = &op_atom {
+                            if let Some(prim) = match_prim(self.opts.clone(), atom) {
+                                return self.primcall(scope, prim, loc, &forms);
                             }
-                            return function_result;
                         }
-                    };
+                        return function_result;
+                    }
+                };
 
                 let mut args = Vec::new();
                 for arg in forms.iter().skip(1) {
@@ -370,51 +367,56 @@ impl RueConversion {
 
                             let value_hir = self.intern_expr_hir(scope, &binding.body)?;
                             let symbol_name = decode_string(&binding_name);
-                            let symbol = self.db.alloc_symbol(Symbol::Binding(rue_hir::BindingSymbol {
-                                name: Some(Name::new(
-                                    symbol_name.clone(),
-                                    Some(self.to_rue_srcloc(binding.nl.clone())),
-                                )),
-                                value: Value::new(value_hir, self.any_type_id),
-                                inline: false,
-                            }));
-                            self.db.scope_mut(body_scope)
+                            let symbol =
+                                self.db
+                                    .alloc_symbol(Symbol::Binding(rue_hir::BindingSymbol {
+                                        name: Some(Name::new(
+                                            symbol_name.clone(),
+                                            Some(self.to_rue_srcloc(binding.nl.clone())),
+                                        )),
+                                        value: Value::new(value_hir, self.any_type_id),
+                                        inline: false,
+                                    }));
+                            self.db
+                                .scope_mut(body_scope)
                                 .insert_symbol(symbol_name, symbol, false);
                             statements.push(rue_hir::Statement::Let(symbol));
                         }
                     }
                     LetFormKind::Assign => {
                         body_scope = self.db.alloc_scope(Scope::new(Some(scope)));
-                        let sorted_bindings = toposort_assign_bindings(&let_data.loc, &let_data.bindings)?;
+                        let sorted_bindings =
+                            toposort_assign_bindings(&let_data.loc, &let_data.bindings)?;
                         for b in sorted_bindings.iter() {
                             let binding = &let_data.bindings[b.index];
-                            let value_hir =
-                                self.intern_expr_hir(body_scope, &binding.body)?;
-                            let (multiple_binding, binding_env_pattern) =
-                                match &binding.pattern {
-                                    BindingPattern::Name(name) => {
-                                        (false, Rc::new(SExp::Atom(let_data.loc.clone(), name.clone())))
-                                    }
-                                    BindingPattern::Complex(pattern) => {
-                                        (matches!(pattern.borrow(), SExp::Atom(_, _)), pattern.clone())
-                                    }
-                                };
+                            let value_hir = self.intern_expr_hir(body_scope, &binding.body)?;
+                            let (multiple_binding, binding_env_pattern) = match &binding.pattern {
+                                BindingPattern::Name(name) => (
+                                    false,
+                                    Rc::new(SExp::Atom(let_data.loc.clone(), name.clone())),
+                                ),
+                                BindingPattern::Complex(pattern) => (
+                                    matches!(pattern.borrow(), SExp::Atom(_, _)),
+                                    pattern.clone(),
+                                ),
+                            };
 
-                            let new_name =
-                                if multiple_binding {
-                                    decode_string(&gensym(b"__assign_binding".to_vec()))
-                                } else {
-                                    binding_env_pattern.to_string()
-                                };
+                            let new_name = if multiple_binding {
+                                decode_string(&gensym(b"__assign_binding".to_vec()))
+                            } else {
+                                binding_env_pattern.to_string()
+                            };
 
-                            let symbol = self.db.alloc_symbol(Symbol::Binding(rue_hir::BindingSymbol {
-                                name: Some(Name::new(
-                                    new_name.clone(),
-                                    Some(self.to_rue_srcloc(binding.nl.clone())),
-                                )),
-                                value: Value::new(value_hir, self.any_type_id),
-                                inline: false,
-                            }));
+                            let symbol =
+                                self.db
+                                    .alloc_symbol(Symbol::Binding(rue_hir::BindingSymbol {
+                                        name: Some(Name::new(
+                                            new_name.clone(),
+                                            Some(self.to_rue_srcloc(binding.nl.clone())),
+                                        )),
+                                        value: Value::new(value_hir, self.any_type_id),
+                                        inline: false,
+                                    }));
 
                             self.install_tree_arg_accessors(
                                 body_scope,
@@ -423,7 +425,8 @@ impl RueConversion {
                             );
 
                             let next_scope = self.db.alloc_scope(Scope::new(Some(body_scope)));
-                            self.db.scope_mut(next_scope)
+                            self.db
+                                .scope_mut(next_scope)
                                 .insert_symbol(new_name, symbol, false);
                             body_scope = next_scope;
                             statements.push(rue_hir::Statement::Let(symbol));
@@ -442,19 +445,21 @@ impl RueConversion {
                                 ));
                             };
 
-                            let value_hir =
-                                self.intern_expr_hir(body_scope, &binding.body)?;
+                            let value_hir = self.intern_expr_hir(body_scope, &binding.body)?;
                             let symbol_name = decode_string(&binding_name);
-                            let symbol = self.db.alloc_symbol(Symbol::Binding(rue_hir::BindingSymbol {
-                                name: Some(Name::new(
-                                    symbol_name.clone(),
-                                    Some(self.to_rue_srcloc(binding.nl.clone())),
-                                )),
-                                value: Value::new(value_hir, self.any_type_id),
-                                inline: false,
-                            }));
+                            let symbol =
+                                self.db
+                                    .alloc_symbol(Symbol::Binding(rue_hir::BindingSymbol {
+                                        name: Some(Name::new(
+                                            symbol_name.clone(),
+                                            Some(self.to_rue_srcloc(binding.nl.clone())),
+                                        )),
+                                        value: Value::new(value_hir, self.any_type_id),
+                                        inline: false,
+                                    }));
                             let next_scope = self.db.alloc_scope(Scope::new(Some(body_scope)));
-                            self.db.scope_mut(next_scope)
+                            self.db
+                                .scope_mut(next_scope)
                                 .insert_symbol(symbol_name, symbol, false);
                             body_scope = next_scope;
                             statements.push(rue_hir::Statement::Let(symbol));
@@ -479,10 +484,7 @@ impl RueConversion {
         }
     }
 
-    fn to_rue_srcloc(
-        &self,
-        value: Srcloc,
-    ) -> rue_diagnostic::SrcLoc {
+    fn to_rue_srcloc(&self, value: Srcloc) -> rue_diagnostic::SrcLoc {
         let start_line = value.line.max(1);
         let start_col = value.col.max(1);
         // XXX Fix this.
@@ -536,7 +538,8 @@ impl RueConversion {
             body: accessor_body,
             kind: FunctionKind::Inline,
         }));
-        self.db.scope_mut(scope_id)
+        self.db
+            .scope_mut(scope_id)
             .insert_symbol(target_name, symbol_id, false);
         (target.to_vec(), symbol_id)
     }
@@ -558,7 +561,8 @@ impl RueConversion {
             body,
             kind: FunctionKind::Inline,
         }));
-        self.db.scope_mut(scope_id)
+        self.db
+            .scope_mut(scope_id)
             .insert_symbol(name.to_string(), symbol_id, false);
         symbol_id
     }
@@ -574,11 +578,7 @@ impl RueConversion {
         }
     }
 
-    fn install_env_alias_helpers(
-        &mut self,
-        scope_id: ScopeId,
-        env_symbol: SymbolId,
-    ) {
+    fn install_env_alias_helpers(&mut self, scope_id: ScopeId, env_symbol: SymbolId) {
         // In classic codegen, @*env* is used as the current environment path (1),
         // and (r @*env*) addresses the user argument subtree. Model that directly.
         let env_ref = self.db.alloc_hir(Hir::Reference(env_symbol));
@@ -621,7 +621,8 @@ impl RueConversion {
                     FunctionKind::BinaryTree
                 },
             }));
-            self.db.scope_mut(main_scope)
+            self.db
+                .scope_mut(main_scope)
                 .insert_symbol(function_name, function_sym, false);
 
             result.insert(data.name.clone(), (function_sym, function_scope, *inline));
@@ -637,7 +638,8 @@ impl RueConversion {
     ) -> Result<HirId, CompileErr> {
         match h {
             HelperForm::Defun(_, data) => {
-                let Some((function_sym, function_scope, is_inline)) = predeclared.get(h.name()) else {
+                let Some((function_sym, function_scope, is_inline)) = predeclared.get(h.name())
+                else {
                     return Err(rue_err(
                         data.loc.clone(),
                         format!(
@@ -661,10 +663,14 @@ impl RueConversion {
                     for (arg_index, p) in params.into_iter().enumerate() {
                         if let SExp::Atom(ploc, atom_name) = p {
                             let param_name = decode_string(&atom_name);
-                            let param_symbol = self.db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
-                                name: Some(Name::new(param_name.clone(), Some(self.to_rue_srcloc(ploc.clone())))),
-                                ty: self.any_type_id,
-                            }));
+                            let param_symbol =
+                                self.db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
+                                    name: Some(Name::new(
+                                        param_name.clone(),
+                                        Some(self.to_rue_srcloc(ploc.clone())),
+                                    )),
+                                    ty: self.any_type_id,
+                                }));
                             self.db.scope_mut(*function_scope).insert_symbol(
                                 param_name.clone(),
                                 param_symbol,
@@ -675,10 +681,14 @@ impl RueConversion {
                             // Inline helpers may still destructure argument trees.
                             // Bind the incoming argument, then create accessor helpers for leaves.
                             let param_name = format!("_$_arg_{arg_index}");
-                            let param_symbol = self.db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
-                                name: Some(Name::new(param_name.clone(), Some(self.to_rue_srcloc(p.loc())))),
-                                ty: self.any_type_id,
-                            }));
+                            let param_symbol =
+                                self.db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
+                                    name: Some(Name::new(
+                                        param_name.clone(),
+                                        Some(self.to_rue_srcloc(p.loc())),
+                                    )),
+                                    ty: self.any_type_id,
+                                }));
                             self.db.scope_mut(*function_scope).insert_symbol(
                                 param_name.clone(),
                                 param_symbol,
@@ -697,10 +707,14 @@ impl RueConversion {
                     // shape. Rue uses either sequential or tree shaped and choose the tree shape at
                     // lowering time. The right approach is to use a single argument in BinaryTree
                     // mode and make accessors for the individual destructurings chialisp would allow.
-                    let main_arg_symbol = self.db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
-                        name: Some(Name::new("_$_args__", Some(self.to_rue_srcloc(data.args.loc())))),
-                        ty: self.any_type_id,
-                    }));
+                    let main_arg_symbol =
+                        self.db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
+                            name: Some(Name::new(
+                                "_$_args__",
+                                Some(self.to_rue_srcloc(data.args.loc())),
+                            )),
+                            ty: self.any_type_id,
+                        }));
                     plist.insert("_$_args__".to_string(), main_arg_symbol);
                     self.db.scope_mut(*function_scope).insert_symbol(
                         "_$_args__".to_string(),
@@ -746,10 +760,7 @@ impl RueConversion {
         }
     }
 
-    fn intern_hir(
-        &mut self,
-        program: &CompileForm,
-    ) -> Result<SymbolId, CompileErr> {
+    fn intern_hir(&mut self, program: &CompileForm) -> Result<SymbolId, CompileErr> {
         let main_scope_id: ScopeId = self.db.alloc_scope(Scope::new(None));
         let predeclared = self.predeclare_helper_symbols(main_scope_id, &program.helpers)?;
         for h in program.helpers.iter() {
@@ -760,23 +771,28 @@ impl RueConversion {
         // Program arguments are tree-shaped in chialisp, so model them the same way as
         // non-inline defun arguments: one binary-tree parameter and atom accessors.
         let main_args_symbol = self.db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
-            name: Some(Name::new("_$_args__", Some(self.to_rue_srcloc(program.args.loc())))),
+            name: Some(Name::new(
+                "_$_args__",
+                Some(self.to_rue_srcloc(program.args.loc())),
+            )),
             ty: self.any_type_id,
         }));
-        self.db.scope_mut(program_scope)
-            .insert_symbol("_$_args__".to_string(), main_args_symbol, false);
-        self.install_tree_arg_accessors(
-            program_scope,
-            program.args.clone(),
+        self.db.scope_mut(program_scope).insert_symbol(
+            "_$_args__".to_string(),
             main_args_symbol,
+            false,
         );
+        self.install_tree_arg_accessors(program_scope, program.args.clone(), main_args_symbol);
         self.install_env_alias_helpers(program_scope, main_args_symbol);
 
         let main_body = self.intern_expr_hir(program_scope, &program.exp)?;
         let mut main_params: IndexMap<String, SymbolId> = IndexMap::default();
         main_params.insert("_$_args__".to_string(), main_args_symbol);
         let main_symbol = self.db.alloc_symbol(Symbol::Function(FunctionSymbol {
-            name: Some(Name::new("__chia_main__", Some(self.to_rue_srcloc(program.loc.clone())))),
+            name: Some(Name::new(
+                "__chia_main__",
+                Some(self.to_rue_srcloc(program.loc.clone())),
+            )),
             ty: self.any_type_id,
             scope: program_scope,
             vars: Default::default(),
@@ -786,8 +802,11 @@ impl RueConversion {
             body: main_body,
             kind: FunctionKind::BinaryTree,
         }));
-        self.db.scope_mut(main_scope_id)
-            .insert_symbol("__chia_main__".to_string(), main_symbol, false);
+        self.db.scope_mut(main_scope_id).insert_symbol(
+            "__chia_main__".to_string(),
+            main_symbol,
+            false,
+        );
         Ok(main_symbol)
     }
 
@@ -843,26 +862,27 @@ impl RueConversion {
         Ok(output.as_ref().clone())
     }
 
-        fn visit_symbol(
-            &self,
-            symbol: SymbolId,
-            visited_symbols: &mut HashSet<SymbolId>,
-            visited_hir: &mut HashSet<HirId>,
-        ) -> Result<(), String> {
-            if !visited_symbols.insert(symbol) {
-                return Ok(());
-            }
+    fn visit_symbol(
+        &self,
+        symbol: SymbolId,
+        visited_symbols: &mut HashSet<SymbolId>,
+        visited_hir: &mut HashSet<HirId>,
+    ) -> Result<(), String> {
+        if !visited_symbols.insert(symbol) {
+            return Ok(());
+        }
         if let Symbol::Function(function) = self.db.symbol(symbol) {
-            self.visit_hir(function.body, visited_symbols, visited_hir).map_err(|ctx| {
-                format!(
-                    "unresolved hir in function `{}` ({ctx})",
-                    function
-                        .name
-                        .as_ref()
-                        .map(|n| n.text().to_string())
-                        .unwrap_or_else(|| "<unnamed>".to_string())
-                )
-            })?;
+            self.visit_hir(function.body, visited_symbols, visited_hir)
+                .map_err(|ctx| {
+                    format!(
+                        "unresolved hir in function `{}` ({ctx})",
+                        function
+                            .name
+                            .as_ref()
+                            .map(|n| n.text().to_string())
+                            .unwrap_or_else(|| "<unnamed>".to_string())
+                    )
+                })?;
         }
         Ok(())
     }
