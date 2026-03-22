@@ -26,8 +26,8 @@ use crate::compiler::comptypes::{
     BindingPattern, BodyForm, CompileErr, CompileForm, CompilerOpts, DefconstData, DefunData,
     HelperForm, LetFormKind,
 };
-use crate::compiler::frontend::collect_used_names_bodyform;
 use crate::compiler::gensym::gensym;
+use crate::compiler::optimize::depgraph::{DepgraphOptions, FunctionDependencyGraph};
 use crate::compiler::sexp::{decode_string, printable, SExp};
 use crate::compiler::srcloc::Srcloc;
 use crate::util::{toposort, Number};
@@ -894,15 +894,6 @@ impl RueConversion {
         Ok(value)
     }
 
-    fn helper_used_names(helper: &HelperForm) -> Vec<Vec<u8>> {
-        match helper {
-            HelperForm::Defconstant(defc) => collect_used_names_bodyform(defc.body.borrow()),
-            HelperForm::Defun(_, defun) => collect_used_names_bodyform(defun.body.borrow()),
-            // Macro expansion completed before codegen.
-            HelperForm::Defmacro(_) => Vec::new(),
-        }
-    }
-
     fn constant_dependency_order(
         &self,
         program: &CompileForm,
@@ -922,32 +913,12 @@ impl RueConversion {
             return Ok(Vec::new());
         }
 
-        let constant_names: HashSet<Vec<u8>> = constants.iter().map(|c| c.name.clone()).collect();
-        let helper_map: HashMap<Vec<u8>, HelperForm> = program
-            .helpers
-            .iter()
-            .map(|helper| (helper.name().clone(), helper.clone()))
-            .collect();
-        let mut dependencies_by_name: HashMap<Vec<u8>, HashSet<Vec<u8>>> = HashMap::new();
-
-        for constant in constants.iter() {
-            let mut stack = collect_used_names_bodyform(constant.body.borrow());
-            let mut reachable = HashSet::new();
-            while let Some(name) = stack.pop() {
-                if !reachable.insert(name.clone()) {
-                    continue;
-                }
-                if let Some(helper) = helper_map.get(&name) {
-                    stack.extend(Self::helper_used_names(helper));
-                }
-            }
-
-            let constant_dependencies = reachable
-                .into_iter()
-                .filter(|name| *name != constant.name && constant_names.contains(name))
-                .collect();
-            dependencies_by_name.insert(constant.name.clone(), constant_dependencies);
-        }
+        let depgraph = FunctionDependencyGraph::new_with_options(
+            program,
+            DepgraphOptions {
+                with_constants: true,
+            },
+        );
 
         let deadlock = CompileErr(
             program.loc.clone(),
@@ -957,10 +928,9 @@ impl RueConversion {
             &constants,
             deadlock,
             |possible, constant| {
-                let dependencies = dependencies_by_name
-                    .get(&constant.name)
-                    .cloned()
-                    .unwrap_or_default();
+                let mut dependencies = HashSet::new();
+                depgraph.get_full_depends_on(&mut dependencies, &constant.name);
+                dependencies.remove(&constant.name);
                 Ok(dependencies
                     .intersection(possible)
                     .cloned()
