@@ -682,11 +682,37 @@ impl RueConversion {
 
     fn predeclare_constant(
         &mut self,
-        _main_scope: ScopeId,
-        _constant_name: &str,
-        _data: &DefconstData,
+        main_scope: ScopeId,
+        constant_name: &str,
+        data: &DefconstData,
     ) -> SymbolId {
-        todo!();
+        let unresolved_body = self.db.alloc_hir(Hir::Unresolved);
+        let constant_sym = self.db.alloc_symbol(Symbol::Function(FunctionSymbol {
+            name: Some(Name::new(
+                constant_name.to_string(),
+                Some(self.to_rue_srcloc(data.nl.clone())),
+            )),
+            ty: self.any_type_id,
+            scope: main_scope,
+            vars: Default::default(),
+            parameters: IndexMap::default(),
+            nil_terminated: true,
+            return_type: self.any_type_id,
+            body: unresolved_body,
+            kind: FunctionKind::Inline,
+        }));
+        self.db
+            .scope_mut(main_scope)
+            .insert_symbol(constant_name.to_string(), constant_sym, false);
+        self.predeclared_helpers.insert(
+            data.name.clone(),
+            PredeclaredHelperSymbol {
+                symbol_id: constant_sym,
+                scope_id: main_scope,
+                kind: PredeclaredSymbolKind::Constant,
+            },
+        );
+        constant_sym
     }
 
     fn predeclare_helper_symbols(
@@ -713,7 +739,6 @@ impl RueConversion {
             } else if let HelperForm::Defconstant(data) = helper {
                 let constant_name = decode_string(helper.name());
                 let _constant_sym = self.predeclare_constant(main_scope, &constant_name, data);
-                todo!();
             }
         }
         Ok(())
@@ -818,24 +843,37 @@ impl RueConversion {
         data: &DefconstData,
         program: &CompileForm,
     ) -> Result<(), CompileErr> {
+        let Some(predecl) = self.predeclared_helpers.get(&data.name).cloned() else {
+            return Err(rue_err(
+                data.loc.clone(),
+                format!(
+                    "missing predeclared symbol for constant `{}`",
+                    decode_string(&data.name)
+                ),
+            ));
+        };
         let constant_compileform = CompileForm {
             exp: data.body.clone(),
             ..program.clone()
         };
+        // Constants are materialized by compiling and evaluating their body.
+        // Disable Rue translation for this nested compilation to avoid recursive
+        // re-entry into this constant materialization path.
+        let constant_opts = self.opts.set_stdenv(false);
         let runner: Rc<dyn TRunProgram> = Rc::new(DefaultProgramRunner::new());
         let mut compile_context = BasicCompileContext::new(
             Allocator::new(),
             runner,
             HashMap::new(),
-            get_optimizer(&program.loc, self.opts.clone())?,
+            get_optimizer(&program.loc, constant_opts.clone())?,
         );
         let compiled = compile_from_compileform(
             &mut compile_context,
-            self.opts.clone(),
+            constant_opts,
             constant_compileform,
         )?;
         let runner = compile_context.runner();
-        let _value = run(
+        let value = run(
             compile_context.allocator(),
             runner,
             self.opts.prim_map(),
@@ -844,7 +882,23 @@ impl RueConversion {
             None,
             None,
         )?;
-        todo!();
+        let value_hir = self.intern_sexp_hir(&value);
+        let function_name = decode_string(&data.name);
+        *self.db.symbol_mut(predecl.symbol_id) = Symbol::Function(FunctionSymbol {
+            name: Some(Name::new(
+                function_name,
+                Some(self.to_rue_srcloc(data.nl.clone())),
+            )),
+            ty: self.any_type_id,
+            scope: predecl.scope_id,
+            vars: Default::default(),
+            parameters: IndexMap::default(),
+            nil_terminated: true,
+            return_type: self.any_type_id,
+            body: value_hir,
+            kind: FunctionKind::Inline,
+        });
+        Ok(())
     }
 
     fn create_argument_helpers(
