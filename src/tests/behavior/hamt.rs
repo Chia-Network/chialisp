@@ -36,24 +36,21 @@ impl ClvmHamt {
                 strict: true,
                 int_fix: true,
             })
-            .set_optimize(true);
+            .set_optimize(false);
         let mut prim_map = HashMap::new();
         for p in prims::prims().iter() {
             prim_map.insert(p.0.clone(), Rc::new(p.1.clone()));
         }
 
         let mut symbols = HashMap::new();
-        let mut includes = Vec::new();
         let program = compile_file(
             &mut allocator,
             runner.clone(),
             opts,
             &program_text,
             &mut symbols,
-            &mut includes,
         )
         .expect("should compile");
-        eprintln!("compiled");
         let program_lines: Vec<String> = program_text.lines().map(|x| x.to_string()).collect();
 
         let loc = Srcloc::start(&program_name);
@@ -63,14 +60,13 @@ impl ClvmHamt {
             prim_map: Rc::new(prim_map),
             program_name: program_name.to_string(),
             program_lines: Rc::new(program_lines),
-            program: Rc::new(program.to_sexp()),
+            program: Rc::new(program),
             symbols,
             hamt: nil.clone(),
         };
 
         let start_args = Rc::new(SExp::Cons(loc.clone(), nil.clone(), nil.clone()));
         let start_hamt = instance.run_with_args(start_args);
-        eprintln!("started");
         instance.hamt = start_hamt;
 
         instance
@@ -87,9 +83,7 @@ impl ClvmHamt {
                 nil.clone(),
             )),
         ));
-        eprintln!("getting {idx}");
         let res = self.run_with_args(args);
-        eprintln!("getting done");
         res
     }
 
@@ -104,10 +98,8 @@ impl ClvmHamt {
                 Rc::new(SExp::Cons(self.program.loc(), elt.clone(), nil.clone())),
             )),
         ));
-        eprintln!("putting {idx} {elt}");
         let new_hamt = self.run_with_args(args);
         self.hamt = new_hamt;
-        eprintln!("putting done {}", self.hamt);
     }
 
     fn run_with_args(&self, args: Rc<SExp>) -> Rc<SExp> {
@@ -130,11 +122,7 @@ impl ClvmHamt {
                 return cldbrun.final_result().expect("should return a value");
             }
 
-            if let Some(res) = cldbrun.step(&mut allocator) {
-                if let Some(p) = res.get("Print") {
-                    eprintln!("- {p}");
-                }
-            }
+            let _ = cldbrun.step(&mut allocator);
         }
     }
 }

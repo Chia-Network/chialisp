@@ -392,6 +392,18 @@ impl RueConversion {
         Ok(rewritten_args)
     }
 
+    fn normalize_inline_tree_call_args(
+        &mut self,
+        positional_args: &[HirId],
+        tail: Option<HirId>,
+    ) -> Vec<HirId> {
+        let mut packed_args = tail.unwrap_or_else(|| self.db.alloc_hir(Hir::Nil));
+        for arg in positional_args.iter().rev() {
+            packed_args = self.db.alloc_hir(Hir::Pair(*arg, packed_args));
+        }
+        vec![packed_args]
+    }
+
     fn intern_expr_hir(&mut self, scope: ScopeId, e: &BodyForm) -> Result<HirId, CompileErr> {
         match e {
             BodyForm::Quoted(s) => Ok(self.intern_sexp_hir(s)),
@@ -497,12 +509,9 @@ impl RueConversion {
                             nil_terminated = true;
                         }
                         PredeclaredSymbolKind::InlineDefunTreeArgs => {
-                            if tail_arg.is_some() {
-                                return Err(rue_err(
-                                    loc.clone(),
-                                    "inline tree argument calls with &rest are not yet supported",
-                                ));
-                            }
+                            args = self.normalize_inline_tree_call_args(&args, tail_arg);
+                            rewritten_inline = true;
+                            nil_terminated = true;
                         }
                         _ => {}
                     }
@@ -1087,6 +1096,19 @@ impl RueConversion {
         Ok(ordered)
     }
 
+    fn has_recursive_helper_graph(&self, program: &CompileForm) -> bool {
+        let depgraph = FunctionDependencyGraph::new(program);
+        program.helpers.iter().any(|helper| {
+            if let HelperForm::Defun(_, data) = helper {
+                let mut full_depends_on = HashSet::new();
+                depgraph.get_full_depends_on(&mut full_depends_on, &data.name);
+                full_depends_on.contains(&data.name)
+            } else {
+                false
+            }
+        })
+    }
+
     fn helpers_for_constant_eval(
         &self,
         program: &CompileForm,
@@ -1193,6 +1215,13 @@ impl RueConversion {
         opts: Rc<dyn CompilerOpts>,
         program: &CompileForm,
     ) -> Result<SExp, CompileErr> {
+        if self.has_recursive_helper_graph(program) {
+            return Err(rue_err(
+                program.loc.clone(),
+                "recursive helper graphs are not yet supported by rue pre-desugar translation",
+            ));
+        }
+
         let mut allocator = Allocator::new();
         let main_symbol = self.intern_hir(program)?;
         self.verify_no_unresolved_hir(main_symbol).map_err(|e| {
