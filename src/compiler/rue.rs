@@ -19,14 +19,19 @@ use rue_options::CompilerOptions as RueCompilerOptions;
 use rue_types::{Type, TypeId};
 
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
-use crate::compiler::clvm::convert_from_clvm_rs;
+use crate::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
+use crate::compiler::clvm::{convert_from_clvm_rs, run};
 use crate::compiler::codegen::toposort_assign_bindings;
+use crate::compiler::compiler::compile_from_compileform;
 use crate::compiler::comptypes::{
-    BindingPattern, BodyForm, CompileErr, CompileForm, CompilerOpts, HelperForm, LetFormKind,
+    BindingPattern, BodyForm, CompileErr, CompileForm, CompilerOpts, DefconstData, DefunData,
+    HelperForm, LetFormKind,
 };
 use crate::compiler::gensym::gensym;
+use crate::compiler::optimize::get_optimizer;
 use crate::compiler::sexp::{decode_string, printable, SExp};
 use crate::compiler::srcloc::Srcloc;
+use crate::compiler::BasicCompileContext;
 use crate::util::Number;
 
 fn rue_err(loc: Srcloc, msg: impl Into<String>) -> CompileErr {
@@ -72,6 +77,11 @@ fn param_names_and_paths(env: Rc<SExp>) -> Vec<(Number, Vec<u8>)> {
     let mut raw = Vec::new();
     param_names_and_paths_(&mut raw, env, bi_one());
     raw
+}
+
+// Return a value if the environment is a list with a non-nil tail.
+fn improper_list(_env: Rc<SExp>) -> Option<(Vec<SExp>, Rc<SExp>)> {
+    todo!();
 }
 
 pub fn rue_cg(opts: Rc<dyn CompilerOpts>) -> bool {
@@ -193,13 +203,30 @@ fn match_prim(_opts: Rc<dyn CompilerOpts>, prim: &[u8]) -> Option<ClvmOp> {
     None
 }
 
-type PredeclaredHelperSymbols = HashMap<Vec<u8>, (SymbolId, ScopeId, bool)>;
+#[allow(dead_code)]
+#[derive(Clone)]
+enum PredeclaredSymbolKind {
+    Constant,
+    Defun,
+    InlineDefunNormalArgs(Vec<SExp>),
+    InlineDefunImproperListArgs(Vec<SExp>, Rc<SExp>),
+    InlineDefunTreeArgs,
+}
+
+#[derive(Clone)]
+struct PredeclaredHelperSymbol {
+    symbol_id: SymbolId,
+    scope_id: ScopeId,
+    kind: PredeclaredSymbolKind,
+}
+type PredeclaredHelperSymbols = HashMap<Vec<u8>, PredeclaredHelperSymbol>;
 
 struct RueConversion {
     db: Database,
     opts: Rc<dyn CompilerOpts>,
     text: Arc<str>,
     any_type_id: TypeId,
+    predeclared_helpers: PredeclaredHelperSymbols,
 }
 
 impl RueConversion {
@@ -215,6 +242,7 @@ impl RueConversion {
             opts: opts.clone(),
             text,
             any_type_id,
+            predeclared_helpers: PredeclaredHelperSymbols::default(),
         }
     }
 
@@ -585,206 +613,288 @@ impl RueConversion {
         let _ = self.create_inline_value_helper(scope_id, "@", env_value);
     }
 
+    fn function_from_defun(
+        &self,
+        function_name: &str,
+        function_scope: ScopeId,
+        inline: bool,
+        data: &DefunData,
+        plist: IndexMap<String, SymbolId>,
+        body: HirId,
+    ) -> FunctionSymbol {
+        FunctionSymbol {
+            name: Some(Name::new(
+                function_name,
+                Some(self.to_rue_srcloc(data.nl.clone())),
+            )),
+            ty: self.any_type_id,
+            scope: function_scope,
+            vars: Default::default(),
+            nil_terminated: inline,
+            return_type: self.any_type_id,
+            body,
+            parameters: plist,
+            kind: if inline {
+                FunctionKind::Inline
+            } else {
+                FunctionKind::BinaryTree
+            },
+        }
+    }
+
+    fn predeclare_defun(
+        &mut self,
+        function_name: &str,
+        function_scope: ScopeId,
+        inline: bool,
+        data: &DefunData,
+    ) -> PredeclaredHelperSymbol {
+        let unresolved_body = self.db.alloc_hir(Hir::Unresolved);
+        let function_sym = self
+            .db
+            .alloc_symbol(Symbol::Function(self.function_from_defun(
+                function_name,
+                function_scope,
+                inline,
+                data,
+                IndexMap::default(),
+                unresolved_body,
+            )));
+
+        let kind = if inline {
+            if let Some(args) = data.args.proper_list() {
+                PredeclaredSymbolKind::InlineDefunNormalArgs(args)
+            } else if let Some((args, tail)) = improper_list(data.args.clone()) {
+                PredeclaredSymbolKind::InlineDefunImproperListArgs(args, tail)
+            } else {
+                PredeclaredSymbolKind::InlineDefunTreeArgs
+            }
+        } else {
+            PredeclaredSymbolKind::Defun
+        };
+
+        PredeclaredHelperSymbol {
+            symbol_id: function_sym,
+            scope_id: function_scope,
+            kind,
+        }
+    }
+
+    fn predeclare_constant(
+        &mut self,
+        _main_scope: ScopeId,
+        _constant_name: &str,
+        _data: &DefconstData,
+    ) -> SymbolId {
+        todo!();
+    }
+
     fn predeclare_helper_symbols(
         &mut self,
         main_scope: ScopeId,
         helpers: &[HelperForm],
-    ) -> Result<PredeclaredHelperSymbols, CompileErr> {
-        let mut result = HashMap::new();
-
+    ) -> Result<(), CompileErr> {
         for helper in helpers {
-            let HelperForm::Defun(inline, data) = helper else {
-                continue;
-            };
+            // Only these emit actual data into the program.  All other forms were eliminated
+            // before we began code generation.
+            if let HelperForm::Defun(inline, data) = helper {
+                let function_name = decode_string(helper.name());
+                let function_scope = self.db.alloc_scope(Scope::new(Some(main_scope)));
+                let function_predecl =
+                    self.predeclare_defun(&function_name, function_scope, *inline, data);
+                self.db.scope_mut(main_scope).insert_symbol(
+                    function_name,
+                    function_predecl.symbol_id,
+                    false,
+                );
 
-            let function_scope = self.db.alloc_scope(Scope::new(Some(main_scope)));
-            let unresolved_body = self.db.alloc_hir(Hir::Unresolved);
-            let function_name = decode_string(helper.name());
-            let function_sym = self.db.alloc_symbol(Symbol::Function(FunctionSymbol {
-                name: Some(Name::new(
-                    function_name.clone(),
-                    Some(self.to_rue_srcloc(data.nl.clone())),
-                )),
-                ty: self.any_type_id,
-                scope: function_scope,
-                vars: Default::default(),
-                nil_terminated: *inline,
-                return_type: self.any_type_id,
-                body: unresolved_body,
-                parameters: IndexMap::default(),
-                kind: if *inline {
-                    FunctionKind::Inline
-                } else {
-                    FunctionKind::BinaryTree
-                },
-            }));
-            self.db
-                .scope_mut(main_scope)
-                .insert_symbol(function_name, function_sym, false);
-
-            result.insert(data.name.clone(), (function_sym, function_scope, *inline));
+                self.predeclared_helpers
+                    .insert(data.name.clone(), function_predecl);
+            } else if let HelperForm::Defconstant(data) = helper {
+                let constant_name = decode_string(helper.name());
+                let _constant_sym = self.predeclare_constant(main_scope, &constant_name, data);
+                todo!();
+            }
         }
-
-        Ok(result)
+        Ok(())
     }
 
-    fn intern_helper_hir(
-        &mut self,
-        h: &HelperForm,
-        predeclared: &PredeclaredHelperSymbols,
-    ) -> Result<HirId, CompileErr> {
-        match h {
-            HelperForm::Defun(_, data) => {
-                let Some((function_sym, function_scope, is_inline)) = predeclared.get(h.name())
-                else {
-                    return Err(rue_err(
-                        data.loc.clone(),
-                        format!(
-                            "missing predeclared symbol for helper `{}`",
-                            decode_string(h.name())
-                        ),
-                    ));
-                };
+    fn create_defun(&mut self, inline: bool, data: &DefunData) -> Result<(), CompileErr> {
+        let Some(predecl) = self.predeclared_helpers.get(&data.name).cloned() else {
+            return Err(rue_err(
+                data.loc.clone(),
+                format!(
+                    "missing predeclared symbol for helper `{}`",
+                    decode_string(&data.name)
+                ),
+            ));
+        };
 
-                let mut plist: IndexMap<String, SymbolId> = IndexMap::default();
-                if *is_inline {
-                    let params = data.args.proper_list().ok_or_else(|| {
-                        rue_err(
-                            data.args.loc(),
-                            format!(
-                                "inline defun args must be a simple list for phase 1: {}",
-                                data.args
-                            ),
-                        )
-                    })?;
-                    for (arg_index, p) in params.into_iter().enumerate() {
-                        if let SExp::Atom(ploc, atom_name) = p {
-                            let param_name = decode_string(&atom_name);
-                            let param_symbol =
-                                self.db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
-                                    name: Some(Name::new(
-                                        param_name.clone(),
-                                        Some(self.to_rue_srcloc(ploc.clone())),
-                                    )),
-                                    ty: self.any_type_id,
-                                }));
-                            self.db.scope_mut(*function_scope).insert_symbol(
-                                param_name.clone(),
-                                param_symbol,
-                                false,
-                            );
-                            plist.insert(param_name, param_symbol);
-                        } else {
-                            // Inline helpers may still destructure argument trees.
-                            // Bind the incoming argument, then create accessor helpers for leaves.
-                            let param_name = format!("_$_arg_{arg_index}");
-                            let param_symbol =
-                                self.db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
-                                    name: Some(Name::new(
-                                        param_name.clone(),
-                                        Some(self.to_rue_srcloc(p.loc())),
-                                    )),
-                                    ty: self.any_type_id,
-                                }));
-                            self.db.scope_mut(*function_scope).insert_symbol(
-                                param_name.clone(),
-                                param_symbol,
-                                false,
-                            );
-                            plist.insert(param_name, param_symbol);
-                            self.install_tree_arg_accessors(
-                                *function_scope,
-                                Rc::new(p.clone()),
-                                param_symbol,
-                            );
-                        }
-                    }
-                } else {
-                    // Chialisp allows an arbitrary argument tree which specifies the exact environment
-                    // shape. Rue uses either sequential or tree shaped and choose the tree shape at
-                    // lowering time. The right approach is to use a single argument in BinaryTree
-                    // mode and make accessors for the individual destructurings chialisp would allow.
-                    let main_arg_symbol =
-                        self.db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
-                            name: Some(Name::new(
-                                "_$_args__",
-                                Some(self.to_rue_srcloc(data.args.loc())),
-                            )),
-                            ty: self.any_type_id,
-                        }));
-                    plist.insert("_$_args__".to_string(), main_arg_symbol);
-                    self.db.scope_mut(*function_scope).insert_symbol(
-                        "_$_args__".to_string(),
-                        main_arg_symbol,
+        let mut install_argument =
+            |plist: &mut IndexMap<String, SymbolId>, param_index: usize, param_sexp: &SExp| {
+                if let SExp::Atom(ploc, atom_name) = param_sexp {
+                    let param_name = decode_string(atom_name);
+                    let param_symbol = self.db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
+                        name: Some(Name::new(
+                            param_name.clone(),
+                            Some(self.to_rue_srcloc(ploc.clone())),
+                        )),
+                        ty: self.any_type_id,
+                    }));
+                    self.db.scope_mut(predecl.scope_id).insert_symbol(
+                        param_name.clone(),
+                        param_symbol,
                         false,
                     );
-                    // Construct inline helper functions for each printable atom in the argument tree.
-                    self.install_tree_arg_accessors(
-                        *function_scope,
-                        data.args.clone(),
-                        main_arg_symbol,
+                    plist.insert(param_name, param_symbol);
+                } else {
+                    // Inline helpers may still destructure argument trees.
+                    // Bind the incoming argument, then create accessor helpers for leaves.
+                    let param_name = format!("_$_arg_{param_index}");
+                    self.create_argument_helpers(
+                        plist,
+                        &param_name,
+                        Rc::new(param_sexp.clone()),
+                        predecl.scope_id,
                     );
                 }
+            };
 
-                let body_hir = self.intern_expr_hir(*function_scope, &data.body)?;
-                *self.db.symbol_mut(*function_sym) = Symbol::Function(FunctionSymbol {
-                    name: Some(Name::new(
-                        decode_string(h.name()),
-                        Some(self.to_rue_srcloc(data.nl.clone())),
-                    )),
-                    ty: self.any_type_id,
-                    scope: *function_scope,
-                    vars: Default::default(),
-                    nil_terminated: *is_inline,
-                    return_type: self.any_type_id,
-                    body: body_hir,
-                    parameters: plist,
-                    kind: if *is_inline {
-                        FunctionKind::Inline
-                    } else {
-                        FunctionKind::BinaryTree
-                    },
-                });
-                Ok(body_hir)
+        let mut plist: IndexMap<String, SymbolId> = IndexMap::default();
+        match &predecl.kind {
+            PredeclaredSymbolKind::InlineDefunNormalArgs(args) => {
+                // In the case of inlines, it's appropriate to try to match the arguments to
+                // positions as well as possible.  If the parameter list is a proper list, we can
+                // just use each argument.
+                for (arg_index, p) in args.iter().enumerate() {
+                    install_argument(&mut plist, arg_index, p);
+                }
             }
-            _ => Err(rue_err(
-                h.loc(),
-                format!(
-                    "only defun helpers are currently translatable in phase 1: {}",
-                    h.to_sexp()
-                ),
-            )),
+            PredeclaredSymbolKind::InlineDefunImproperListArgs(prefix, tail) => {
+                // Improper argument list for inline.
+                // It's possible to think about a tail improper list as a list of normal
+                // arguments, then a tail of any number of further arguments.  Chialisp supports
+                // this.
+                for (arg_index, p) in prefix.iter().enumerate() {
+                    install_argument(&mut plist, arg_index, p);
+                }
+                install_argument(&mut plist, prefix.len(), tail);
+                self.create_argument_helpers(
+                    &mut plist,
+                    "_$_args__",
+                    data.args.clone(),
+                    predecl.scope_id,
+                );
+            }
+            _ => {
+                // Chialisp allows an arbitrary argument tree which specifies the exact environment
+                // shape. Rue uses either sequential or tree shaped and choose the tree shape at
+                // lowering time. The right approach is to use a single argument in BinaryTree
+                // mode and make accessors for the individual destructurings chialisp would allow.
+                self.create_argument_helpers(
+                    &mut plist,
+                    "_$_args__",
+                    data.args.clone(),
+                    predecl.scope_id,
+                );
+            }
         }
+
+        let body_hir = self.intern_expr_hir(predecl.scope_id, &data.body)?;
+        let function_name = decode_string(&data.name);
+        *self.db.symbol_mut(predecl.symbol_id) = Symbol::Function(self.function_from_defun(
+            &function_name,
+            predecl.scope_id,
+            inline,
+            data,
+            plist,
+            body_hir,
+        ));
+        Ok(())
+    }
+
+    fn create_constant(
+        &mut self,
+        data: &DefconstData,
+        program: &CompileForm,
+    ) -> Result<(), CompileErr> {
+        let constant_compileform = CompileForm {
+            exp: data.body.clone(),
+            ..program.clone()
+        };
+        let runner: Rc<dyn TRunProgram> = Rc::new(DefaultProgramRunner::new());
+        let mut compile_context = BasicCompileContext::new(
+            Allocator::new(),
+            runner,
+            HashMap::new(),
+            get_optimizer(&program.loc, self.opts.clone())?,
+        );
+        let compiled = compile_from_compileform(
+            &mut compile_context,
+            self.opts.clone(),
+            constant_compileform,
+        )?;
+        let runner = compile_context.runner();
+        let _value = run(
+            compile_context.allocator(),
+            runner,
+            self.opts.prim_map(),
+            Rc::new(compiled.clone()),
+            Rc::new(SExp::Nil(data.loc.clone())),
+            None,
+            None,
+        )?;
+        todo!();
+    }
+
+    fn create_argument_helpers(
+        &mut self,
+        params_map: &mut IndexMap<String, SymbolId>,
+        param_name: &str,
+        args: Rc<SExp>,
+        program_scope: ScopeId,
+    ) {
+        // Program arguments are tree-shaped in chialisp, so model them the same way as
+        // non-inline defun arguments: one binary-tree parameter and atom accessors.
+        let main_args_symbol = self.db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
+            name: Some(Name::new(param_name, Some(self.to_rue_srcloc(args.loc())))),
+            ty: self.any_type_id,
+        }));
+        params_map.insert(param_name.to_string(), main_args_symbol);
+        self.db.scope_mut(program_scope).insert_symbol(
+            param_name.to_string(),
+            main_args_symbol,
+            false,
+        );
+        self.install_tree_arg_accessors(program_scope, args.clone(), main_args_symbol);
+        self.install_env_alias_helpers(program_scope, main_args_symbol);
+        // Construct inline helper functions for each printable atom in the argument tree.
+        self.install_tree_arg_accessors(program_scope, args.clone(), main_args_symbol);
     }
 
     fn intern_hir(&mut self, program: &CompileForm) -> Result<SymbolId, CompileErr> {
         let main_scope_id: ScopeId = self.db.alloc_scope(Scope::new(None));
-        let predeclared = self.predeclare_helper_symbols(main_scope_id, &program.helpers)?;
+        self.predeclare_helper_symbols(main_scope_id, &program.helpers)?;
         for h in program.helpers.iter() {
-            self.intern_helper_hir(h, &predeclared)?;
+            // Macros and other forms were handled during preprocessing and other
+            // passes before code generation.
+            if let HelperForm::Defun(inline, data) = &h {
+                self.create_defun(*inline, data)?;
+            } else if let HelperForm::Defconstant(data) = &h {
+                self.create_constant(data, program)?;
+            }
         }
 
         let program_scope = self.db.alloc_scope(Scope::new(Some(main_scope_id)));
-        // Program arguments are tree-shaped in chialisp, so model them the same way as
-        // non-inline defun arguments: one binary-tree parameter and atom accessors.
-        let main_args_symbol = self.db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
-            name: Some(Name::new(
-                "_$_args__",
-                Some(self.to_rue_srcloc(program.args.loc())),
-            )),
-            ty: self.any_type_id,
-        }));
-        self.db.scope_mut(program_scope).insert_symbol(
-            "_$_args__".to_string(),
-            main_args_symbol,
-            false,
+        let mut main_params: IndexMap<String, SymbolId> = IndexMap::default();
+        self.create_argument_helpers(
+            &mut main_params,
+            "_$_args__",
+            program.args.clone(),
+            program_scope,
         );
-        self.install_tree_arg_accessors(program_scope, program.args.clone(), main_args_symbol);
-        self.install_env_alias_helpers(program_scope, main_args_symbol);
 
         let main_body = self.intern_expr_hir(program_scope, &program.exp)?;
-        let mut main_params: IndexMap<String, SymbolId> = IndexMap::default();
-        main_params.insert("_$_args__".to_string(), main_args_symbol);
         let main_symbol = self.db.alloc_symbol(Symbol::Function(FunctionSymbol {
             name: Some(Name::new(
                 "__chia_main__",
