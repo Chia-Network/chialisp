@@ -1,5 +1,56 @@
-use crate::tests::compiler::compiler::run_string;
+use std::rc::Rc;
+
+use crate::compiler::comptypes::CompileErr;
+use crate::compiler::sexp::SExp;
+use crate::tests::compiler::compiler::run_string as run_string_single;
 use crate::tests::compiler::repl::test_repl_outcome;
+
+const RESTARGS_SIGILS: &[&str] = &["*standard-cl-21*", "*standard-cl-rue1*"];
+const SIGIL_PLACEHOLDER: &str = "*standard-cl-sigil*";
+
+fn run_string_multiple_sigil(program: &String, args: &String) -> Result<Rc<SExp>, CompileErr> {
+    assert!(
+        program.contains(SIGIL_PLACEHOLDER),
+        "program should use sigil placeholder {SIGIL_PLACEHOLDER}"
+    );
+
+    let mut first_outcome: Option<Result<Rc<SExp>, CompileErr>> = None;
+    let mut first_signature: Option<String> = None;
+    let mut first_sigil: Option<&str> = None;
+
+    for sigil in RESTARGS_SIGILS.iter().copied() {
+        let replaced_program = program.replace(SIGIL_PLACEHOLDER, sigil);
+        let outcome = run_string_single(&replaced_program, args);
+        let signature = match &outcome {
+            Ok(v) => format!("ok:{}", v),
+            Err(e) => format!("err:{}", e.1),
+        };
+
+        if let Some(previous_signature) = first_signature.as_ref() {
+            assert_eq!(
+                previous_signature,
+                &signature,
+                "result mismatch between {} and {sigil}",
+                first_sigil.unwrap_or("<unknown>")
+            );
+        } else {
+            first_signature = Some(signature);
+            first_sigil = Some(sigil);
+            first_outcome = Some(outcome.clone());
+        }
+    }
+
+    first_outcome.expect("at least one sigil should be configured")
+}
+
+fn run_string(program: &String, args: &String) -> Result<Rc<SExp>, CompileErr> {
+    let use_program = if program.contains(SIGIL_PLACEHOLDER) {
+        program.clone()
+    } else {
+        program.replace(RESTARGS_SIGILS[0], SIGIL_PLACEHOLDER)
+    };
+    run_string_multiple_sigil(&use_program, args)
+}
 
 // All tests needed for rest calls:
 //

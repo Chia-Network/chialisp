@@ -78,8 +78,19 @@ fn param_names_and_paths(env: Rc<SExp>) -> Vec<(Number, Vec<u8>)> {
 }
 
 // Return a value if the environment is a list with a non-nil tail.
-fn improper_list(_env: Rc<SExp>) -> Option<(Vec<SExp>, Rc<SExp>)> {
-    todo!();
+fn improper_list(env: Rc<SExp>) -> Option<(Vec<SExp>, Rc<SExp>)> {
+    let mut prefix = Vec::new();
+    let mut cursor = env;
+    loop {
+        match cursor.borrow() {
+            SExp::Cons(_, head, tail) => {
+                prefix.push(head.as_ref().clone());
+                cursor = tail.clone();
+            }
+            SExp::Nil(_) => return None,
+            _ => return Some((prefix, cursor.clone())),
+        }
+    }
 }
 
 pub fn rue_cg(opts: Rc<dyn CompilerOpts>) -> bool {
@@ -287,6 +298,100 @@ impl RueConversion {
         Ok(self.db.alloc_hir(Hir::ClvmOp(clvm_op, result)))
     }
 
+    fn predeclared_kind_for_function_hir(&self, function: HirId) -> Option<PredeclaredSymbolKind> {
+        let Hir::Reference(target_symbol) = self.db.hir(function) else {
+            return None;
+        };
+        self.predeclared_helpers
+            .values()
+            .find_map(|helper| (helper.symbol_id == *target_symbol).then_some(helper.kind.clone()))
+    }
+
+    fn apply_rest_n(&mut self, value: HirId, count: usize) -> HirId {
+        let mut result = value;
+        for _ in 0..count {
+            result = self.db.alloc_hir(Hir::Unary(UnaryOp::Rest, result));
+        }
+        result
+    }
+
+    fn choose_inline_argument(
+        &mut self,
+        callsite: &Srcloc,
+        positional_args: &[HirId],
+        tail: Option<HirId>,
+        index: usize,
+    ) -> Result<HirId, CompileErr> {
+        if let Some(arg) = positional_args.get(index) {
+            return Ok(*arg);
+        }
+
+        let Some(tail_expr) = tail else {
+            return Err(CompileErr(
+                callsite.clone(),
+                format!("Lookup for argument {} that wasn't passed", index + 1),
+            ));
+        };
+
+        let tail_element = self.apply_rest_n(tail_expr, index - positional_args.len());
+        Ok(self.db.alloc_hir(Hir::Unary(UnaryOp::First, tail_element)))
+    }
+
+    fn normalize_inline_normal_call_args(
+        &mut self,
+        callsite: &Srcloc,
+        fixed_args: &[SExp],
+        positional_args: &[HirId],
+        tail: Option<HirId>,
+    ) -> Result<Vec<HirId>, CompileErr> {
+        let mut rewritten_args = Vec::with_capacity(fixed_args.len());
+        for index in 0..fixed_args.len() {
+            rewritten_args.push(self.choose_inline_argument(
+                callsite,
+                positional_args,
+                tail,
+                index,
+            )?);
+        }
+        Ok(rewritten_args)
+    }
+
+    fn normalize_inline_improper_call_args(
+        &mut self,
+        callsite: &Srcloc,
+        fixed_count: usize,
+        positional_args: &[HirId],
+        tail: Option<HirId>,
+    ) -> Result<Vec<HirId>, CompileErr> {
+        let mut rewritten_args = Vec::with_capacity(fixed_count + 1);
+        for index in 0..fixed_count {
+            rewritten_args.push(self.choose_inline_argument(
+                callsite,
+                positional_args,
+                tail,
+                index,
+            )?);
+        }
+
+        let consumed_tail_for_fixed = fixed_count.saturating_sub(positional_args.len());
+        let mut final_tail_arg = if let Some(tail_expr) = tail {
+            self.apply_rest_n(tail_expr, consumed_tail_for_fixed)
+        } else {
+            self.db.alloc_hir(Hir::Nil)
+        };
+
+        for arg in positional_args
+            .iter()
+            .skip(fixed_count.min(positional_args.len()))
+            .rev()
+        {
+            final_tail_arg = self.db.alloc_hir(Hir::Pair(*arg, final_tail_arg));
+        }
+
+        rewritten_args.push(final_tail_arg);
+        Ok(rewritten_args)
+    }
+
     fn intern_expr_hir(&mut self, scope: ScopeId, e: &BodyForm) -> Result<HirId, CompileErr> {
         match e {
             BodyForm::Quoted(s) => Ok(self.intern_sexp_hir(s)),
@@ -318,12 +423,6 @@ impl RueConversion {
             BodyForm::Call(loc, forms, tail) => {
                 if forms.is_empty() {
                     return Err(rue_err(e.loc(), "empty call expression"));
-                }
-                if tail.is_some() {
-                    return Err(rue_err(
-                        e.loc(),
-                        format!("rest-tail call form not yet supported: {}", e.to_sexp()),
-                    ));
                 }
 
                 let op_atom = if let BodyForm::Value(SExp::Atom(_, atom)) = &*forms[0] {
@@ -367,10 +466,58 @@ impl RueConversion {
                 for arg in forms.iter().skip(1) {
                     args.push(self.intern_expr_hir(scope, arg)?);
                 }
+                let tail_arg = if let Some(tail_expr) = tail.as_ref() {
+                    Some(self.intern_expr_hir(scope, tail_expr)?)
+                } else {
+                    None
+                };
+
+                let mut nil_terminated = tail_arg.is_none();
+                let mut rewritten_inline = false;
+                if let Some(predeclared_kind) = self.predeclared_kind_for_function_hir(*function) {
+                    match predeclared_kind {
+                        PredeclaredSymbolKind::InlineDefunNormalArgs(fixed_args) => {
+                            args = self.normalize_inline_normal_call_args(
+                                loc,
+                                &fixed_args,
+                                &args,
+                                tail_arg,
+                            )?;
+                            rewritten_inline = true;
+                            nil_terminated = true;
+                        }
+                        PredeclaredSymbolKind::InlineDefunImproperListArgs(prefix, _tail) => {
+                            args = self.normalize_inline_improper_call_args(
+                                loc,
+                                prefix.len(),
+                                &args,
+                                tail_arg,
+                            )?;
+                            rewritten_inline = true;
+                            nil_terminated = true;
+                        }
+                        PredeclaredSymbolKind::InlineDefunTreeArgs => {
+                            if tail_arg.is_some() {
+                                return Err(rue_err(
+                                    loc.clone(),
+                                    "inline tree argument calls with &rest are not yet supported",
+                                ));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                if !rewritten_inline {
+                    if let Some(t) = tail_arg {
+                        args.push(t);
+                        nil_terminated = false;
+                    }
+                }
                 Ok(self.db.alloc_hir(Hir::FunctionCall(FunctionCall {
                     function: *function,
                     args,
-                    nil_terminated: true,
+                    nil_terminated,
                 })))
             }
             BodyForm::Let(let_kind, let_data) => {
