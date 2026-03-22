@@ -20,19 +20,17 @@ use rue_types::{Type, TypeId};
 
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
 use crate::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
-use crate::compiler::clvm::{convert_from_clvm_rs, run};
+use crate::compiler::clvm::{convert_from_clvm_rs, convert_to_clvm_rs};
 use crate::compiler::codegen::toposort_assign_bindings;
-use crate::compiler::compiler::compile_from_compileform;
 use crate::compiler::comptypes::{
     BindingPattern, BodyForm, CompileErr, CompileForm, CompilerOpts, DefconstData, DefunData,
     HelperForm, LetFormKind,
 };
+use crate::compiler::frontend::collect_used_names_bodyform;
 use crate::compiler::gensym::gensym;
-use crate::compiler::optimize::get_optimizer;
 use crate::compiler::sexp::{decode_string, printable, SExp};
 use crate::compiler::srcloc::Srcloc;
-use crate::compiler::BasicCompileContext;
-use crate::util::Number;
+use crate::util::{toposort, Number};
 
 fn rue_err(loc: Srcloc, msg: impl Into<String>) -> CompileErr {
     CompileErr(loc, format!("rue translation: {}", msg.into()))
@@ -842,7 +840,8 @@ impl RueConversion {
         &mut self,
         data: &DefconstData,
         program: &CompileForm,
-    ) -> Result<(), CompileErr> {
+        eval_helpers: Vec<HelperForm>,
+    ) -> Result<Rc<SExp>, CompileErr> {
         let Some(predecl) = self.predeclared_helpers.get(&data.name).cloned() else {
             return Err(rue_err(
                 data.loc.clone(),
@@ -853,35 +852,29 @@ impl RueConversion {
             ));
         };
         let constant_compileform = CompileForm {
+            helpers: eval_helpers,
             exp: data.body.clone(),
             ..program.clone()
         };
-        // Constants are materialized by compiling and evaluating their body.
-        // Disable Rue translation for this nested compilation to avoid recursive
-        // re-entry into this constant materialization path.
-        let constant_opts = self.opts.set_stdenv(false);
+        let compiled =
+            compile_with_rue_codegen(self.opts.clone(), self.text.clone(), &constant_compileform)?;
         let runner: Rc<dyn TRunProgram> = Rc::new(DefaultProgramRunner::new());
-        let mut compile_context = BasicCompileContext::new(
-            Allocator::new(),
-            runner,
-            HashMap::new(),
-            get_optimizer(&program.loc, constant_opts.clone())?,
-        );
-        let compiled = compile_from_compileform(
-            &mut compile_context,
-            constant_opts,
-            constant_compileform,
-        )?;
-        let runner = compile_context.runner();
-        let value = run(
-            compile_context.allocator(),
-            runner,
-            self.opts.prim_map(),
-            Rc::new(compiled.clone()),
-            Rc::new(SExp::Nil(data.loc.clone())),
-            None,
-            None,
-        )?;
+        let mut allocator = Allocator::new();
+        let compiled_program = convert_to_clvm_rs(&mut allocator, Rc::new(compiled.clone()))?;
+        let compiled_args =
+            convert_to_clvm_rs(&mut allocator, Rc::new(SExp::Nil(data.loc.clone())))?;
+        let reduced = runner
+            .run_program(&mut allocator, compiled_program, compiled_args, None)
+            .map_err(|e| {
+                CompileErr(
+                    data.loc.clone(),
+                    format!(
+                        "error evaluating constant `{}`: {e}",
+                        decode_string(&data.name)
+                    ),
+                )
+            })?;
+        let value = convert_from_clvm_rs(&mut allocator, data.loc.clone(), reduced.1)?;
         let value_hir = self.intern_sexp_hir(&value);
         let function_name = decode_string(&data.name);
         *self.db.symbol_mut(predecl.symbol_id) = Symbol::Function(FunctionSymbol {
@@ -898,6 +891,124 @@ impl RueConversion {
             body: value_hir,
             kind: FunctionKind::Inline,
         });
+        Ok(value)
+    }
+
+    fn helper_used_names(helper: &HelperForm) -> Vec<Vec<u8>> {
+        match helper {
+            HelperForm::Defconstant(defc) => collect_used_names_bodyform(defc.body.borrow()),
+            HelperForm::Defun(_, defun) => collect_used_names_bodyform(defun.body.borrow()),
+            // Macro expansion completed before codegen.
+            HelperForm::Defmacro(_) => Vec::new(),
+        }
+    }
+
+    fn constant_dependency_order(
+        &self,
+        program: &CompileForm,
+    ) -> Result<Vec<DefconstData>, CompileErr> {
+        let constants: Vec<DefconstData> = program
+            .helpers
+            .iter()
+            .filter_map(|helper| {
+                if let HelperForm::Defconstant(defc) = helper {
+                    Some(defc.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if constants.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let constant_names: HashSet<Vec<u8>> = constants.iter().map(|c| c.name.clone()).collect();
+        let helper_map: HashMap<Vec<u8>, HelperForm> = program
+            .helpers
+            .iter()
+            .map(|helper| (helper.name().clone(), helper.clone()))
+            .collect();
+        let mut dependencies_by_name: HashMap<Vec<u8>, HashSet<Vec<u8>>> = HashMap::new();
+
+        for constant in constants.iter() {
+            let mut stack = collect_used_names_bodyform(constant.body.borrow());
+            let mut reachable = HashSet::new();
+            while let Some(name) = stack.pop() {
+                if !reachable.insert(name.clone()) {
+                    continue;
+                }
+                if let Some(helper) = helper_map.get(&name) {
+                    stack.extend(Self::helper_used_names(helper));
+                }
+            }
+
+            let constant_dependencies = reachable
+                .into_iter()
+                .filter(|name| *name != constant.name && constant_names.contains(name))
+                .collect();
+            dependencies_by_name.insert(constant.name.clone(), constant_dependencies);
+        }
+
+        let deadlock = CompileErr(
+            program.loc.clone(),
+            "got stuck untangling defconst dependencies".to_string(),
+        );
+        let sorted = toposort(
+            &constants,
+            deadlock,
+            |possible, constant| {
+                let dependencies = dependencies_by_name
+                    .get(&constant.name)
+                    .cloned()
+                    .unwrap_or_default();
+                Ok(dependencies
+                    .intersection(possible)
+                    .cloned()
+                    .collect::<HashSet<Vec<u8>>>())
+            },
+            |constant| {
+                let mut provided = HashSet::new();
+                provided.insert(constant.name.clone());
+                provided
+            },
+        )?;
+
+        let mut ordered = Vec::new();
+        for item in sorted {
+            ordered.push(constants[item.index].clone());
+        }
+        Ok(ordered)
+    }
+
+    fn helpers_for_constant_eval(
+        &self,
+        program: &CompileForm,
+        constant_name: &[u8],
+    ) -> Vec<HelperForm> {
+        program
+            .helpers
+            .iter()
+            .filter_map(|helper| match helper {
+                HelperForm::Defconstant(defc) => {
+                    if defc.name == constant_name {
+                        None
+                    } else {
+                        Some(helper.clone())
+                    }
+                }
+                _ => Some(helper.clone()),
+            })
+            .collect()
+    }
+
+    fn resolve_constants(&mut self, program: &CompileForm) -> Result<(), CompileErr> {
+        let constant_order = self.constant_dependency_order(program)?;
+
+        for constant in constant_order.iter() {
+            let eval_helpers = self.helpers_for_constant_eval(program, &constant.name);
+            let _value = self.create_constant(constant, program, eval_helpers)?;
+        }
+
         Ok(())
     }
 
@@ -929,13 +1040,12 @@ impl RueConversion {
     fn intern_hir(&mut self, program: &CompileForm) -> Result<SymbolId, CompileErr> {
         let main_scope_id: ScopeId = self.db.alloc_scope(Scope::new(None));
         self.predeclare_helper_symbols(main_scope_id, &program.helpers)?;
+        self.resolve_constants(program)?;
         for h in program.helpers.iter() {
             // Macros and other forms were handled during preprocessing and other
             // passes before code generation.
             if let HelperForm::Defun(inline, data) = &h {
                 self.create_defun(*inline, data)?;
-            } else if let HelperForm::Defconstant(data) = &h {
-                self.create_constant(data, program)?;
             }
         }
 

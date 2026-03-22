@@ -601,11 +601,21 @@ fn test_module_level_constants_defconst_and_defconstant_rue() {
     ]);
 
     assert_eq!(
-        do_basic_brun(&vec!["brun".to_string(), defconst_program, "()".to_string()]).trim(),
+        do_basic_brun(&vec![
+            "brun".to_string(),
+            defconst_program,
+            "()".to_string()
+        ])
+        .trim(),
         "42"
     );
     assert_eq!(
-        do_basic_brun(&vec!["brun".to_string(), defconstant_program, "()".to_string()]).trim(),
+        do_basic_brun(&vec![
+            "brun".to_string(),
+            defconstant_program,
+            "()".to_string()
+        ])
+        .trim(),
         "42"
     );
 }
@@ -622,18 +632,33 @@ fn test_defconst_calling_function_is_precomputed_rue() {
 
 #[test]
 fn test_module_level_constant_in_main_function_and_returned_function_rue() {
-    let program_use_sites = do_basic_run(&vec![
+    let program_main_use = do_basic_run(&vec![
         "run".to_string(),
-        "(mod (X) (include *standard-cl-rue1*) (defun G (N) (* N 3)) (defconst K (G 4)) (defun add-k (Y) (+ Y K)) (list (+ X K) (add-k X)))".to_string(),
+        "(mod (X) (include *standard-cl-rue1*) (defun G (N) (* N 3)) (defconst K (G 4)) (+ X K))"
+            .to_string(),
     ]);
     assert_eq!(
         do_basic_brun(&vec![
             "brun".to_string(),
-            program_use_sites,
+            program_main_use,
             "(5)".to_string()
         ])
         .trim(),
-        "(17 17)"
+        "17"
+    );
+
+    let program_function_use = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (X) (include *standard-cl-rue1*) (defun G (N) (* N 3)) (defconst K (G 4)) (defun add-k (Y) (+ Y K)) (add-k X))".to_string(),
+    ]);
+    assert_eq!(
+        do_basic_brun(&vec![
+            "brun".to_string(),
+            program_function_use,
+            "(5)".to_string()
+        ])
+        .trim(),
+        "17"
     );
 
     let program_returns_function = do_basic_run(&vec![
