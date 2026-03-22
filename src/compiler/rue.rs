@@ -685,20 +685,16 @@ impl RueConversion {
         data: &DefconstData,
     ) -> SymbolId {
         let unresolved_body = self.db.alloc_hir(Hir::Unresolved);
-        let constant_sym = self.db.alloc_symbol(Symbol::Function(FunctionSymbol {
-            name: Some(Name::new(
-                constant_name.to_string(),
-                Some(self.to_rue_srcloc(data.nl.clone())),
-            )),
-            ty: self.any_type_id,
-            scope: main_scope,
-            vars: Default::default(),
-            parameters: IndexMap::default(),
-            nil_terminated: true,
-            return_type: self.any_type_id,
-            body: unresolved_body,
-            kind: FunctionKind::Inline,
-        }));
+        let constant_sym = self
+            .db
+            .alloc_symbol(Symbol::Binding(rue_hir::BindingSymbol {
+                name: Some(Name::new(
+                    constant_name.to_string(),
+                    Some(self.to_rue_srcloc(data.nl.clone())),
+                )),
+                value: Value::new(unresolved_body, self.any_type_id),
+                inline: false,
+            }));
         self.db
             .scope_mut(main_scope)
             .insert_symbol(constant_name.to_string(), constant_sym, false);
@@ -876,20 +872,14 @@ impl RueConversion {
             })?;
         let value = convert_from_clvm_rs(&mut allocator, data.loc.clone(), reduced.1)?;
         let value_hir = self.intern_sexp_hir(&value);
-        let function_name = decode_string(&data.name);
-        *self.db.symbol_mut(predecl.symbol_id) = Symbol::Function(FunctionSymbol {
+        let constant_name = decode_string(&data.name);
+        *self.db.symbol_mut(predecl.symbol_id) = Symbol::Binding(rue_hir::BindingSymbol {
             name: Some(Name::new(
-                function_name,
+                constant_name,
                 Some(self.to_rue_srcloc(data.nl.clone())),
             )),
-            ty: self.any_type_id,
-            scope: predecl.scope_id,
-            vars: Default::default(),
-            parameters: IndexMap::default(),
-            nil_terminated: true,
-            return_type: self.any_type_id,
-            body: value_hir,
-            kind: FunctionKind::Inline,
+            value: Value::new(value_hir, self.any_type_id),
+            inline: false,
         });
         Ok(value)
     }
