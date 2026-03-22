@@ -170,7 +170,8 @@ fn find_helper_target(
     // check the matching namespace to the one specified to see if we can find the
     // target.
     for h in home_ns.iter() {
-        if h.helper.name() == &child
+        if (parent.is_none() || parent.as_ref() == parent_ns)
+            && h.helper.name() == &child
             && !matches!(
                 h.helper,
                 HelperForm::Defnsref(_) | HelperForm::Defnamespace(_)
