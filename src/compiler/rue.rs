@@ -452,37 +452,6 @@ impl RueConversion {
         None
     }
 
-    fn is_translated_if(
-        &mut self,
-        scope: ScopeId,
-        forms: &[Rc<BodyForm>],
-    ) -> Result<Option<HirId>, CompileErr> {
-        if forms.len() != 4 {
-            return Ok(None);
-        }
-
-        if !is_i_atom(forms[0].to_sexp()) {
-            return Ok(None);
-        }
-
-        let (Some(expa), Some(expb)) = (
-            self.unwrap_com_expression(&forms[2]),
-            self.unwrap_com_expression(&forms[3]),
-        ) else {
-            return Ok(None);
-        };
-
-        let condition_hir = self.intern_expr_hir(scope, &forms[1])?;
-        let then_hir = self.intern_expr_hir(scope, &expa)?;
-        let else_hir = self.intern_expr_hir(scope, &expb)?;
-        Ok(Some(self.db.alloc_hir(Hir::If(
-            condition_hir,
-            then_hir,
-            else_hir,
-            false,
-        ))))
-    }
-
     fn intern_expr_hir(&mut self, scope: ScopeId, e: &BodyForm) -> Result<HirId, CompileErr> {
         match e {
             BodyForm::Quoted(s) => Ok(self.intern_sexp_hir(s)),
@@ -514,10 +483,6 @@ impl RueConversion {
             BodyForm::Call(loc, forms, tail) => {
                 if forms.is_empty() {
                     return Err(rue_err(e.loc(), "empty call expression"));
-                }
-
-                if let Some(if_result) = self.is_translated_if(scope, forms)? {
-                    return Ok(if_result);
                 }
 
                 let op_atom = if let BodyForm::Value(SExp::Atom(_, atom)) = &*forms[0] {
