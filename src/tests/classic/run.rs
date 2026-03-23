@@ -2651,84 +2651,139 @@ fn test_reproduce_variable_repr_bug_deinline() {
 
 #[test]
 fn test_ensure_dereferenceable_1() {
-    for sigil in ["*standard-cl-24*", "*standard-cl-rue1*"] {
-        let program = do_basic_run(&vec![
-            "run".to_string(),
-            format!("(mod (A B) (include {sigil}) (@ B 1))"),
-        ]);
-        if sigil == "*standard-cl-24*" {
-            assert_eq!(program.trim(), "3", "sigil {sigil}");
-        } else {
-            assert!(
-                !program.trim().starts_with("FAIL"),
-                "compile failed for sigil {sigil}: {program}"
-            );
-        }
-    }
+    let source = "(mod (A B) (include *standard-cl-24*) (@ B 1))";
+    let cl24_program = do_basic_run(&vec!["run".to_string(), source.to_string()]);
+    assert_eq!(cl24_program.trim(), "3");
+
+    let rue_source = source.replace("*standard-cl-24*", "*standard-cl-rue1*");
+    let rue_program = do_basic_run(&vec!["run".to_string(), rue_source]);
+    assert!(
+        !rue_program.trim().starts_with("FAIL"),
+        "rue compile failed unexpectedly: {rue_program}"
+    );
+
+    let args = "1".to_string();
+    let cl24_result = do_basic_brun(&vec![
+        "brun".to_string(),
+        cl24_program.clone(),
+        args.clone(),
+    ]);
+    let rue_result = do_basic_brun(&vec!["brun".to_string(), rue_program, args]);
+    assert_eq!(rue_result.trim(), cl24_result.trim());
 }
 
 #[test]
 fn test_ensure_dereferenceable_2() {
-    for sigil in ["*standard-cl-24*", "*standard-cl-rue1*"] {
-        let program = do_basic_run(&vec![
-            "run".to_string(),
-            format!(
-                "(mod (A B) (include {sigil}) (defun F (A B) (if (@ B 1) (+ A B) 99)) (F &rest (@ 3)))"
-            ),
-        ]);
-        assert!(
-            !program.trim().starts_with("FAIL"),
-            "compile failed for sigil {sigil}: {program}"
-        );
-    }
+    let source =
+        "(mod (A B) (include *standard-cl-24*) (defun F (A B) (if (@ B 1) (+ A B) 99)) (F &rest (@ 3)))";
+    let cl24_program = do_basic_run(&vec!["run".to_string(), source.to_string()]);
+    assert_eq!(
+        cl24_program.trim(),
+        "(2 (1 2 2 (4 2 3)) (4 (1 2 (3 7 (1 16 5 11) (1 1 . 99)) 1) 1))"
+    );
+
+    let rue_source = source.replace("*standard-cl-24*", "*standard-cl-rue1*");
+    let rue_program = do_basic_run(&vec!["run".to_string(), rue_source]);
+    assert!(
+        !rue_program.trim().starts_with("FAIL"),
+        "rue compile failed unexpectedly: {rue_program}"
+    );
+
+    let args = "1".to_string();
+    let cl24_result = do_basic_brun(&vec![
+        "brun".to_string(),
+        cl24_program.clone(),
+        args.clone(),
+    ]);
+    let rue_result = do_basic_brun(&vec!["brun".to_string(), rue_program, args]);
+    assert_eq!(
+        rue_result.trim().starts_with("FAIL"),
+        cl24_result.trim().starts_with("FAIL"),
+        "rue and cl24 brun failure status diverged: rue=`{}` cl24=`{}`",
+        rue_result.trim(),
+        cl24_result.trim()
+    );
 }
 
 #[test]
 fn test_ensure_dereferenceable_3() {
-    for sigil in ["*standard-cl-24*", "*standard-cl-rue1*"] {
-        let program = do_basic_run(&vec![
-            "run".to_string(),
-            format!(
-                "(mod (A B) (include {sigil}) (defun-inline F (A B) (if (@ B 1) (+ A B) 99)) (F &rest (@ 3)))"
-            ),
-        ]);
-        assert!(
-            !program.trim().starts_with("FAIL"),
-            "compile failed for sigil {sigil}: {program}"
-        );
-    }
+    let source =
+        "(mod (A B) (include *standard-cl-24*) (defun-inline F (A B) (if (@ B 1) (+ A B) 99)) (F &rest (@ 3)))";
+    let cl24_program = do_basic_run(&vec!["run".to_string(), source.to_string()]);
+    assert_eq!(
+        cl24_program.trim(),
+        "(2 (3 5 (1 16 (2 (1 . 2) 3) (2 (1 . 4) 3)) (1 1 . 99)) 1)"
+    );
+
+    let rue_source = source.replace("*standard-cl-24*", "*standard-cl-rue1*");
+    let rue_program = do_basic_run(&vec!["run".to_string(), rue_source]);
+    assert!(
+        !rue_program.trim().starts_with("FAIL"),
+        "rue compile failed unexpectedly: {rue_program}"
+    );
+
+    let args = "1".to_string();
+    let cl24_result = do_basic_brun(&vec![
+        "brun".to_string(),
+        cl24_program.clone(),
+        args.clone(),
+    ]);
+    let rue_result = do_basic_brun(&vec!["brun".to_string(), rue_program, args]);
+    assert_eq!(rue_result.trim(), cl24_result.trim());
 }
 
 #[test]
 fn test_ensure_dereferenceable_4() {
-    for sigil in ["*standard-cl-24*", "*standard-cl-rue1*"] {
-        let program = do_basic_run(&vec![
-            "run".to_string(),
-            format!(
-                "(mod (A B) (include {sigil}) (defun F (A B) (assign X (if (@ B 1) (+ A B) (* A 3)) (* X 2))) (F A B))"
-            ),
-        ]);
-        assert!(
-            !program.trim().starts_with("FAIL"),
-            "compile failed for sigil {sigil}: {program}"
-        );
-    }
+    let source =
+        "(mod (A B) (include *standard-cl-24*) (defun F (A B) (assign X (if (@ B 1) (+ A B) (* A 3)) (* X 2))) (F A B))";
+    let cl24_program = do_basic_run(&vec!["run".to_string(), source.to_string()]);
+    assert_eq!(
+        cl24_program.trim(),
+        "(2 (1 2 2 (4 2 (4 5 (4 11 ())))) (4 (1 18 (2 (3 7 (1 16 5 11) (1 18 5 (1 . 3))) 1) (1 . 2)) 1))"
+    );
+
+    let rue_source = source.replace("*standard-cl-24*", "*standard-cl-rue1*");
+    let rue_program = do_basic_run(&vec!["run".to_string(), rue_source]);
+    assert!(
+        !rue_program.trim().starts_with("FAIL"),
+        "rue compile failed unexpectedly: {rue_program}"
+    );
+
+    let args = "1".to_string();
+    let cl24_result = do_basic_brun(&vec![
+        "brun".to_string(),
+        cl24_program.clone(),
+        args.clone(),
+    ]);
+    let rue_result = do_basic_brun(&vec!["brun".to_string(), rue_program, args]);
+    assert_eq!(rue_result.trim(), cl24_result.trim());
 }
 
 #[test]
 fn test_ensure_dereferenceable_5() {
-    for sigil in ["*standard-cl-24*", "*standard-cl-rue1*"] {
-        let program = do_basic_run(&vec![
-            "run".to_string(),
-            format!(
-                "(mod (A B) (include {sigil}) (defun-inline F (A B) (assign X (if (@ B 1) (+ A B) (* A 3)) (* X 2))) (F A B))"
-            ),
-        ]);
-        assert!(
-            !program.trim().starts_with("FAIL"),
-            "compile failed for sigil {sigil}: {program}"
-        );
-    }
+    let source =
+        "(mod (A B) (include *standard-cl-24*) (defun-inline F (A B) (assign X (if (@ B 1) (+ A B) (* A 3)) (* X 2))) (F A B))";
+    let cl24_program = do_basic_run(&vec!["run".to_string(), source.to_string()]);
+    assert_eq!(
+        cl24_program.trim(),
+        "(18 (2 (3 3 (1 16 2 5) (1 18 2 (1 . 3))) 1) (1 . 2))"
+    );
+
+    let rue_source = source.replace("*standard-cl-24*", "*standard-cl-rue1*");
+    let rue_program = do_basic_run(&vec!["run".to_string(), rue_source]);
+    assert!(
+        !rue_program.trim().starts_with("FAIL"),
+        "rue compile failed unexpectedly: {rue_program}"
+    );
+
+    let args = "1".to_string();
+    let cl24_result = do_basic_brun(&vec![
+        "brun".to_string(),
+        cl24_program.clone(),
+        args.clone(),
+    ]);
+    let rue_result = do_basic_brun(&vec!["brun".to_string(), rue_program, args]);
+    assert_eq!(rue_result.trim(), cl24_result.trim());
 }
 
 #[test]
