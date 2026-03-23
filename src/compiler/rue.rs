@@ -21,6 +21,7 @@ use rue_types::{Type, TypeId};
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
 use crate::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
 use crate::compiler::clvm::{convert_from_clvm_rs, convert_to_clvm_rs};
+use crate::compiler::compiler::is_at_capture;
 use crate::compiler::codegen::toposort_assign_bindings;
 use crate::compiler::comptypes::{
     BindingPattern, BodyForm, CompileErr, CompileForm, CompilerOpts, DefconstData, DefunData,
@@ -63,6 +64,16 @@ fn param_names_and_paths_(vec: &mut Vec<(Number, Vec<u8>)>, env: Rc<SExp>, path:
             }
         }
         SExp::Cons(_, left, right) => {
+            // (@ capture subtree) captures the whole current subtree at this path,
+            // then destructures `subtree` against the same value.
+            if let Some((capture, substructure)) = is_at_capture(left.clone(), right.clone()) {
+                if printable(&capture, false) {
+                    vec.push((path.clone(), capture));
+                }
+                param_names_and_paths_(vec, substructure, path);
+                return;
+            }
+
             let two = 2_i32.to_bigint().unwrap();
             param_names_and_paths_(vec, left.clone(), path.clone() * two.clone());
             param_names_and_paths_(vec, right.clone(), path * two + bi_one());

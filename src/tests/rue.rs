@@ -563,6 +563,67 @@ fn test_assign_destructure_reports_unsupported_rue() {
 }
 
 #[test]
+fn test_at_capture_destructure_1_rue() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (A (@ Z (B C)) D) (include *standard-cl-rue1*) A)".to_string(),
+    ]);
+    let result = do_basic_brun(&vec!["brun".to_string(), program, "(9 (1 . 2) 3)".to_string()]);
+    assert_eq!(result.trim(), "9");
+}
+
+#[test]
+fn test_at_capture_destructure_2_rue() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (A (@ Z (B C)) D) (include *standard-cl-rue1*) Z)".to_string(),
+    ]);
+    let result = do_basic_brun(&vec!["brun".to_string(), program, "(9 (1 . 2) 3)".to_string()]);
+    assert_eq!(result.trim(), "(1 . 2)");
+}
+
+#[test]
+fn test_at_capture_destructure_3_rue() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (A (@ Z (B C)) D) (include *standard-cl-rue1*) B)".to_string(),
+    ]);
+    let result = do_basic_brun(&vec!["brun".to_string(), program, "(9 (1 . 2) 3)".to_string()]);
+    assert_eq!(result.trim(), "1");
+}
+
+#[test]
+fn test_at_capture_destructure_4_rue() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (A (@ Z (B C)) D) (include *standard-cl-rue1*) C)".to_string(),
+    ]);
+    let result = do_basic_brun(&vec!["brun".to_string(), program, "(9 (1 . 2) 3)".to_string()]);
+    assert_eq!(result.trim(), "2");
+}
+
+#[test]
+fn test_at_capture_destructure_5_rue() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (A (@ Z (B C)) D) (include *standard-cl-rue1*) D)".to_string(),
+    ]);
+    let result = do_basic_brun(&vec!["brun".to_string(), program, "(9 (1 . 2) 3)".to_string()]);
+    assert_eq!(result.trim(), "3");
+}
+
+#[test]
+fn test_assign_at_capture_destructure_rue() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (D) (include *standard-cl-rue1*) (assign (@ A (B C)) (list 2 3) (+ (l A) B C D)))"
+            .to_string(),
+    ]);
+    let result = do_basic_brun(&vec!["brun".to_string(), program, "(4)".to_string()]);
+    assert_eq!(result.trim(), "10");
+}
+
+#[test]
 fn test_return_function_can_be_run_no_env() {
     let program = do_basic_run(&vec![
         "run".to_string(),
