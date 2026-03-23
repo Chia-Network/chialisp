@@ -551,7 +551,7 @@ impl RueConversion {
                     if let Some(tail_path) = tail_path {
                         if path_is_descendant_of(path, &tail_path) {
                             let target_in_tail = relative_path_from_ancestor(path, &tail_path)
-                                .unwrap_or_else(|| bi_one());
+                                .unwrap_or_else(bi_one);
                             if target_in_tail == bi_one() {
                                 return Ok(self.one_hir());
                             }
