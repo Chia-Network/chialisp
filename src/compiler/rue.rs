@@ -104,6 +104,66 @@ fn improper_list(env: Rc<SExp>) -> Option<(Vec<SExp>, Rc<SExp>)> {
     }
 }
 
+fn compute_parent_of_path(mut path: Number, mut steps: Number) -> Number {
+    let mut bit = bi_one();
+    let two = 2_u32.to_bigint().unwrap();
+
+    while bit <= path {
+        bit *= two.clone();
+    }
+
+    while steps > bi_zero() {
+        steps -= bi_one();
+        bit /= two.clone();
+        if path.clone() & bit.clone() != bi_zero() {
+            path ^= bit.clone();
+        }
+        path |= bit.clone() / two.clone();
+    }
+
+    if path == bi_zero() {
+        bi_one()
+    } else {
+        path
+    }
+}
+
+fn path_is_descendant_of(path: &Number, ancestor: &Number) -> bool {
+    if *ancestor <= bi_zero() {
+        return false;
+    }
+
+    let mut cursor = path.clone();
+    while cursor > *ancestor {
+        cursor /= 2_u32.to_bigint().unwrap();
+    }
+    cursor == *ancestor
+}
+
+fn relative_path_from_ancestor(path: &Number, ancestor: &Number) -> Option<Number> {
+    if !path_is_descendant_of(path, ancestor) {
+        return None;
+    }
+
+    let two = 2_u32.to_bigint().unwrap();
+    let mut selectors: Vec<bool> = Vec::new();
+    let mut cursor = path.clone();
+    while cursor > *ancestor {
+        selectors.push((cursor.clone() % two.clone()) != bi_zero());
+        cursor /= two.clone();
+    }
+
+    let mut result = bi_one();
+    for is_right in selectors.into_iter().rev() {
+        result *= two.clone();
+        if is_right {
+            result += bi_one();
+        }
+    }
+
+    Some(result)
+}
+
 pub fn rue_cg(opts: Rc<dyn CompilerOpts>) -> bool {
     opts.dialect().rue_codegen && opts.stdenv() && !opts.filename().starts_with("*macros*")
 }
@@ -274,12 +334,29 @@ struct PredeclaredHelperSymbol {
 }
 type PredeclaredHelperSymbols = HashMap<Vec<u8>, PredeclaredHelperSymbol>;
 
+#[derive(Clone)]
+struct FunctionTranslationContext {
+    function_name: Vec<u8>,
+    args_spec: Rc<SExp>,
+    kind: PredeclaredSymbolKind,
+    scope_id: ScopeId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ParentQueryHelperKey {
+    function_name: Vec<u8>,
+    variable_name: Vec<u8>,
+    path: Number,
+}
+
 struct RueConversion {
     db: Database,
     opts: Rc<dyn CompilerOpts>,
     text: Arc<str>,
     any_type_id: TypeId,
     predeclared_helpers: PredeclaredHelperSymbols,
+    function_contexts: HashMap<ScopeId, FunctionTranslationContext>,
+    generated_parent_query_helpers: HashMap<ParentQueryHelperKey, SymbolId>,
 }
 
 impl RueConversion {
@@ -296,6 +373,8 @@ impl RueConversion {
             text,
             any_type_id,
             predeclared_helpers: PredeclaredHelperSymbols::default(),
+            function_contexts: HashMap::default(),
+            generated_parent_query_helpers: HashMap::default(),
         }
     }
 
@@ -357,6 +436,271 @@ impl RueConversion {
             result = self.db.alloc_hir(Hir::Unary(UnaryOp::Rest, result));
         }
         result
+    }
+
+    fn function_context_for_scope(&self, scope: ScopeId) -> Option<FunctionTranslationContext> {
+        let mut current = Some(scope);
+        while let Some(scope_id) = current {
+            if let Some(ctx) = self.function_contexts.get(&scope_id) {
+                return Some(ctx.clone());
+            }
+            current = self.db.scope(scope_id).parent();
+        }
+        None
+    }
+
+    fn bodyform_int(expr: &BodyForm) -> Option<Number> {
+        match expr {
+            BodyForm::Value(SExp::Integer(_, i)) | BodyForm::Quoted(SExp::Integer(_, i)) => {
+                Some(i.clone())
+            }
+            _ => None,
+        }
+    }
+
+    fn bodyform_atom(expr: &BodyForm) -> Option<Vec<u8>> {
+        match expr {
+            BodyForm::Value(SExp::Atom(_, a)) => Some(a.clone()),
+            _ => None,
+        }
+    }
+
+    fn scope_symbol(&self, scope: ScopeId, symbol_name: &[u8]) -> Option<SymbolId> {
+        let name = decode_string(symbol_name);
+        lookup_symbol_in_scope(&self.db, scope, &name)
+    }
+
+    fn one_hir(&mut self) -> HirId {
+        self.db.alloc_hir(Hir::Int(bi_one()))
+    }
+
+    fn compose_path_hir(&mut self, relative_path: &Number, into: HirId) -> HirId {
+        let rel_hir = self.db.alloc_hir(Hir::Int(relative_path.clone()));
+        let nil_hir = self.db.alloc_hir(Hir::Nil);
+        let pair_tail = self.db.alloc_hir(Hir::Pair(into, nil_hir));
+        let args = self.db.alloc_hir(Hir::Pair(rel_hir, pair_tail));
+        self.db.alloc_hir(Hir::ClvmOp(ClvmOp::Apply, args))
+    }
+
+    fn parent_query_helper_name(
+        &self,
+        function_name: &[u8],
+        variable_name: &[u8],
+        steps: &Number,
+    ) -> String {
+        let sanitize = |bytes: &[u8]| {
+            decode_string(bytes)
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect::<String>()
+        };
+        format!(
+            "_$_at_parent_{}_{}_{}",
+            sanitize(function_name),
+            sanitize(variable_name),
+            steps
+        )
+    }
+
+    fn build_parent_query_helper_body(
+        &mut self,
+        ctx: &FunctionTranslationContext,
+        variable_name: &[u8],
+        path: &Number,
+        steps: &Number,
+    ) -> Result<HirId, CompileErr> {
+        let linear_inline = match &ctx.kind {
+            PredeclaredSymbolKind::InlineDefunNormalArgs(args) => {
+                args.iter().all(|a| matches!(a, SExp::Atom(_, _)))
+            }
+            PredeclaredSymbolKind::InlineDefunImproperListArgs(prefix, tail) => {
+                prefix.iter().all(|a| matches!(a, SExp::Atom(_, _)))
+                    && matches!(tail.borrow(), SExp::Atom(_, _))
+            }
+            _ => false,
+        };
+
+        if !linear_inline {
+            let Some(args_symbol) = self.scope_symbol(ctx.scope_id, b"_$_args__") else {
+                return Err(rue_err(
+                    Srcloc::start(&self.opts.filename()),
+                    format!(
+                        "cannot resolve _$_args__ while generating @ helper in `{}`",
+                        decode_string(&ctx.function_name)
+                    ),
+                ));
+            };
+            return Ok(self.accessor_hir_for_path(args_symbol, path));
+        }
+
+        // Linear inline arguments don't carry a full argument tree parameter.
+        // If this query walks up to a list slot, we can conservatively return 1.
+        if steps > &bi_zero() {
+            if let PredeclaredSymbolKind::InlineDefunImproperListArgs(_, tail) = &ctx.kind {
+                if let SExp::Atom(_, tail_name) = tail.borrow() {
+                    let all_paths = param_names_and_paths(ctx.args_spec.clone());
+                    let tail_path = all_paths
+                        .iter()
+                        .find_map(|(p, n)| (n == tail_name).then_some(p.clone()));
+                    if let Some(tail_path) = tail_path {
+                        if path_is_descendant_of(path, &tail_path) {
+                            let target_in_tail = relative_path_from_ancestor(path, &tail_path)
+                                .unwrap_or_else(|| bi_one());
+                            if target_in_tail == bi_one() {
+                                return Ok(self.one_hir());
+                            }
+                            let Some(tail_symbol) = self.scope_symbol(ctx.scope_id, tail_name)
+                            else {
+                                return Ok(self.one_hir());
+                            };
+                            let tail_ref = self.db.alloc_hir(Hir::Reference(tail_symbol));
+                            return Ok(self.compose_path_hir(&target_in_tail, tail_ref));
+                        }
+                    }
+                }
+            }
+
+            return Ok(self.one_hir());
+        }
+
+        // Zero-step query in a linear inline: return the direct parameter reference.
+        if let Some(sym) = self.scope_symbol(ctx.scope_id, variable_name) {
+            return Ok(self.db.alloc_hir(Hir::Reference(sym)));
+        }
+
+        Ok(self.one_hir())
+    }
+
+    fn intern_at_parent_query(
+        &mut self,
+        scope: ScopeId,
+        loc: &Srcloc,
+        variable_expr: &BodyForm,
+        steps_expr: &BodyForm,
+    ) -> Result<HirId, CompileErr> {
+        let Some(variable_name) = Self::bodyform_atom(variable_expr) else {
+            return Err(rue_err(
+                loc.clone(),
+                format!(
+                    "@ form with two arguments requires atom and integer, got (@ {} {})",
+                    variable_expr.to_sexp(),
+                    steps_expr.to_sexp()
+                ),
+            ));
+        };
+        let Some(steps) = Self::bodyform_int(steps_expr) else {
+            return Err(rue_err(
+                loc.clone(),
+                format!(
+                    "@ form with two arguments requires atom and integer, got (@ {} {})",
+                    variable_expr.to_sexp(),
+                    steps_expr.to_sexp()
+                ),
+            ));
+        };
+
+        let Some(function_ctx) = self.function_context_for_scope(scope) else {
+            return Err(rue_err(
+                loc.clone(),
+                format!(
+                    "(@ {} {}) is only supported within a function or program scope",
+                    decode_string(&variable_name),
+                    steps
+                ),
+            ));
+        };
+
+        let path_lookup = param_names_and_paths(function_ctx.args_spec.clone());
+        let Some(base_path) = path_lookup
+            .iter()
+            .find_map(|(path, name)| (name == &variable_name).then_some(path.clone()))
+        else {
+            return Err(rue_err(
+                loc.clone(),
+                format!(
+                    "Disallowed lookup of non-argument binding in @ query {}",
+                    SExp::Atom(loc.clone(), variable_name.clone())
+                ),
+            ));
+        };
+
+        let query_path = compute_parent_of_path(base_path, steps.clone());
+        let key = ParentQueryHelperKey {
+            function_name: function_ctx.function_name.clone(),
+            variable_name: variable_name.clone(),
+            path: query_path.clone(),
+        };
+
+        let helper_symbol = if let Some(symbol) = self.generated_parent_query_helpers.get(&key) {
+            *symbol
+        } else {
+            let helper_body = self.build_parent_query_helper_body(
+                &function_ctx,
+                &variable_name,
+                &query_path,
+                &steps,
+            )?;
+            let helper_name =
+                self.parent_query_helper_name(&function_ctx.function_name, &variable_name, &steps);
+            let helper_symbol = self.db.alloc_symbol(Symbol::Function(FunctionSymbol {
+                name: Some(Name::new(helper_name.clone(), None)),
+                ty: self.any_type_id,
+                scope: function_ctx.scope_id,
+                vars: Default::default(),
+                parameters: IndexMap::default(),
+                nil_terminated: true,
+                return_type: self.any_type_id,
+                body: helper_body,
+                kind: FunctionKind::Inline,
+            }));
+            self.db.scope_mut(function_ctx.scope_id).insert_symbol(
+                helper_name.clone(),
+                helper_symbol,
+                false,
+            );
+            self.generated_parent_query_helpers
+                .insert(key, helper_symbol);
+            helper_symbol
+        };
+
+        let helper_ref = self.db.alloc_hir(Hir::Reference(helper_symbol));
+        Ok(self.db.alloc_hir(Hir::FunctionCall(FunctionCall {
+            function: helper_ref,
+            args: Vec::new(),
+            nil_terminated: true,
+        })))
+    }
+
+    fn intern_at_form(
+        &mut self,
+        scope: ScopeId,
+        loc: &Srcloc,
+        forms: &[Rc<BodyForm>],
+    ) -> Result<HirId, CompileErr> {
+        if forms.len() == 2 {
+            if let Some(i) = Self::bodyform_int(&forms[1]) {
+                return Ok(self.db.alloc_hir(Hir::Int(i)));
+            }
+            return Err(rue_err(
+                loc.clone(),
+                "one argument @ form only accepts integers".to_string(),
+            ));
+        }
+
+        if forms.len() == 3 {
+            return self.intern_at_parent_query(scope, loc, &forms[1], &forms[2]);
+        }
+
+        Err(rue_err(
+            loc.clone(),
+            "@ form accepts (@ <path>) or (@ <binding> <nth-parent>)".to_string(),
+        ))
     }
 
     fn choose_inline_argument(
@@ -548,6 +892,9 @@ impl RueConversion {
                                 None,
                             ),
                         );
+                    }
+                    if op_name == b"@" {
+                        return self.intern_at_form(scope, loc, forms);
                     }
                     if let Some(prim) = match_prim(self.opts.clone(), op_name) {
                         return self.primcall(scope, prim, loc, forms);
@@ -1027,6 +1374,16 @@ impl RueConversion {
             ));
         };
 
+        self.function_contexts.insert(
+            predecl.scope_id,
+            FunctionTranslationContext {
+                function_name: data.name.clone(),
+                args_spec: data.args.clone(),
+                kind: predecl.kind.clone(),
+                scope_id: predecl.scope_id,
+            },
+        );
+
         let mut install_argument =
             |plist: &mut IndexMap<String, SymbolId>, param_index: usize, param_sexp: &SExp| {
                 if let SExp::Atom(ploc, atom_name) = param_sexp {
@@ -1316,6 +1673,15 @@ impl RueConversion {
             "_$_args__",
             program.args.clone(),
             program_scope,
+        );
+        self.function_contexts.insert(
+            program_scope,
+            FunctionTranslationContext {
+                function_name: b"__chia_main__".to_vec(),
+                args_spec: program.args.clone(),
+                kind: PredeclaredSymbolKind::Defun,
+                scope_id: program_scope,
+            },
         );
 
         let main_body = self.intern_expr_hir(program_scope, &program.exp)?;
