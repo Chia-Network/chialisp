@@ -442,9 +442,9 @@ impl RueConversion {
                 return None;
             }
 
-            if let BodyForm::Value(SExp::Atom(_, name)) = &*forms[1] {
+            if let BodyForm::Value(SExp::Atom(_, name)) = &*forms[0] {
                 if name == b"com" {
-                    return Some(forms[2].clone());
+                    return Some(forms[1].clone());
                 }
             }
         }
