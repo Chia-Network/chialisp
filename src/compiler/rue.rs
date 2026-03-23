@@ -767,7 +767,7 @@ impl RueConversion {
                     nil_terminated: true,
                     return_type: self.any_type_id,
                     body: unresolved_body,
-                    kind: FunctionKind::BinaryTree
+                    kind: FunctionKind::BinaryTree,
                 }));
                 let description = PredeclaredHelperSymbol {
                     symbol_id,
@@ -775,16 +775,19 @@ impl RueConversion {
                     kind: PredeclaredSymbolKind::Defun,
                 };
                 self.predeclared_helpers.insert(name.to_vec(), description);
-                self.create_defun(false, &DefunData {
-                    loc: data.loc.clone(),
-                    name: name.clone(),
-                    args: new_args.clone(),
-                    orig_args: new_args,
-                    kw: data.kw.clone(),
-                    nl: data.loc.clone(),
-                    synthetic: None,
-                    body: data.body.clone()
-                })?;
+                self.create_defun(
+                    false,
+                    &DefunData {
+                        loc: data.loc.clone(),
+                        name: name.clone(),
+                        args: new_args.clone(),
+                        orig_args: new_args,
+                        kw: data.kw.clone(),
+                        nl: data.loc.clone(),
+                        synthetic: None,
+                        body: data.body.clone(),
+                    },
+                )?;
                 Ok(self.db.alloc_hir(Hir::Reference(symbol_id)))
             }
         }
