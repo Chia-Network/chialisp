@@ -646,6 +646,17 @@ fn test_return_function_can_be_run_env_env() {
 }
 
 #[test]
+fn test_lambda_include_capture_rue() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (S) (include *standard-cl-rue1*) (a (lambda ((& S) X) (+ S X)) (list 5)))"
+            .to_string(),
+    ]);
+    let result = do_basic_brun(&vec!["brun".to_string(), program, "(3)".to_string()]);
+    assert_eq!(result.trim(), "8");
+}
+
+#[test]
 fn test_module_level_constants_defconst_and_defconstant_rue() {
     let defconst_program = do_basic_run(&vec![
         "run".to_string(),
