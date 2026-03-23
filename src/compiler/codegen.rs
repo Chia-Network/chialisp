@@ -6,7 +6,8 @@ use std::rc::Rc;
 
 use num_bigint::ToBigInt;
 
-use crate::classic::clvm::__type_compatibility__::bi_one;
+use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
+use crate::classic::clvm_tools::node_path::compose_paths;
 
 use crate::compiler::clvm::{run, truthy};
 use crate::compiler::compiler::is_at_capture;
@@ -17,7 +18,7 @@ use crate::compiler::comptypes::{
     RawCallSpec, SyntheticType,
 };
 use crate::compiler::debug::{build_swap_table_mut, relabel};
-use crate::compiler::evaluate::{Evaluator, EVAL_STACK_LIMIT};
+use crate::compiler::evaluate::{is_apply_atom, Evaluator, EVAL_STACK_LIMIT};
 use crate::compiler::frontend::{compile_bodyform, make_provides_set};
 use crate::compiler::gensym::gensym;
 use crate::compiler::inline::{replace_in_inline, synthesize_args};
@@ -28,10 +29,28 @@ use crate::compiler::sexp::{decode_string, printable, SExp};
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::StartOfCodegenOptimization;
 use crate::compiler::{BasicCompileContext, CompileContextWrapper};
-use crate::util::{toposort, u8_from_number, TopoSortItem};
+use crate::util::{toposort, u8_from_number, Number, TopoSortItem};
 
 const MACRO_TIME_LIMIT: usize = 1000000;
 const CONST_EVAL_LIMIT: usize = 1000000;
+
+// Tell what kind of lookup is being asked for.
+// ReferenceAsVariable means that references to defuns should appear wrapped so they can be
+// exported or applied.
+// SimpleEnvReference means that the caller just wants the environment path.
+// OnlyBinding means that only data values should match.
+#[derive(Clone, Debug)]
+enum NameLookupType {
+    ReferenceAsVariable,
+    SimpleEnvReference,
+    OnlyVariableBinding,
+}
+
+#[derive(Clone)]
+enum EnvDefinitionStatus {
+    IsDefun,
+    IsConstant,
+}
 
 /* As in the python code, produce a pair whose (thanks richard)
  *
@@ -213,15 +232,22 @@ fn create_name_lookup_(
 // If so, the reference to this name is a reference to a function, which
 // will make variable references to it capture the program's function
 // environment.
-fn is_defun_in_codegen(compiler: &PrimaryCodegen, name: &[u8]) -> bool {
+fn is_defun_or_constant_in_codegen(
+    compiler: &PrimaryCodegen,
+    name: &[u8],
+) -> Option<EnvDefinitionStatus> {
     // Check for an input defun that matches the name.
     for h in compiler.original_helpers.iter() {
-        if matches!(h, HelperForm::Defun(false, _)) && h.name() == name {
-            return true;
+        if h.name() == name {
+            if matches!(h, HelperForm::Defun(false, _)) {
+                return Some(EnvDefinitionStatus::IsDefun);
+            } else if matches!(h, HelperForm::Defconstant(_)) {
+                return Some(EnvDefinitionStatus::IsConstant);
+            }
         }
     }
 
-    false
+    None
 }
 
 // At the CLVM level, given a list of clvm expressios, make an expression
@@ -277,6 +303,9 @@ fn lambda_for_defun(loc: Srcloc, lookup: Rc<SExp>) -> Rc<SExp> {
     )
 }
 
+// Note that renaming has taken place before code generation, so there won't be any shadowing.
+// If a local shadowed a global binding before renaming, the local and all uses would have been
+// given a new, unique name via gensym.
 fn create_name_lookup(
     compiler: &PrimaryCodegen,
     l: Srcloc,
@@ -286,24 +315,27 @@ fn create_name_lookup(
     // is named, it will be built into an expression that allows it to be
     // called by a CLVM 'a' operator as one would expect, regardless of how
     // it integrates with the rest of the program it lives in.
-    as_variable: bool,
+    as_variable: NameLookupType,
 ) -> Result<Rc<SExp>, CompileErr> {
     compiler
         .constants
         .get(name)
         .map(|x| Ok(x.clone()))
         .unwrap_or_else(|| {
-            create_name_lookup_(l.clone(), name, compiler.env.clone(), compiler.env.clone()).map(
+            create_name_lookup_(l.clone(), name, compiler.env.clone(), compiler.env.clone()).and_then(
                 |i| {
+                    let is_defun = is_defun_or_constant_in_codegen(compiler, name);
                     // Determine if it's a defun.  If so we can ensure that it's
                     // callable like a lambda by repeating the left env into it.
                     let find_program = Rc::new(SExp::Integer(l.clone(), i.to_bigint().unwrap()));
-                    if as_variable && is_defun_in_codegen(compiler, name) {
+                    if matches!(as_variable, NameLookupType::ReferenceAsVariable) && matches!(is_defun, Some(EnvDefinitionStatus::IsDefun)) {
                         // It's a defun.  Harden the result so it is callable
                         // directly by the CLVM 'a' operator.
-                        lambda_for_defun(l.clone(), find_program)
+                        Ok(lambda_for_defun(l.clone(), find_program))
+                    } else if matches!(as_variable, NameLookupType::OnlyVariableBinding) && is_defun.is_some() {
+                        Err(CompileErr(l.clone(), "Taking direct environment reference in main environment isn't allowed for now".to_string()))
                     } else {
-                        find_program
+                        Ok(find_program)
                     }
                 },
             )
@@ -324,6 +356,22 @@ fn get_prim(loc: Srcloc, prims: Rc<HashMap<Vec<u8>, Rc<SExp>>>, name: &[u8]) -> 
     None
 }
 
+fn atom_is_env_ref(atom: &SExp) -> bool {
+    if let SExp::Atom(_, name) = atom {
+        name == b"@" || name == b"@*env*"
+    } else {
+        false
+    }
+}
+
+fn call_head_is_atom(bf: &BodyForm) -> bool {
+    if let BodyForm::Value(at) = bf {
+        atom_is_env_ref(at)
+    } else {
+        false
+    }
+}
+
 pub fn get_callable(
     _opts: Rc<dyn CompilerOpts>,
     compiler: &PrimaryCodegen,
@@ -336,11 +384,15 @@ pub fn get_callable(
             let inline = compiler.inlines.get(name);
             // We're getting a callable, so the access requested is not as
             // a variable.
-            let defun = create_name_lookup(compiler, l.clone(), name, false);
+            let defun = create_name_lookup(
+                compiler,
+                l.clone(),
+                name,
+                NameLookupType::SimpleEnvReference,
+            );
             let prim = get_prim(l.clone(), compiler.prims.clone(), name);
             let atom_is_com = *name == "com".as_bytes().to_vec();
-            let atom_is_at =
-                *name == "@".as_bytes().to_vec() || *name == "@*env*".as_bytes().to_vec();
+            let atom_is_at = atom_is_env_ref(&atom);
             match (macro_def, inline, defun, prim, atom_is_com, atom_is_at) {
                 (Some(macro_def), _, _, _, _, _) => {
                     let macro_def_clone: &SExp = macro_def.borrow();
@@ -479,6 +531,109 @@ pub fn get_call_name(l: Srcloc, body: BodyForm) -> Result<Rc<SExp>, CompileErr> 
     ))
 }
 
+fn compute_parent_of_path(mut path: Number, mut steps: Number) -> Number {
+    let mut bit = bi_one();
+    let two = 2_u32.to_bigint().unwrap();
+
+    while bit <= path {
+        bit *= two.clone();
+    }
+
+    while steps > bi_zero() {
+        steps -= bi_one();
+        bit /= two.clone();
+        if path.clone() & bit.clone() != bi_zero() {
+            path ^= bit.clone();
+        }
+        path |= bit.clone() / two.clone();
+    }
+
+    if path == bi_zero() {
+        bi_one()
+    } else {
+        path
+    }
+}
+
+// Given an argument name and a number of steps toward the env root, compile code that gives the
+// indicated reference.  This is useful for being able to ask the question: can i execute code that
+// depends on the indicated argument name being present in the environment or, because the
+// referneced parent position is not a pair, it will not be present.
+fn produce_argument_check(
+    compiler: &PrimaryCodegen,
+    loc: Srcloc,
+    a: &[u8],
+    steps: Number,
+) -> Result<CompiledCode, CompileErr> {
+    if let SExp::Integer(l, lookup) = create_name_lookup(
+        compiler,
+        loc.clone(),
+        a,
+        NameLookupType::OnlyVariableBinding,
+    )
+    .map(|x| {
+        let x_ref: &SExp = x.borrow();
+        x_ref.clone()
+    })? {
+        let lookup = compute_parent_of_path(lookup, steps);
+        Ok(CompiledCode(loc.clone(), Rc::new(SExp::Integer(l, lookup))))
+    } else {
+        Err(CompileErr(
+            loc.clone(),
+            format!(
+                "Disallowed lookup of non-argument binding in @ query {}",
+                SExp::Atom(loc.clone(), a.to_vec())
+            ),
+        ))
+    }
+}
+
+// Check whether the given bodyform could describe a path reference from the user in the form
+// (@ <n>)
+fn is_path(bf: &BodyForm) -> Option<Number> {
+    match bf {
+        BodyForm::Value(SExp::Integer(_, i)) | BodyForm::Quoted(SExp::Integer(_, i)) => {
+            Some(i.clone())
+        }
+        BodyForm::Call(_, forms, _) => {
+            if forms.len() != 2 {
+                return None;
+            }
+
+            if !call_head_is_atom(&forms[0]) {
+                return None;
+            }
+
+            if let BodyForm::Quoted(SExp::Integer(_, i)) | BodyForm::Value(SExp::Integer(_, i)) =
+                &*forms[1]
+            {
+                return Some(i.clone());
+            }
+
+            None
+        }
+        _ => None,
+    }
+}
+
+// Check whether this is the args from a call of the form (a (@ <n>) (@ <m>))
+// If so, give the resulting path reference.
+fn is_applied_path(apply_args: &[Rc<BodyForm>]) -> Option<Number> {
+    if apply_args.len() != 3 {
+        return None;
+    }
+
+    if !is_apply_atom(apply_args[0].to_sexp()) {
+        return None;
+    }
+
+    if let (Some(p), Some(q)) = (is_path(&apply_args[1]), is_path(&apply_args[2])) {
+        return Some(compose_paths(&q, &p));
+    }
+
+    None
+}
+
 fn compile_call(
     context: &mut BasicCompileContext,
     opts: Rc<dyn CompilerOpts>,
@@ -570,13 +725,48 @@ fn compile_call(
                         )),
                         _ => Err(CompileErr(
                             al.clone(),
-                            "@ form only accepts integers at present".to_string(),
+                            "one argument @ form only accepts integers at present".to_string(),
+                        )),
+                    }
+                } else if tl.len() == 2 {
+                    // Expression form like (@ <argument> <n>) to produce a reference to the
+                    // nth parent of the given argument name.
+                    //
+                    // Only allowed if the argument is actually in the environment.
+                    //
+                    // It's an error do ask this question of a computed value or a constant.
+                    match (tl[0].borrow(), tl[1].borrow()) {
+                        (
+                            BodyForm::Value(SExp::Atom(_al, a)),
+                            BodyForm::Value(SExp::Integer(_il, i)),
+                        ) |
+                        (
+                            BodyForm::Value(SExp::Atom(_al, a)),
+                            BodyForm::Quoted(SExp::Integer(_il, i)),
+                        ) => produce_argument_check(compiler, call.loc.clone(), a, i.clone()),
+                        (
+                            BodyForm::Call(cl, c, _t),
+                            BodyForm::Value(SExp::Integer(_i1, i)),
+                        ) |
+                        (
+                            BodyForm::Call(cl, c, _t),
+                            BodyForm::Quoted(SExp::Integer(_i1, i)),
+                        ) => {
+                            if let Some(p) = is_applied_path(c) {
+                                let lookup = compute_parent_of_path(p.clone(), i.clone());
+                                return Ok(CompiledCode(cl.clone().clone(), Rc::new(SExp::Integer(cl.clone(), lookup))));
+                            }
+                            Err(CompileErr(al.clone(), format!("application (@ {} {}) resembles an environment parent reference, but it isn't a simple env reference.", tl[0].to_sexp(), tl[1].to_sexp())))
+                        }
+                        _ => Err(CompileErr(
+                            al.clone(),
+                            format!("@ form with two arguments requires argument and integer, got (@ {} {})", tl[0].to_sexp(), tl[1].to_sexp()),
                         )),
                     }
                 } else {
                     Err(CompileErr(
                         al.clone(),
-                        "@ form accepts one argument".to_string(),
+                        "@ form accepts a one argument form, (@ <constant-path>) or (@ <binding> <nth-parent>)".to_string(),
                     ))
                 }
             }
@@ -718,39 +908,44 @@ pub fn generate_expr_code(
                         // This is as a variable access, given that we've got
                         // a Value bodyform containing an Atom, so if a defun
                         // is returned, it should be a packaged callable.
-                        create_name_lookup(compiler, l.clone(), atom, true)
-                            .map(|f| Ok(CompiledCode(l.clone(), f)))
-                            .unwrap_or_else(|_| {
-                                if opts.dialect().strict && printable(atom, false) {
-                                    // Finally enable strictness for variable names.
-                                    // This is possible because the modern macro system
-                                    // takes great care to preserve as much information
-                                    // from the source code as possible.
-                                    //
-                                    // When we come here in strict mode, we have
-                                    // a string, integer or atom depending on the
-                                    // user's desire and the explicitly generated
-                                    // result from the macro, therefore we can return
-                                    // an error if this atom didn't have a binding.
-                                    return Err(CompileErr(
-                                        l.clone(),
-                                        format!(
-                                            "Unbound use of {} as a variable name",
-                                            decode_string(atom)
-                                        ),
-                                    ));
-                                }
+                        create_name_lookup(
+                            compiler,
+                            l.clone(),
+                            atom,
+                            NameLookupType::ReferenceAsVariable,
+                        )
+                        .map(|f| Ok(CompiledCode(l.clone(), f)))
+                        .unwrap_or_else(|_| {
+                            if opts.dialect().strict && printable(atom, false) {
+                                // Finally enable strictness for variable names.
+                                // This is possible because the modern macro system
+                                // takes great care to preserve as much information
+                                // from the source code as possible.
+                                //
+                                // When we come here in strict mode, we have
+                                // a string, integer or atom depending on the
+                                // user's desire and the explicitly generated
+                                // result from the macro, therefore we can return
+                                // an error if this atom didn't have a binding.
+                                return Err(CompileErr(
+                                    l.clone(),
+                                    format!(
+                                        "Unbound use of {} as a variable name",
+                                        decode_string(atom)
+                                    ),
+                                ));
+                            }
 
-                                // Pass through atoms that don't look up on behalf of
-                                // macros, as it's possible that a macro returned
-                                // something that's canonically a name in number form.
-                                generate_expr_code(
-                                    context,
-                                    opts,
-                                    compiler,
-                                    Rc::new(BodyForm::Quoted(SExp::Atom(l.clone(), atom.clone()))),
-                                )
-                            })
+                            // Pass through atoms that don't look up on behalf of
+                            // macros, as it's possible that a macro returned
+                            // something that's canonically a name in number form.
+                            generate_expr_code(
+                                context,
+                                opts,
+                                compiler,
+                                Rc::new(BodyForm::Quoted(SExp::Atom(l.clone(), atom.clone()))),
+                            )
+                        })
                     }
                 }
                 SExp::Integer(l, i) => {
