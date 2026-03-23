@@ -2588,3 +2588,126 @@ fn test_big_operator_list() {
         .to_string();
     assert_eq!(result, target_output);
 }
+
+const KECCAK_TEST_SIG: &str = "\"baz(uint32,bool)\"";
+const KECCAK_TEST_RESULT: &str =
+    "0xcdcd77c0992ec5bbfc459984220f8c45084cc24d9b6efed1fae540db8de801d2";
+
+#[test]
+fn test_keccak_compilation() {
+    for p in [
+        "(mod X (keccak256 X))",
+        "(mod X (include *standard-cl-24*) (keccak256 X))",
+    ]
+    .iter()
+    {
+        let program = do_basic_run(&vec!["run".to_string(), p.to_string()]);
+        let result = do_basic_brun(&vec![
+            "brun".to_string(),
+            program,
+            KECCAK_TEST_SIG.to_string(),
+        ]);
+        assert_eq!(result.trim(), KECCAK_TEST_RESULT,);
+    }
+}
+
+#[test]
+fn test_keccak_opversion() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "--operators-version".to_string(),
+        "1".to_string(),
+        "(mod () (keccak256 999))".to_string(),
+    ]);
+    assert_eq!(program.trim(), "FAIL: unimplemented operator 62");
+}
+
+#[test]
+fn test_reproduce_variable_repr_bug_deinline() {
+    let source_program = "(mod (A) (include *standard-cl-24*) (defun F (X Y Z)
+    (assign Q X R Q (list R Y Z))) (F &rest A))";
+
+    let compile = |p: &str| do_basic_run(&vec!["run".to_string(), p.to_string()]);
+
+    let output = compile(&source_program);
+    // Produce the same program 30 times.  Demonstrates that this program didn't
+    // produce a stable output (otherwise we wouldn't know the bug was fixed).
+    let mut different = false;
+    for _ in 0..30 {
+        different |= output != compile(&source_program);
+    }
+
+    assert!(different);
+
+    // Bump sigil
+    let new_program = &source_program.replace("cl-24", "cl-25");
+
+    let output = compile(&new_program);
+    // Produce the same program 30 times.  The output should not be unstable.
+    for _ in 0..30 {
+        assert_eq!(output, compile(&new_program));
+    }
+}
+
+#[test]
+fn test_ensure_dereferenceable_1() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (A B) (include *standard-cl-24*) (@ B 1))".to_string(),
+    ]);
+    assert_eq!(program.trim(), "3");
+}
+
+#[test]
+fn test_ensure_dereferenceable_2() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (A B) (include *standard-cl-24*) (defun F (A B) (if (@ B 1) (+ A B) 99)) (F &rest (@ 3)))".to_string(),
+    ]);
+    assert_eq!(
+        program.trim(),
+        "(2 (1 2 2 (4 2 3)) (4 (1 2 (3 7 (1 16 5 11) (1 1 . 99)) 1) 1))"
+    );
+}
+
+#[test]
+fn test_ensure_dereferenceable_3() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (A B) (include *standard-cl-24*) (defun-inline F (A B) (if (@ B 1) (+ A B) 99)) (F &rest (@ 3)))".to_string(),
+    ]);
+    assert_eq!(
+        program.trim(),
+        "(2 (3 5 (1 16 (2 (1 . 2) 3) (2 (1 . 4) 3)) (1 1 . 99)) 1)"
+    );
+}
+
+#[test]
+fn test_ensure_dereferenceable_4() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (A B) (include *standard-cl-24*) (defun F (A B) (assign X (if (@ B 1) (+ A B) (* A 3)) (* X 2))) (F A B))".to_string(),
+    ]);
+    assert_eq!(program.trim(), "(2 (1 2 2 (4 2 (4 5 (4 11 ())))) (4 (1 18 (2 (3 7 (1 16 5 11) (1 18 5 (1 . 3))) 1) (1 . 2)) 1))");
+}
+
+#[test]
+fn test_ensure_dereferenceable_5() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (A B) (include *standard-cl-24*) (defun-inline F (A B) (assign X (if (@ B 1) (+ A B) (* A 3)) (* X 2))) (F A B))".to_string(),
+    ]);
+    assert_eq!(
+        program.trim(),
+        "(18 (2 (3 3 (1 16 2 5) (1 18 2 (1 . 3))) 1) (1 . 2))"
+    );
+}
+
+#[test]
+fn test_ensure_dereferenceable_6() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (A B) (include *standard-cl-24*) (defun-inline F (A B) (assign X (if (@ B 1) (+ A B) (* A 3)) (* X 2))) (F A (+ A 13)))".to_string(),
+    ]);
+    assert!(program.trim().contains("resembles an environment parent"));
+}
