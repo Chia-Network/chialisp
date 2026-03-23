@@ -749,10 +749,11 @@ impl RueConversion {
                     body: Some(body_hir),
                 })))
             }
-            BodyForm::Mod(_, _) => Err(rue_err(
-                e.loc(),
-                format!("embedded mod expression not yet supported: {}", e.to_sexp()),
-            )),
+            BodyForm::Mod(_, program) => {
+                let generated_code =
+                    compile_with_rue_codegen(self.opts.clone(), Arc::from(""), &program)?;
+                Ok(self.intern_sexp_hir(&generated_code))
+            }
             BodyForm::Lambda(data) => {
                 let new_args = skip_captures_for_lambda(data.args.clone());
                 let scope_id = self.db.alloc_scope(Scope::new(Some(scope)));
