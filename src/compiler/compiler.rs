@@ -141,9 +141,7 @@ pub fn compile_from_compileform(
     let p3 = context.post_desugar_optimization(opts.clone(), p2)?;
 
     if rue_cg(opts.clone()) {
-        if let Ok(rue_result) = compile_with_rue_codegen(opts.clone(), Arc::from(""), &p3) {
-            return Ok(rue_result);
-        }
+        return compile_with_rue_codegen(opts.clone(), Arc::from(""), &p3);
     }
 
     // generate code from AST, optionally with optimization

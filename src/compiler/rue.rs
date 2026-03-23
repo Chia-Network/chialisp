@@ -27,11 +27,12 @@ use crate::compiler::comptypes::{
     BindingPattern, BodyForm, CompileErr, CompileForm, CompilerOpts, DefconstData, DefunData,
     HelperForm, LetFormKind,
 };
+use crate::compiler::evaluate::is_i_atom;
 use crate::compiler::gensym::gensym;
 use crate::compiler::optimize::depgraph::{DepgraphOptions, FunctionDependencyGraph};
-use crate::compiler::sexp::{decode_string, printable, SExp};
+use crate::compiler::sexp::{decode_string, enlist, printable, SExp};
 use crate::compiler::srcloc::Srcloc;
-use crate::util::{toposort, Number};
+use crate::util::Number;
 
 fn rue_err(loc: Srcloc, msg: impl Into<String>) -> CompileErr {
     CompileErr(loc, format!("rue translation: {}", msg.into()))
@@ -221,6 +222,26 @@ fn match_prim(_opts: Rc<dyn CompilerOpts>, prim: &[u8]) -> Option<ClvmOp> {
     }
 
     None
+}
+
+fn body_cons(loc: Srcloc, left: Rc<BodyForm>, right: Rc<BodyForm>) -> BodyForm {
+    BodyForm::Call(
+        loc.clone(),
+        vec![
+            Rc::new(BodyForm::Value(SExp::Atom(loc, vec![4]))),
+            left,
+            right,
+        ],
+        None,
+    )
+}
+
+fn body_list(loc: Srcloc, forms: &[Rc<BodyForm>]) -> BodyForm {
+    let mut result = BodyForm::Quoted(SExp::Nil(loc.clone()));
+    for b in forms.iter().rev() {
+        result = body_cons(loc.clone(), b.clone(), Rc::new(result));
+    }
+    result
 }
 
 #[allow(dead_code)]
@@ -415,6 +436,53 @@ impl RueConversion {
         vec![packed_args]
     }
 
+    fn unwrap_com_expression(&mut self, form: &BodyForm) -> Option<Rc<BodyForm>> {
+        if let BodyForm::Call(_, forms, _) = form {
+            if forms.len() != 2 {
+                return None;
+            }
+
+            if let BodyForm::Value(SExp::Atom(_, name)) = &*forms[1] {
+                if name == b"com" {
+                    return Some(forms[2].clone());
+                }
+            }
+        }
+
+        None
+    }
+
+    fn is_translated_if(
+        &mut self,
+        scope: ScopeId,
+        forms: &[Rc<BodyForm>],
+    ) -> Result<Option<HirId>, CompileErr> {
+        if forms.len() != 4 {
+            return Ok(None);
+        }
+
+        if !is_i_atom(forms[0].to_sexp()) {
+            return Ok(None);
+        }
+
+        let (Some(expa), Some(expb)) = (
+            self.unwrap_com_expression(&forms[2]),
+            self.unwrap_com_expression(&forms[3]),
+        ) else {
+            return Ok(None);
+        };
+
+        let condition_hir = self.intern_expr_hir(scope, &forms[1])?;
+        let then_hir = self.intern_expr_hir(scope, &expa)?;
+        let else_hir = self.intern_expr_hir(scope, &expb)?;
+        Ok(Some(self.db.alloc_hir(Hir::If(
+            condition_hir,
+            then_hir,
+            else_hir,
+            false,
+        ))))
+    }
+
     fn intern_expr_hir(&mut self, scope: ScopeId, e: &BodyForm) -> Result<HirId, CompileErr> {
         match e {
             BodyForm::Quoted(s) => Ok(self.intern_sexp_hir(s)),
@@ -448,6 +516,10 @@ impl RueConversion {
                     return Err(rue_err(e.loc(), "empty call expression"));
                 }
 
+                if let Some(if_result) = self.is_translated_if(scope, forms)? {
+                    return Ok(if_result);
+                }
+
                 let op_atom = if let BodyForm::Value(SExp::Atom(_, atom)) = &*forms[0] {
                     Some(atom.as_slice())
                 } else {
@@ -466,6 +538,55 @@ impl RueConversion {
                         let left = self.intern_expr_hir(scope, &forms[1])?;
                         let right = self.intern_expr_hir(scope, &forms[2])?;
                         return Ok(self.db.alloc_hir(Hir::Pair(left, right)));
+                    }
+                    if op_name == b"com" && forms.len() == 2 {
+                        // com is special.  It wraps code which will be callable.
+                        let com_symbol_name = decode_string(&gensym(b"_$_com_".to_vec()));
+                        let new_scope = self.db.alloc_scope(Scope::new(Some(scope)));
+                        let value_hir = self.intern_expr_hir(new_scope, &forms[1])?;
+                        let com_symbol = self.db.alloc_symbol(Symbol::Function(FunctionSymbol {
+                            name: Some(Name::new(com_symbol_name.clone(), None)),
+                            ty: self.any_type_id,
+                            scope,
+                            vars: Default::default(),
+                            parameters: IndexMap::default(),
+                            nil_terminated: true,
+                            return_type: self.any_type_id,
+                            body: value_hir,
+                            kind: FunctionKind::BinaryTree,
+                        }));
+                        self.db.scope_mut(scope).insert_symbol(
+                            com_symbol_name.clone(),
+                            com_symbol,
+                            false,
+                        );
+                        return Ok(self.db.alloc_hir(Hir::Reference(com_symbol)));
+                    }
+                    if op_name == b"softfork" && forms.len() == 5 {
+                        // Softfork is special here since it isn't an opcode rue lets us produce
+                        // directly.
+                        let softfork_args = Rc::new(body_list(loc.clone(), &forms[1..]));
+                        return self.intern_expr_hir(
+                            scope,
+                            &BodyForm::Call(
+                                loc.clone(),
+                                vec![
+                                    Rc::new(BodyForm::Value(SExp::Atom(loc.clone(), vec![2]))),
+                                    Rc::new(BodyForm::Quoted(enlist(
+                                        loc.clone(),
+                                        &[
+                                            Rc::new(SExp::Atom(loc.clone(), vec![36])),
+                                            Rc::new(SExp::Atom(loc.clone(), vec![2])),
+                                            Rc::new(SExp::Atom(loc.clone(), vec![5])),
+                                            Rc::new(SExp::Atom(loc.clone(), vec![11])),
+                                            Rc::new(SExp::Atom(loc.clone(), vec![23])),
+                                        ],
+                                    ))),
+                                    softfork_args,
+                                ],
+                                None,
+                            ),
+                        );
                     }
                     if let Some(prim) = match_prim(self.opts.clone(), op_name) {
                         return self.primcall(scope, prim, loc, forms);
@@ -845,15 +966,9 @@ impl RueConversion {
         }
     }
 
-    fn predeclare_constant(
-        &mut self,
-        main_scope: ScopeId,
-        constant_name: &str,
-        data: &DefconstData,
-    ) -> SymbolId {
+    fn predeclare_constant(&mut self, constant_name: &str, data: &DefconstData) -> SymbolId {
         let unresolved_body = self.db.alloc_hir(Hir::Unresolved);
-        let constant_sym = self
-            .db
+        self.db
             .alloc_symbol(Symbol::Binding(rue_hir::BindingSymbol {
                 name: Some(Name::new(
                     constant_name.to_string(),
@@ -861,19 +976,7 @@ impl RueConversion {
                 )),
                 value: Value::new(unresolved_body, self.any_type_id),
                 inline: false,
-            }));
-        self.db
-            .scope_mut(main_scope)
-            .insert_symbol(constant_name.to_string(), constant_sym, false);
-        self.predeclared_helpers.insert(
-            data.name.clone(),
-            PredeclaredHelperSymbol {
-                symbol_id: constant_sym,
-                scope_id: main_scope,
-                kind: PredeclaredSymbolKind::Constant,
-            },
-        );
-        constant_sym
+            }))
     }
 
     fn predeclare_helper_symbols(
@@ -899,7 +1002,20 @@ impl RueConversion {
                     .insert(data.name.clone(), function_predecl);
             } else if let HelperForm::Defconstant(data) = helper {
                 let constant_name = decode_string(helper.name());
-                let _constant_sym = self.predeclare_constant(main_scope, &constant_name, data);
+                let constant_sym = self.predeclare_constant(&constant_name, data);
+                self.db.scope_mut(main_scope).insert_symbol(
+                    constant_name.to_string(),
+                    constant_sym,
+                    false,
+                );
+                self.predeclared_helpers.insert(
+                    data.name.clone(),
+                    PredeclaredHelperSymbol {
+                        symbol_id: constant_sym,
+                        scope_id: main_scope,
+                        kind: PredeclaredSymbolKind::Constant,
+                    },
+                );
             }
         }
         Ok(())
@@ -999,75 +1115,71 @@ impl RueConversion {
         Ok(())
     }
 
-    fn create_constant(
+    fn finalize_constant_value(
         &mut self,
+        main_scope: ScopeId,
         data: &DefconstData,
-        program: &CompileForm,
-        eval_helpers: Vec<HelperForm>,
-    ) -> Result<Rc<SExp>, CompileErr> {
-        let Some(predecl) = self.predeclared_helpers.get(&data.name).cloned() else {
-            return Err(rue_err(
+        value: &SExp,
+    ) -> Result<(), CompileErr> {
+        // Intern in the rue data.
+        let value_hir = self.intern_sexp_hir(value);
+        let accessor_name = decode_string(&data.name);
+        let constant_name = format!("_$_{}", accessor_name);
+        let new_constant_id = self
+            .db
+            .alloc_symbol(Symbol::Binding(rue_hir::BindingSymbol {
+                name: Some(Name::new(
+                    constant_name.clone(),
+                    Some(self.to_rue_srcloc(data.nl.clone())),
+                )),
+                value: Value::new(value_hir, self.any_type_id),
+                inline: false,
+            }));
+        self.db
+            .scope_mut(main_scope)
+            .insert_symbol(constant_name.clone(), new_constant_id, false);
+        let Some(predecl) = self.predeclared_helpers.get(&data.name) else {
+            return Err(CompileErr(
                 data.loc.clone(),
-                format!(
-                    "missing predeclared symbol for constant `{}`",
-                    decode_string(&data.name)
-                ),
+                format!("Internal error: rue predeclared constant not available: {constant_name}"),
             ));
         };
-        let constant_compileform = CompileForm {
-            helpers: eval_helpers,
-            exp: data.body.clone(),
-            ..program.clone()
-        };
-        let compiled =
-            compile_with_rue_codegen(self.opts.clone(), self.text.clone(), &constant_compileform)?;
-        let runner: Rc<dyn TRunProgram> = Rc::new(DefaultProgramRunner::new());
-        let mut allocator = Allocator::new();
-        let compiled_program = convert_to_clvm_rs(&mut allocator, Rc::new(compiled.clone()))?;
-        let compiled_args =
-            convert_to_clvm_rs(&mut allocator, Rc::new(SExp::Nil(data.loc.clone())))?;
-        let reduced = runner
-            .run_program(&mut allocator, compiled_program, compiled_args, None)
-            .map_err(|e| {
-                CompileErr(
-                    data.loc.clone(),
-                    format!(
-                        "error evaluating constant `{}`: {e}",
-                        decode_string(&data.name)
-                    ),
-                )
-            })?;
-        let value = convert_from_clvm_rs(&mut allocator, data.loc.clone(), reduced.1)?;
-        let value_hir = self.intern_sexp_hir(&value);
-        let constant_name = decode_string(&data.name);
-        *self.db.symbol_mut(predecl.symbol_id) = Symbol::Binding(rue_hir::BindingSymbol {
-            name: Some(Name::new(
-                constant_name,
-                Some(self.to_rue_srcloc(data.nl.clone())),
-            )),
-            value: Value::new(value_hir, self.any_type_id),
-            inline: false,
+        let body = self.db.alloc_hir(Hir::Reference(new_constant_id));
+        *self.db.symbol_mut(predecl.symbol_id) = Symbol::Function(FunctionSymbol {
+            name: Some(Name::new(accessor_name.to_string(), None)),
+            ty: self.any_type_id,
+            scope: predecl.scope_id,
+            vars: Default::default(),
+            parameters: IndexMap::default(),
+            nil_terminated: true,
+            return_type: self.any_type_id,
+            body,
+            kind: FunctionKind::Inline,
         });
-        Ok(value)
+        Ok(())
     }
 
-    fn constant_dependency_order(
-        &self,
+    fn resolve_constants(
+        &mut self,
+        main_scope: ScopeId,
         program: &CompileForm,
-    ) -> Result<Vec<DefconstData>, CompileErr> {
-        let constants: Vec<DefconstData> = program
-            .helpers
-            .iter()
-            .filter_map(|helper| {
-                if let HelperForm::Defconstant(defc) = helper {
-                    Some(defc.clone())
-                } else {
-                    None
+    ) -> Result<(), CompileErr> {
+        let mut avail_constants: HashSet<Vec<u8>> = HashSet::new();
+
+        for h in program.helpers.iter() {
+            if let HelperForm::Defconstant(data) = h {
+                if let BodyForm::Value(v) = &*data.body {
+                    if matches!(v, SExp::Integer(_, _) | SExp::QuotedString(_, _, _)) {
+                        self.finalize_constant_value(main_scope, data, v)?;
+                        continue;
+                    }
+                } else if let BodyForm::Quoted(v) = &*data.body {
+                    self.finalize_constant_value(main_scope, data, v)?;
+                    continue;
                 }
-            })
-            .collect();
-        if constants.is_empty() {
-            return Ok(Vec::new());
+
+                avail_constants.insert(h.name().to_vec());
+            }
         }
 
         let depgraph = FunctionDependencyGraph::new_with_options(
@@ -1077,76 +1189,89 @@ impl RueConversion {
             },
         );
 
-        let deadlock = CompileErr(
-            program.loc.clone(),
-            "got stuck untangling defconst dependencies".to_string(),
-        );
-        let sorted = toposort(
-            &constants,
-            deadlock,
-            |possible, constant| {
-                let mut dependencies = HashSet::new();
-                depgraph.get_full_depends_on(&mut dependencies, &constant.name);
-                dependencies.remove(&constant.name);
-                Ok(dependencies
-                    .intersection(possible)
-                    .cloned()
-                    .collect::<HashSet<Vec<u8>>>())
-            },
-            |constant| {
-                let mut provided = HashSet::new();
-                provided.insert(constant.name.clone());
-                provided
-            },
-        )?;
+        // Process delayed constants until we either can't advance or
+        // they're all done.
+        while !avail_constants.is_empty() {
+            let mut allocator = Allocator::new();
+            // Find a constant that depends on no other constants.
+            let mut replacement = None;
 
-        let mut ordered = Vec::new();
-        for item in sorted {
-            ordered.push(constants[item.index].clone());
-        }
-        Ok(ordered)
-    }
-
-    fn has_recursive_helper_graph(&self, program: &CompileForm) -> bool {
-        let depgraph = FunctionDependencyGraph::new(program);
-        program.helpers.iter().any(|helper| {
-            if let HelperForm::Defun(_, data) = helper {
-                let mut full_depends_on = HashSet::new();
-                depgraph.get_full_depends_on(&mut full_depends_on, &data.name);
-                full_depends_on.contains(&data.name)
-            } else {
-                false
-            }
-        })
-    }
-
-    fn helpers_for_constant_eval(
-        &self,
-        program: &CompileForm,
-        constant_name: &[u8],
-    ) -> Vec<HelperForm> {
-        program
-            .helpers
-            .iter()
-            .filter_map(|helper| match helper {
-                HelperForm::Defconstant(defc) => {
-                    if defc.name == constant_name {
-                        None
-                    } else {
-                        Some(helper.clone())
+            for helper in program.helpers.iter() {
+                if let HelperForm::Defconstant(data) = helper {
+                    if !avail_constants.contains(&data.name) {
+                        continue;
                     }
+
+                    let mut depends_on: HashSet<Vec<u8>> = HashSet::default();
+                    depgraph.get_full_depends_on(&mut depends_on, &data.name);
+                    let still_depends_on: HashSet<&Vec<u8>> =
+                        depends_on.intersection(&avail_constants).collect();
+                    if !still_depends_on.is_empty() {
+                        continue;
+                    }
+
+                    // We have a constant which depends on nothing else that we haven't generated
+                    // yet.
+                    //
+                    // Produce its program.
+                    replacement = Some((data.clone(), depends_on));
+                    break;
                 }
-                _ => Some(helper.clone()),
-            })
-            .collect()
-    }
+            }
 
-    fn resolve_constants(&mut self, program: &CompileForm) -> Result<(), CompileErr> {
-        let constant_order = self.constant_dependency_order(program)?;
+            let Some((data, depends_on)) = replacement else {
+                let constants_remaining: Vec<String> =
+                    avail_constants.iter().map(|s| decode_string(s)).collect();
+                return Err(CompileErr(
+                    program.loc(),
+                    format!("Deadlock generating constant with remaining {constants_remaining:?}"),
+                ));
+            };
 
-        for constant in constant_order.iter() {
-            let eval_helpers = self.helpers_for_constant_eval(program, &constant.name);
-            let _value = self.create_constant(constant, program, eval_helpers)?;
+            let program_with_constants = CompileForm {
+                helpers: program
+                    .helpers
+                    .iter()
+                    .filter(|h| depends_on.contains(h.name()))
+                    .cloned()
+                    .collect(),
+                args: Rc::new(SExp::Nil(data.loc.clone())),
+                exp: data.body.clone(),
+                ..program.clone()
+            };
+            let compiled_program = compile_with_rue_codegen(
+                self.opts.clone(),
+                Arc::from(""),
+                &program_with_constants,
+            )?;
+            let runner: Rc<dyn TRunProgram> = Rc::new(DefaultProgramRunner::new());
+            let node =
+                convert_to_clvm_rs(&mut allocator, Rc::new(compiled_program)).map_err(|e| {
+                    CompileErr(
+                        data.body.loc(),
+                        format!("runtime error generating constant value: {:?}", e),
+                    )
+                })?;
+            let nil = allocator.nil();
+            let node_result = runner
+                .run_program(&mut allocator, node, nil, None)
+                .map_err(|e| {
+                    CompileErr(
+                        data.body.loc(),
+                        format!("runtime error generating constant value: {:?}", e),
+                    )
+                })?;
+            let clvm_value =
+                convert_from_clvm_rs(&mut allocator, program.loc.clone(), node_result.1).map_err(
+                    |e| {
+                        CompileErr(
+                            data.body.loc(),
+                            format!("runtime error generating constant value: {:?}", e),
+                        )
+                    },
+                )?;
+            self.finalize_constant_value(main_scope, &data, &clvm_value)?;
+            avail_constants.remove(&data.name);
         }
 
         Ok(())
@@ -1180,7 +1305,7 @@ impl RueConversion {
     fn intern_hir(&mut self, program: &CompileForm) -> Result<SymbolId, CompileErr> {
         let main_scope_id: ScopeId = self.db.alloc_scope(Scope::new(None));
         self.predeclare_helper_symbols(main_scope_id, &program.helpers)?;
-        self.resolve_constants(program)?;
+        self.resolve_constants(main_scope_id, program)?;
         for h in program.helpers.iter() {
             // Macros and other forms were handled during preprocessing and other
             // passes before code generation.
@@ -1226,13 +1351,6 @@ impl RueConversion {
         opts: Rc<dyn CompilerOpts>,
         program: &CompileForm,
     ) -> Result<SExp, CompileErr> {
-        if self.has_recursive_helper_graph(program) {
-            return Err(rue_err(
-                program.loc.clone(),
-                "recursive helper graphs are not yet supported by rue pre-desugar translation",
-            ));
-        }
-
         let mut allocator = Allocator::new();
         let main_symbol = self.intern_hir(program)?;
         self.verify_no_unresolved_hir(main_symbol).map_err(|e| {
