@@ -568,8 +568,7 @@ fn test_at_capture_destructure_1_rue() {
         "run".to_string(),
         "(mod (A (@ Z (B C)) D) (include *standard-cl-rue1*) A)".to_string(),
     ]);
-    let result = do_basic_brun(&vec!["brun".to_string(), program, "(9 (1 . 2) 3)".to_string()]);
-    assert_eq!(result.trim(), "9");
+    assert_eq!(program.trim(), "2");
 }
 
 #[test]
@@ -578,8 +577,7 @@ fn test_at_capture_destructure_2_rue() {
         "run".to_string(),
         "(mod (A (@ Z (B C)) D) (include *standard-cl-rue1*) Z)".to_string(),
     ]);
-    let result = do_basic_brun(&vec!["brun".to_string(), program, "(9 (1 . 2) 3)".to_string()]);
-    assert_eq!(result.trim(), "(1 . 2)");
+    assert_eq!(program.trim(), "5");
 }
 
 #[test]
@@ -588,8 +586,7 @@ fn test_at_capture_destructure_3_rue() {
         "run".to_string(),
         "(mod (A (@ Z (B C)) D) (include *standard-cl-rue1*) B)".to_string(),
     ]);
-    let result = do_basic_brun(&vec!["brun".to_string(), program, "(9 (1 . 2) 3)".to_string()]);
-    assert_eq!(result.trim(), "1");
+    assert_eq!(program.trim(), "9");
 }
 
 #[test]
@@ -598,8 +595,7 @@ fn test_at_capture_destructure_4_rue() {
         "run".to_string(),
         "(mod (A (@ Z (B C)) D) (include *standard-cl-rue1*) C)".to_string(),
     ]);
-    let result = do_basic_brun(&vec!["brun".to_string(), program, "(9 (1 . 2) 3)".to_string()]);
-    assert_eq!(result.trim(), "2");
+    assert_eq!(program.trim(), "21");
 }
 
 #[test]
@@ -608,8 +604,7 @@ fn test_at_capture_destructure_5_rue() {
         "run".to_string(),
         "(mod (A (@ Z (B C)) D) (include *standard-cl-rue1*) D)".to_string(),
     ]);
-    let result = do_basic_brun(&vec!["brun".to_string(), program, "(9 (1 . 2) 3)".to_string()]);
-    assert_eq!(result.trim(), "3");
+    assert_eq!(program.trim(), "11");
 }
 
 #[test]
