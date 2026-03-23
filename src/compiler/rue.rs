@@ -104,6 +104,30 @@ fn improper_list(env: Rc<SExp>) -> Option<(Vec<SExp>, Rc<SExp>)> {
     }
 }
 
+fn compute_parent_of_path(mut path: Number, mut steps: Number) -> Number {
+    let mut bit = bi_one();
+    let two = 2_u32.to_bigint().unwrap();
+
+    while bit <= path {
+        bit *= two.clone();
+    }
+
+    while steps > bi_zero() {
+        steps -= bi_one();
+        bit /= two.clone();
+        if path.clone() & bit.clone() != bi_zero() {
+            path ^= bit.clone();
+        }
+        path |= bit.clone() / two.clone();
+    }
+
+    if path == bi_zero() {
+        bi_one()
+    } else {
+        path
+    }
+}
+
 pub fn rue_cg(opts: Rc<dyn CompilerOpts>) -> bool {
     opts.dialect().rue_codegen && opts.stdenv() && !opts.filename().starts_with("*macros*")
 }
@@ -280,6 +304,7 @@ struct RueConversion {
     text: Arc<str>,
     any_type_id: TypeId,
     predeclared_helpers: PredeclaredHelperSymbols,
+    defun_argument_paths: HashMap<SymbolId, Number>,
 }
 
 impl RueConversion {
@@ -296,6 +321,7 @@ impl RueConversion {
             text,
             any_type_id,
             predeclared_helpers: PredeclaredHelperSymbols::default(),
+            defun_argument_paths: HashMap::new(),
         }
     }
 
@@ -487,6 +513,31 @@ impl RueConversion {
                     None
                 };
                 if let Some(op_name) = op_atom {
+                    if op_name == b"@" && forms.len() == 3 {
+                        let maybe_defun_parent_path = match (&*forms[1], &*forms[2]) {
+                            (
+                                BodyForm::Value(SExp::Atom(_, binding_name)),
+                                BodyForm::Value(SExp::Integer(_, steps)),
+                            )
+                            | (
+                                BodyForm::Value(SExp::Atom(_, binding_name)),
+                                BodyForm::Quoted(SExp::Integer(_, steps)),
+                            ) => {
+                                let symbol_name = decode_string(binding_name);
+                                let binding_symbol =
+                                    lookup_symbol_in_scope(&self.db, scope, &symbol_name);
+                                binding_symbol.and_then(|sym| {
+                                    self.defun_argument_paths
+                                        .get(&sym)
+                                        .map(|path| compute_parent_of_path(path.clone(), steps.clone()))
+                                })
+                            }
+                            _ => None,
+                        };
+                        if let Some(parent_path) = maybe_defun_parent_path {
+                            return Ok(self.db.alloc_hir(Hir::Int(parent_path)));
+                        }
+                    }
                     if op_name == b"f" && forms.len() == 2 {
                         let inner = self.intern_expr_hir(scope, &forms[1])?;
                         return Ok(self.db.alloc_hir(Hir::Unary(UnaryOp::First, inner)));
@@ -884,6 +935,15 @@ impl RueConversion {
         }
     }
 
+    fn track_defun_argument_paths(&mut self, scope_id: ScopeId, args_spec: Rc<SExp>) {
+        for (path, name) in param_names_and_paths(args_spec) {
+            let symbol_name = decode_string(&name);
+            if let Some(symbol_id) = lookup_symbol_in_scope(&self.db, scope_id, &symbol_name) {
+                self.defun_argument_paths.insert(symbol_id, path);
+            }
+        }
+    }
+
     fn install_env_alias_helpers(&mut self, scope_id: ScopeId, env_symbol: SymbolId) {
         // In classic codegen, @*env* is used as the current environment path (1),
         // and (r @*env*) addresses the user argument subtree. Model that directly.
@@ -1053,6 +1113,7 @@ impl RueConversion {
                         &param_name,
                         Rc::new(param_sexp.clone()),
                         predecl.scope_id,
+                        false,
                     );
                 }
             };
@@ -1081,6 +1142,7 @@ impl RueConversion {
                     "_$_args__",
                     data.args.clone(),
                     predecl.scope_id,
+                    false,
                 );
             }
             _ => {
@@ -1093,6 +1155,7 @@ impl RueConversion {
                     "_$_args__",
                     data.args.clone(),
                     predecl.scope_id,
+                    !inline,
                 );
             }
         }
@@ -1278,6 +1341,7 @@ impl RueConversion {
         param_name: &str,
         args: Rc<SExp>,
         program_scope: ScopeId,
+        track_for_defun_parent_lookup: bool,
     ) {
         // Program arguments are tree-shaped in chialisp, so model them the same way as
         // non-inline defun arguments: one binary-tree parameter and atom accessors.
@@ -1295,6 +1359,9 @@ impl RueConversion {
         self.install_env_alias_helpers(program_scope, main_args_symbol);
         // Construct inline helper functions for each printable atom in the argument tree.
         self.install_tree_arg_accessors(program_scope, args.clone(), main_args_symbol);
+        if track_for_defun_parent_lookup {
+            self.track_defun_argument_paths(program_scope, args);
+        }
     }
 
     fn intern_hir(&mut self, program: &CompileForm) -> Result<SymbolId, CompileErr> {
@@ -1316,6 +1383,7 @@ impl RueConversion {
             "_$_args__",
             program.args.clone(),
             program_scope,
+            false,
         );
 
         let main_body = self.intern_expr_hir(program_scope, &program.exp)?;
