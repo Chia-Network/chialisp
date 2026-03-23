@@ -21,8 +21,8 @@ use rue_types::{Type, TypeId};
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
 use crate::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
 use crate::compiler::clvm::{convert_from_clvm_rs, convert_to_clvm_rs};
-use crate::compiler::compiler::is_at_capture;
 use crate::compiler::codegen::toposort_assign_bindings;
+use crate::compiler::compiler::is_at_capture;
 use crate::compiler::comptypes::{
     BindingPattern, BodyForm, CompileErr, CompileForm, CompilerOpts, DefconstData, DefunData,
     HelperForm, LetFormKind,
