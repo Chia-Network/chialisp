@@ -27,7 +27,6 @@ use crate::compiler::comptypes::{
     BindingPattern, BodyForm, CompileErr, CompileForm, CompilerOpts, DefconstData, DefunData,
     HelperForm, LetFormKind,
 };
-use crate::compiler::evaluate::is_i_atom;
 use crate::compiler::gensym::gensym;
 use crate::compiler::optimize::depgraph::{DepgraphOptions, FunctionDependencyGraph};
 use crate::compiler::sexp::{decode_string, enlist, printable, SExp};
@@ -434,22 +433,6 @@ impl RueConversion {
             packed_args = self.db.alloc_hir(Hir::Pair(*arg, packed_args));
         }
         vec![packed_args]
-    }
-
-    fn unwrap_com_expression(&mut self, form: &BodyForm) -> Option<Rc<BodyForm>> {
-        if let BodyForm::Call(_, forms, _) = form {
-            if forms.len() != 2 {
-                return None;
-            }
-
-            if let BodyForm::Value(SExp::Atom(_, name)) = &*forms[0] {
-                if name == b"com" {
-                    return Some(forms[1].clone());
-                }
-            }
-        }
-
-        None
     }
 
     fn intern_expr_hir(&mut self, scope: ScopeId, e: &BodyForm) -> Result<HirId, CompileErr> {
