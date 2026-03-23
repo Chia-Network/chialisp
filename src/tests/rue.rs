@@ -678,7 +678,12 @@ fn test_rue_no_repeat_large_constants() {
         "run".to_string(),
         "(mod (N) (include *standard-cl-rue1*) (defconst K (sha256 17)) (* K K K N))".to_string(),
     ]);
-    let constant_to_count = b"33648946896879551350753991616036334622602839139780100591470253765180571691018";
-    let occurrences = program.as_bytes().windows(constant_to_count.len()).filter(|&w| w == constant_to_count).count();
+    let constant_to_count =
+        b"33648946896879551350753991616036334622602839139780100591470253765180571691018";
+    let occurrences = program
+        .as_bytes()
+        .windows(constant_to_count.len())
+        .filter(|&w| w == constant_to_count)
+        .count();
     assert_eq!(occurrences, 1);
 }
