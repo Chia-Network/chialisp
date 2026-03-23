@@ -247,6 +247,7 @@ impl PropertyTestState<FuzzT> for TrickyAssignExpectation {
                 stepping: Some(23),
                 strict: true,
                 int_fix: false,
+                rue_codegen: false,
             })
             .set_optimize(true),
         )

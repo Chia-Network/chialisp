@@ -49,6 +49,7 @@ fn run_string_maybe_opt(
             stepping: Some(21),
             strict: true,
             int_fix: false,
+            rue_codegen: false,
         });
     }
 
@@ -2403,6 +2404,7 @@ fn test_handle_explicit_empty_atom() {
         stepping: Some(21),
         strict: true,
         int_fix: false,
+        rue_codegen: false,
     });
 
     let atom = |s: &str| Rc::new(SExp::Atom(srcloc.clone(), s.as_bytes().to_vec()));

@@ -105,9 +105,7 @@ fn improper_list(env: Rc<SExp>) -> Option<(Vec<SExp>, Rc<SExp>)> {
 }
 
 pub fn rue_cg(opts: Rc<dyn CompilerOpts>) -> bool {
-    matches!(opts.dialect().stepping, Some(1000000))
-        && opts.stdenv()
-        && !opts.filename().starts_with("*macros*")
+    opts.dialect().rue_codegen && opts.stdenv() && !opts.filename().starts_with("*macros*")
 }
 
 const STATIC_LIR_PRIMS: [ClvmOp; 48] = [

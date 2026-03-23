@@ -11,7 +11,7 @@ use crate::compiler::sexp::decode_string;
 /// BASE_STEPPING, all of which should use similar optimizer objects.
 pub const OPT_STRATEGY_BASE_STEPPING: i32 = 23;
 /// The maximum stepping of the language so far.
-pub const MAX_STEPPING: i32 = 1000000;
+pub const MAX_STEPPING: i32 = 25;
 
 /// Specifying how the language is spoken.
 #[derive(Clone, Debug, Default)]
@@ -19,6 +19,7 @@ pub struct AcceptedDialect {
     pub stepping: Option<i32>,
     pub strict: bool,
     pub int_fix: bool,
+    pub rue_codegen: bool,
 }
 
 /// A package containing the content we should insert when a dialect include is
@@ -53,6 +54,7 @@ lazy_static! {
                         stepping: Some(21),
                         strict: true,
                         int_fix: false,
+                        rue_codegen: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 22)
@@ -67,6 +69,7 @@ lazy_static! {
                         stepping: Some(22),
                         strict: false,
                         int_fix: false,
+                        rue_codegen: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 22)
@@ -81,6 +84,7 @@ lazy_static! {
                         stepping: Some(23),
                         strict: true,
                         int_fix: false,
+                        rue_codegen: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 23)
@@ -95,6 +99,7 @@ lazy_static! {
                         stepping: Some(23),
                         strict: true,
                         int_fix: true,
+                        rue_codegen: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 23)
@@ -109,6 +114,7 @@ lazy_static! {
                         stepping: Some(24),
                         strict: true,
                         int_fix: true,
+                        rue_codegen: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 24)
@@ -123,6 +129,7 @@ lazy_static! {
                         stepping: Some(25),
                         strict: true,
                         int_fix: true,
+                        rue_codegen: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 25)
@@ -134,12 +141,13 @@ lazy_static! {
                 "*standard-cl-rue1*",
                 DialectDescription {
                     accepted: AcceptedDialect {
-                        stepping: Some(1000000),
+                        stepping: Some(25),
                         strict: true,
                         int_fix: true,
+                        rue_codegen: true,
                     },
                     content: indoc! {"(
-                    (defconstant *chialisp-version* 1000000)
+                    (defconstant *chialisp-version* 25)
                 )"}
                     .to_string(),
                 },
