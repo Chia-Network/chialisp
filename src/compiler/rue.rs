@@ -243,6 +243,21 @@ fn body_list(loc: Srcloc, forms: &[Rc<BodyForm>]) -> BodyForm {
     result
 }
 
+fn skip_captures_for_lambda(args: Rc<SExp>) -> Rc<SExp> {
+    if let SExp::Cons(l, a, b) = &*args {
+        if let SExp::Atom(_la, name) = &**a {
+            if name == b"&" {
+                return b.clone();
+            }
+        }
+        let new_a = skip_captures_for_lambda(a.clone());
+        let new_b = skip_captures_for_lambda(b.clone());
+        Rc::new(SExp::Cons(l.clone(), new_a, new_b))
+    } else {
+        args
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Clone)]
 enum PredeclaredSymbolKind {
@@ -738,10 +753,40 @@ impl RueConversion {
                 e.loc(),
                 format!("embedded mod expression not yet supported: {}", e.to_sexp()),
             )),
-            BodyForm::Lambda(_) => Err(rue_err(
-                e.loc(),
-                format!("lambda expression not yet supported: {}", e.to_sexp()),
-            )),
+            BodyForm::Lambda(data) => {
+                let new_args = skip_captures_for_lambda(data.args.clone());
+                let scope_id = self.db.alloc_scope(Scope::new(Some(scope)));
+                let name = gensym(b"_$_lambda".to_vec());
+                let unresolved_body = self.db.alloc_hir(Hir::Unresolved);
+                let symbol_id = self.db.alloc_symbol(Symbol::Function(FunctionSymbol {
+                    name: Some(Name::new(decode_string(&name), None)),
+                    ty: self.any_type_id,
+                    scope,
+                    vars: Default::default(),
+                    parameters: IndexMap::default(),
+                    nil_terminated: true,
+                    return_type: self.any_type_id,
+                    body: unresolved_body,
+                    kind: FunctionKind::BinaryTree
+                }));
+                let description = PredeclaredHelperSymbol {
+                    symbol_id,
+                    scope_id,
+                    kind: PredeclaredSymbolKind::Defun,
+                };
+                self.predeclared_helpers.insert(name.to_vec(), description);
+                self.create_defun(false, &DefunData {
+                    loc: data.loc.clone(),
+                    name: name.clone(),
+                    args: new_args.clone(),
+                    orig_args: new_args,
+                    kw: data.kw.clone(),
+                    nl: data.loc.clone(),
+                    synthetic: None,
+                    body: data.body.clone()
+                })?;
+                Ok(self.db.alloc_hir(Hir::Reference(symbol_id)))
+            }
         }
     }
 

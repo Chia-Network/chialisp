@@ -140,10 +140,6 @@ pub fn compile_from_compileform(
 ) -> Result<SExp, CompileErr> {
     let p3 = context.post_desugar_optimization(opts.clone(), p2)?;
 
-    if rue_cg(opts.clone()) {
-        return compile_with_rue_codegen(opts.clone(), Arc::from(""), &p3);
-    }
-
     // generate code from AST, optionally with optimization
     let generated = codegen(context, opts.clone(), &p3)?;
 
@@ -164,9 +160,7 @@ pub fn compile_pre_forms(
     if rue_cg(opts.clone()) {
         // Translate to Rue HIR before Chialisp desugaring.
         // If translation fails, fall back to classic codegen for compatibility.
-        if let Ok(rue_result) = compile_with_rue_codegen(opts.clone(), Arc::from(""), &p1) {
-            return Ok(rue_result);
-        }
+        return compile_with_rue_codegen(opts.clone(), Arc::from(""), &p1);
     }
 
     let p2 = do_desugar(&p1)?;

@@ -15,7 +15,6 @@ use crate::compiler::prims;
 use crate::compiler::sexp::SExp;
 use crate::compiler::srcloc::Srcloc;
 
-/*
 pub struct ClvmHamt {
     runner: Rc<dyn TRunProgram>,
     prim_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>,
@@ -190,4 +189,3 @@ fn test_hamt_update_and_retrieve() {
         assert_eq!(hamt.get(i), test_array[i * 2]);
     }
 }
-*/
