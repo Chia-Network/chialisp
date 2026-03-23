@@ -751,7 +751,7 @@ impl RueConversion {
             }
             BodyForm::Mod(_, program) => {
                 let generated_code =
-                    compile_with_rue_codegen(self.opts.clone(), Arc::from(""), &program)?;
+                    compile_with_rue_codegen(self.opts.clone(), Arc::from(""), program)?;
                 Ok(self.intern_sexp_hir(&generated_code))
             }
             BodyForm::Lambda(data) => {
