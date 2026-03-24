@@ -59,6 +59,7 @@ pub struct CompilerOperatorsInternal {
     compiler_opts: RefCell<Option<Rc<dyn CompilerOpts>>>,
     // The version of the operators selected by the user.  version 1 includes bls.
     operators_version: RefCell<Option<usize>>,
+    language_flags: u32,
 }
 
 /// Given a list of search paths, find a full path to a file whose partial name
@@ -70,6 +71,9 @@ pub fn full_path_for_filename(
     filename: &str,
     search_paths: &[String],
 ) -> Result<String, EvalErr> {
+    if filename.starts_with("*") {
+        return Ok(filename.to_string());
+    };
     for path in search_paths.iter() {
         let mut path_buf = PathBuf::new();
         path_buf.push(path);
@@ -106,12 +110,18 @@ pub struct CompilerOperators {
 // down a reference became very hairy.  The downside is that a few objects had become fixed in
 // an Rc cycle.  The drop trait below corrects that.
 impl CompilerOperators {
-    pub fn new(source_file: &str, search_paths: Vec<String>, symbols_extra_info: bool) -> Self {
+    pub fn new(
+        source_file: &str,
+        search_paths: Vec<String>,
+        symbols_extra_info: bool,
+        language_flags: u32,
+    ) -> Self {
         CompilerOperators {
             parent: Rc::new(CompilerOperatorsInternal::new(
                 source_file,
                 search_paths,
                 symbols_extra_info,
+                language_flags,
             )),
         }
     }
@@ -124,7 +134,12 @@ impl Drop for CompilerOperators {
 }
 
 impl CompilerOperatorsInternal {
-    pub fn new(source_file: &str, search_paths: Vec<String>, symbols_extra_info: bool) -> Self {
+    pub fn new(
+        source_file: &str,
+        search_paths: Vec<String>,
+        symbols_extra_info: bool,
+        language_flags: u32,
+    ) -> Self {
         let base_runner = Rc::new(DefaultProgramRunner::new());
         CompilerOperatorsInternal {
             source_file: source_file.to_owned(),
@@ -135,6 +150,7 @@ impl CompilerOperatorsInternal {
             opt_memo: RefCell::new(HashMap::new()),
             compiler_opts: RefCell::new(None),
             operators_version: RefCell::new(None),
+            language_flags,
         }
     }
 
@@ -195,7 +211,7 @@ impl CompilerOperatorsInternal {
         // Given a string containing the data in the file to parse, parse it or
         // return EvalErr.
         let parse_file_content = |allocator: &mut Allocator, content: &String| {
-            read_ir(content)
+            read_ir(content, self.language_flags)
                 .map_err(|e| EvalErr::InternalError(NodePtr::NIL, e.to_string()))
                 .and_then(|ir| {
                     assemble_from_ir(allocator, Rc::new(ir)).map(|ir_sexp| Reduction(1, ir_sexp))
@@ -215,6 +231,10 @@ impl CompilerOperatorsInternal {
                         {
                             return parse_file_content(allocator, &decode_string(&content));
                         }
+                    }
+
+                    if filename == "*bitconst*" {
+                        return parse_file_content(allocator, &"()".to_string());
                     }
 
                     // Use the filesystem like normal if the opts couldn't find
@@ -254,7 +274,7 @@ impl CompilerOperatorsInternal {
                         true,
                     );
                     let mut stream = Stream::new(None);
-                    write_ir_to_stream(Rc::new(ir), &mut stream);
+                    write_ir_to_stream(Rc::new(ir), &mut stream, self.language_flags);
                     return fs::write(filename_bytes.decode(), stream.get_value().decode())
                         .map_err(|_| {
                             EvalErr::InternalError(
@@ -516,11 +536,13 @@ pub fn run_program_for_search_paths(
     source_file: &str,
     search_paths: &[String],
     symbols_extra_info: bool,
+    language_flags: u32,
 ) -> Rc<CompilerOperators> {
     let ops = Rc::new(CompilerOperators::new(
         source_file,
         search_paths.to_vec(),
         symbols_extra_info,
+        language_flags,
     ));
     ops.parent.set_runner(ops.parent.clone());
     ops

@@ -109,6 +109,7 @@ fn test_cse_merge_regression() {
             strict: true,
             int_fix: false,
             rue_codegen: false,
+            extra_numeric_constants: false,
         };
         let new_opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new("test.clsp"))
             .set_dialect(dialect.clone())

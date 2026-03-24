@@ -854,6 +854,7 @@ fn test_generated_cse(n: u32) {
         strict: true,
         int_fix: false,
         rue_codegen: false,
+        extra_numeric_constants: false,
     });
     let opts23 = opts
         .set_dialect(AcceptedDialect {
@@ -861,6 +862,7 @@ fn test_generated_cse(n: u32) {
             strict: true,
             int_fix: false,
             rue_codegen: false,
+            extra_numeric_constants: false,
         })
         .set_optimize(true);
     let mut allocator = Allocator::new();

@@ -528,6 +528,7 @@ fn test_preprocess_basic_list() {
             strict: true,
             int_fix: false,
             rue_codegen: false,
+            extra_numeric_constants: false,
         });
     let mut includes = Vec::new();
     let pp = preprocess(opts.clone(), &mut includes, parsed_forms[0].clone())
@@ -568,6 +569,7 @@ fn test_preprocessor_tours_includes_properly() {
             strict: true,
             int_fix: false,
             rue_codegen: false,
+            extra_numeric_constants: false,
         });
     let parsed = parse_sexp(Srcloc::start(pname), prog.bytes()).expect("should parse");
     let mut includes = Vec::new();

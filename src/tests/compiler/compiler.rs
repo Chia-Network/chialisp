@@ -50,6 +50,7 @@ fn run_string_maybe_opt(
             strict: true,
             int_fix: false,
             rue_codegen: false,
+            extra_numeric_constants: false,
         });
     }
 
@@ -2405,6 +2406,7 @@ fn test_handle_explicit_empty_atom() {
         strict: true,
         int_fix: false,
         rue_codegen: false,
+        extra_numeric_constants: false,
     });
 
     let atom = |s: &str| Rc::new(SExp::Atom(srcloc.clone(), s.as_bytes().to_vec()));

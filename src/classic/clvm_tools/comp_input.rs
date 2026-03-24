@@ -8,6 +8,7 @@ use crate::classic::clvm::serialize::{sexp_from_stream, SimpleCreateCLVMObject};
 use crate::classic::platform::argparse::ArgumentValue;
 
 use crate::classic::clvm_tools::binutils::assemble_from_ir;
+use crate::classic::clvm_tools::ir::r#type::NEW_BIT_CONSTANTS;
 use crate::classic::clvm_tools::ir::reader::read_ir;
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 
@@ -56,6 +57,7 @@ pub fn parse_tool_input_sexp(
     parsed_args: &HashMap<String, ArgumentValue>,
     default_hex: Option<&str>,
     default_sexp: Option<&str>,
+    language_flags: u32,
 ) -> Result<ParsedInputPathOrCode, String> {
     match parsed_args.get("hex") {
         Some(_) => {
@@ -101,7 +103,7 @@ pub fn parse_tool_input_sexp(
                 return Err(format!("missing argument {argument}"));
             };
 
-            read_ir(&use_sexp_text)
+            read_ir(&use_sexp_text, language_flags)
                 .map_err(|e| format!("{e:?}"))
                 .and_then(|v| {
                     Ok(ParsedInputPathOrCode {
@@ -130,9 +132,33 @@ impl RunAndCompileInputData {
         allocator: &mut Allocator,
         parsed_args: &HashMap<String, ArgumentValue>,
     ) -> Result<RunAndCompileInputData, String> {
-        let program = parse_tool_input_sexp(allocator, "path_or_code", parsed_args, None, None)?;
-        let args = parse_tool_input_sexp(allocator, "env", parsed_args, Some("80"), Some("()"))?;
+        let mut program =
+            parse_tool_input_sexp(allocator, "path_or_code", parsed_args, None, None, 0)?;
         let dialect = detect_modern(allocator, program.parsed);
+        let language_flags = if dialect.extra_numeric_constants {
+            NEW_BIT_CONSTANTS
+        } else {
+            0
+        };
+
+        if language_flags != 0 {
+            program = parse_tool_input_sexp(
+                allocator,
+                "path_or_code",
+                parsed_args,
+                None,
+                None,
+                language_flags,
+            )?;
+        }
+        let args = parse_tool_input_sexp(
+            allocator,
+            "env",
+            parsed_args,
+            Some("80"),
+            Some("()"),
+            language_flags,
+        )?;
 
         let do_optimize = parsed_args
             .get("optimize")
