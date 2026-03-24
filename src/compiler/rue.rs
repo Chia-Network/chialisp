@@ -1,4 +1,5 @@
 use num_bigint::ToBigInt;
+use num_integer::Integer;
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -35,6 +36,13 @@ use crate::util::Number;
 
 fn rue_err(loc: Srcloc, msg: impl Into<String>) -> CompileErr {
     CompileErr(loc, format!("rue translation: {}", msg.into()))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ExprTranslationContext {
+    inline: bool,
+    name: Vec<u8>,
+    args: Rc<SExp>,
 }
 
 fn lookup_symbol_in_scope(db: &Database, scope: ScopeId, name: &str) -> Option<SymbolId> {
@@ -274,12 +282,20 @@ struct PredeclaredHelperSymbol {
 }
 type PredeclaredHelperSymbols = HashMap<Vec<u8>, PredeclaredHelperSymbol>;
 
+#[derive(PartialEq, Eq, Hash)]
+struct PathHelperCacheKey {
+    context: ExprTranslationContext,
+    path_or_parent: Number,
+    name: Option<Vec<u8>>,
+}
+
 struct RueConversion {
     db: Database,
     opts: Rc<dyn CompilerOpts>,
     text: Arc<str>,
     any_type_id: TypeId,
     predeclared_helpers: PredeclaredHelperSymbols,
+    env_path_helpers: HashMap<PathHelperCacheKey, HirId>,
 }
 
 impl RueConversion {
@@ -296,6 +312,7 @@ impl RueConversion {
             text,
             any_type_id,
             predeclared_helpers: PredeclaredHelperSymbols::default(),
+            env_path_helpers: HashMap::default(),
         }
     }
 
@@ -315,6 +332,7 @@ impl RueConversion {
 
     fn primcall(
         &mut self,
+        context: &ExprTranslationContext,
         scope: ScopeId,
         clvm_op: ClvmOp,
         loc: &Srcloc,
@@ -328,14 +346,14 @@ impl RueConversion {
                 ));
             }
 
-            let rest = self.intern_expr_hir(scope, &forms[2])?;
-            let first = self.intern_expr_hir(scope, &forms[1])?;
+            let rest = self.intern_expr_hir(context, scope, &forms[2])?;
+            let first = self.intern_expr_hir(context, scope, &forms[1])?;
             return Ok(self.db.alloc_hir(Hir::Pair(first, rest)));
         }
 
         let mut result = self.db.alloc_hir(Hir::Nil);
         for arg in forms.iter().skip(1).rev() {
-            let arg_expr = self.intern_expr_hir(scope, arg)?;
+            let arg_expr = self.intern_expr_hir(context, scope, arg)?;
             result = self.db.alloc_hir(Hir::Pair(arg_expr, result));
         }
 
@@ -448,7 +466,12 @@ impl RueConversion {
         vec![packed_args]
     }
 
-    fn intern_expr_hir(&mut self, scope: ScopeId, e: &BodyForm) -> Result<HirId, CompileErr> {
+    fn intern_expr_hir(
+        &mut self,
+        context: &ExprTranslationContext,
+        scope: ScopeId,
+        e: &BodyForm,
+    ) -> Result<HirId, CompileErr> {
         match e {
             BodyForm::Quoted(s) => Ok(self.intern_sexp_hir(s)),
             BodyForm::Value(SExp::Nil(_)) => Ok(self.db.alloc_hir(Hir::Nil)),
@@ -488,23 +511,23 @@ impl RueConversion {
                 };
                 if let Some(op_name) = op_atom {
                     if op_name == b"f" && forms.len() == 2 {
-                        let inner = self.intern_expr_hir(scope, &forms[1])?;
+                        let inner = self.intern_expr_hir(context, scope, &forms[1])?;
                         return Ok(self.db.alloc_hir(Hir::Unary(UnaryOp::First, inner)));
                     }
                     if op_name == b"r" && forms.len() == 2 {
-                        let inner = self.intern_expr_hir(scope, &forms[1])?;
+                        let inner = self.intern_expr_hir(context, scope, &forms[1])?;
                         return Ok(self.db.alloc_hir(Hir::Unary(UnaryOp::Rest, inner)));
                     }
                     if op_name == b"c" && forms.len() == 3 {
-                        let left = self.intern_expr_hir(scope, &forms[1])?;
-                        let right = self.intern_expr_hir(scope, &forms[2])?;
+                        let left = self.intern_expr_hir(context, scope, &forms[1])?;
+                        let right = self.intern_expr_hir(context, scope, &forms[2])?;
                         return Ok(self.db.alloc_hir(Hir::Pair(left, right)));
                     }
                     if op_name == b"com" && forms.len() == 2 {
                         // com is special.  It wraps code which will be callable.
                         let com_symbol_name = decode_string(&gensym(b"_$_com_".to_vec()));
                         let new_scope = self.db.alloc_scope(Scope::new(Some(scope)));
-                        let value_hir = self.intern_expr_hir(new_scope, &forms[1])?;
+                        let value_hir = self.intern_expr_hir(context, new_scope, &forms[1])?;
                         let com_symbol = self.db.alloc_symbol(Symbol::Function(FunctionSymbol {
                             name: Some(Name::new(com_symbol_name.clone(), None)),
                             ty: self.any_type_id,
@@ -523,11 +546,60 @@ impl RueConversion {
                         );
                         return Ok(self.db.alloc_hir(Hir::Reference(com_symbol)));
                     }
+                    if op_name == b"@" {
+                        // At forms.
+                        let bad_format_error = Err(CompileErr(loc.clone(), "Only (@ name parents) and (@ path) forms are allowed for @ invocation.".to_string()));
+                        if forms.len() < 2 {
+                            return bad_format_error;
+                        }
+
+                        let (BodyForm::Value(SExp::Integer(_, int_value))
+                        | BodyForm::Quoted(SExp::Integer(_, int_value))) = &*forms[1]
+                        else {
+                            return Err(CompileErr(loc.clone(), "2 argument @ form requires an integer argument as an absolute path reference".to_string()));
+                        };
+
+                        let two = 2_i32.to_bigint().unwrap();
+                        let (path, name) = if forms.len() == 2 {
+                            // @ <number> env reference.
+                            if int_value.is_multiple_of(&two) {
+                                return Err(CompileErr(
+                                    loc.clone(),
+                                    "rue mode doesn't allow peeking at the program's environment"
+                                        .to_string(),
+                                ));
+                            }
+
+                            (int_value / two, None)
+                        } else if forms.len() == 3 {
+                            // @ <name> <number> parent reference.
+                            let BodyForm::Value(SExp::Atom(_, arg_name)) = &*forms[3] else {
+                                return Err(CompileErr(
+                                    loc.clone(),
+                                    "Name must be an atom in (@ name parents) forms.".to_string(),
+                                ));
+                            };
+
+                            (int_value.clone(), Some(arg_name.to_vec()))
+                        } else {
+                            return bad_format_error;
+                        };
+
+                        let function_ref =
+                            self.create_env_path_helper(context, loc, scope, path, name)?;
+
+                        return Ok(self.db.alloc_hir(Hir::FunctionCall(FunctionCall {
+                            function: function_ref,
+                            args: vec![],
+                            nil_terminated: true,
+                        })));
+                    }
                     if op_name == b"softfork" && forms.len() == 5 {
                         // Softfork is special here since it isn't an opcode rue lets us produce
                         // directly.
                         let softfork_args = Rc::new(body_list(loc.clone(), &forms[1..]));
                         return self.intern_expr_hir(
+                            context,
                             scope,
                             &BodyForm::Call(
                                 loc.clone(),
@@ -550,17 +622,17 @@ impl RueConversion {
                         );
                     }
                     if let Some(prim) = match_prim(self.opts.clone(), op_name) {
-                        return self.primcall(scope, prim, loc, forms);
+                        return self.primcall(context, scope, prim, loc, forms);
                     }
                 }
 
-                let function_result = self.intern_expr_hir(scope, &forms[0]);
+                let function_result = self.intern_expr_hir(context, scope, &forms[0]);
                 let function = match &function_result {
                     Ok(f) => f,
                     Err(_e) => {
                         if let Some(atom) = &op_atom {
                             if let Some(prim) = match_prim(self.opts.clone(), atom) {
-                                return self.primcall(scope, prim, loc, forms);
+                                return self.primcall(context, scope, prim, loc, forms);
                             }
                         }
                         return function_result;
@@ -569,10 +641,10 @@ impl RueConversion {
 
                 let mut args = Vec::new();
                 for arg in forms.iter().skip(1) {
-                    args.push(self.intern_expr_hir(scope, arg)?);
+                    args.push(self.intern_expr_hir(context, scope, arg)?);
                 }
                 let tail_arg = if let Some(tail_expr) = tail.as_ref() {
-                    Some(self.intern_expr_hir(scope, tail_expr)?)
+                    Some(self.intern_expr_hir(context, scope, tail_expr)?)
                 } else {
                     None
                 };
@@ -639,7 +711,7 @@ impl RueConversion {
                                 ));
                             };
 
-                            let value_hir = self.intern_expr_hir(scope, &binding.body)?;
+                            let value_hir = self.intern_expr_hir(context, scope, &binding.body)?;
                             let symbol_name = decode_string(&binding_name);
                             let symbol =
                                 self.db
@@ -663,7 +735,8 @@ impl RueConversion {
                             toposort_assign_bindings(&let_data.loc, &let_data.bindings)?;
                         for b in sorted_bindings.iter() {
                             let binding = &let_data.bindings[b.index];
-                            let value_hir = self.intern_expr_hir(body_scope, &binding.body)?;
+                            let value_hir =
+                                self.intern_expr_hir(context, body_scope, &binding.body)?;
                             let (multiple_binding, binding_env_pattern) = match &binding.pattern {
                                 BindingPattern::Name(name) => (
                                     false,
@@ -719,7 +792,8 @@ impl RueConversion {
                                 ));
                             };
 
-                            let value_hir = self.intern_expr_hir(body_scope, &binding.body)?;
+                            let value_hir =
+                                self.intern_expr_hir(context, body_scope, &binding.body)?;
                             let symbol_name = decode_string(&binding_name);
                             let symbol =
                                 self.db
@@ -741,7 +815,7 @@ impl RueConversion {
                     }
                 }
 
-                let body_hir = self.intern_expr_hir(body_scope, &let_data.body)?;
+                let body_hir = self.intern_expr_hir(context, body_scope, &let_data.body)?;
                 Ok(self.db.alloc_hir(Hir::Block(rue_hir::Block {
                     statements,
                     body: Some(body_hir),
@@ -892,6 +966,75 @@ impl RueConversion {
         let env_value = self.db.alloc_hir(Hir::Pair(env_nil, env_ref));
         let _ = self.create_inline_value_helper(scope_id, "@*env*", env_value);
         let _ = self.create_inline_value_helper(scope_id, "@", env_value);
+    }
+
+    // Return a function to call and an argument to apply it to given a function context that
+    // we're in.  This creates a helper which emulates the (@ name number) or (@ path) forms in
+    // chialisp or looks it up from a collection in the RueConversion object.
+    fn create_env_path_helper(
+        &mut self,
+        context: &ExprTranslationContext,
+        loc: &Srcloc,
+        scope: ScopeId,         // Scope to construct the helper in.
+        path_or_parent: Number, // Identifies the path part of the selector.
+        name: Option<Vec<u8>>,  // Identifies the leaf if parent selector.
+    ) -> Result<HirId, CompileErr> {
+        let key = PathHelperCacheKey {
+            context: context.clone(),
+            path_or_parent: path_or_parent.clone(),
+            name: name.clone(),
+        };
+        if let Some(preexisting) = self.env_path_helpers.get(&key) {
+            return Ok(*preexisting);
+        }
+
+        let body = if let Some(arg_name) = name {
+            // Create helper retrieving parent based on env reference.
+            let param_and_path_list = param_names_and_paths(context.args.clone());
+            let Some((_path, _name)) = param_and_path_list
+                .iter()
+                .find(|(_path, name)| *name == arg_name)
+            else {
+                return Err(CompileErr(
+                    loc.clone(),
+                    format!(
+                        "Referenced name {} isn't a binding in environment {}",
+                        decode_string(&arg_name),
+                        context.args
+                    ),
+                ));
+            };
+
+            todo!();
+        } else {
+            // Create helper retrieving absolute reference.
+            todo!();
+        };
+
+        let name = decode_string(&gensym(b"path_op_helper".to_vec()));
+        let new_function_scope = self.db.alloc_scope(Scope::new(Some(scope)));
+
+        let function_symbol = self.db.alloc_symbol(Symbol::Function(FunctionSymbol {
+            name: Some(Name::new(name, None)),
+            ty: self.any_type_id,
+            scope: new_function_scope,
+            vars: Default::default(),
+            parameters: IndexMap::default(),
+            nil_terminated: true,
+            return_type: self.any_type_id,
+            body,
+            kind: FunctionKind::Inline,
+        }));
+        self.db.scope_mut(scope).insert_symbol(
+            name,
+            function_symbol,
+            false
+        );
+
+        let use_hir = self.db.alloc_hir(Hir::Reference(function_symbol));
+
+        self.env_path_helpers.insert(key, use_hir);
+        Ok(use_hir)
     }
 
     fn function_from_defun(
@@ -1097,7 +1240,12 @@ impl RueConversion {
             }
         }
 
-        let body_hir = self.intern_expr_hir(predecl.scope_id, &data.body)?;
+        let context = ExprTranslationContext {
+            name: data.name.clone(),
+            args: data.args.clone(),
+            inline,
+        };
+        let body_hir = self.intern_expr_hir(&context, predecl.scope_id, &data.body)?;
         let function_name = decode_string(&data.name);
         *self.db.symbol_mut(predecl.symbol_id) = Symbol::Function(self.function_from_defun(
             &function_name,
@@ -1318,7 +1466,12 @@ impl RueConversion {
             program_scope,
         );
 
-        let main_body = self.intern_expr_hir(program_scope, &program.exp)?;
+        let context = ExprTranslationContext {
+            args: program.args.clone(),
+            name: b"__chia_main__".to_vec(),
+            inline: false,
+        };
+        let main_body = self.intern_expr_hir(&context, program_scope, &program.exp)?;
         let main_symbol = self.db.alloc_symbol(Symbol::Function(FunctionSymbol {
             name: Some(Name::new(
                 "__chia_main__",

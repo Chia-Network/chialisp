@@ -44,6 +44,7 @@ indexmap = "2.13.0"
 id-arena = "2.3.0"
 rue-lir = { git = "https://github.com/xch-dev/rue", version = "0.8.4" }
 rue-options = { git = "https://github.com/xch-dev/rue", version = "0.8.4" }
+num-integer = "0.1.46"
 
 [dependencies.pyo3]
 version = "0.25.1"

@@ -261,6 +261,7 @@ dependencies = [
  "lfsr",
  "num",
  "num-bigint",
+ "num-integer",
  "num-traits",
  "pyo3",
  "pyo3-build-config 0.24.1",
