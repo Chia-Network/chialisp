@@ -553,15 +553,20 @@ impl RueConversion {
                             return bad_format_error;
                         }
 
-                        let (BodyForm::Value(SExp::Integer(_, int_value))
-                        | BodyForm::Quoted(SExp::Integer(_, int_value))) = &*forms[1]
-                        else {
-                            return Err(CompileErr(loc.clone(), "2 argument @ form requires an integer argument as an absolute path reference".to_string()));
+                        let get_integer = |i: usize| {
+                            if let BodyForm::Value(SExp::Integer(_, int_value))
+                                 | BodyForm::Quoted(SExp::Integer(_, int_value)) = &*forms[i]
+                            {
+                                Ok(int_value.clone())
+                            } else {
+                                Err(CompileErr(loc.clone(), format!("@ invocation form requires an integer argument at position {i}")))
+                            }
                         };
 
                         let two = 2_i32.to_bigint().unwrap();
                         let (path, name) = if forms.len() == 2 {
                             // @ <number> env reference.
+                            let int_value = get_integer(1)?;
                             if int_value.is_multiple_of(&two) {
                                 return Err(CompileErr(
                                     loc.clone(),
@@ -573,14 +578,15 @@ impl RueConversion {
                             (int_value / two, None)
                         } else if forms.len() == 3 {
                             // @ <name> <number> parent reference.
-                            let BodyForm::Value(SExp::Atom(_, arg_name)) = &*forms[3] else {
+                            let int_value = get_integer(2)?;
+                            let BodyForm::Value(SExp::Atom(_, arg_name)) = &*forms[1] else {
                                 return Err(CompileErr(
                                     loc.clone(),
                                     "Name must be an atom in (@ name parents) forms.".to_string(),
                                 ));
                             };
 
-                            (int_value.clone(), Some(arg_name.to_vec()))
+                            (int_value, Some(arg_name.to_vec()))
                         } else {
                             return bad_format_error;
                         };
