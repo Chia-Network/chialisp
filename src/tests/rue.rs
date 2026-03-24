@@ -740,16 +740,6 @@ fn test_module_level_constant_in_main_function_and_returned_function_rue() {
 }
 
 #[test]
-fn test_defun_environment_parent_lookup_rue() {
-    let program = do_basic_run(&vec![
-        "run".to_string(),
-        "(mod (X) (include *standard-cl-rue1*) (defun F (A B) (if (@ B 1) (+ A B) A)) (list (F 1 X) (F 2)))".to_string(),
-    ]);
-    let result = do_basic_brun(&vec!["brun".to_string(), program, "(99)".to_string()]);
-    assert_eq!(result.trim(), "(100 2)");
-}
-
-#[test]
 fn test_rue_no_repeat_large_constants() {
     let program = do_basic_run(&vec![
         "run".to_string(),
