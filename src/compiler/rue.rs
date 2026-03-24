@@ -1,5 +1,6 @@
 use num_bigint::ToBigInt;
 use num_integer::Integer;
+use num_traits::ToPrimitive;
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -555,7 +556,7 @@ impl RueConversion {
 
                         let get_integer = |i: usize| {
                             if let BodyForm::Value(SExp::Integer(_, int_value))
-                                 | BodyForm::Quoted(SExp::Integer(_, int_value)) = &*forms[i]
+                            | BodyForm::Quoted(SExp::Integer(_, int_value)) = &*forms[i]
                             {
                                 Ok(int_value.clone())
                             } else {
@@ -995,23 +996,75 @@ impl RueConversion {
         }
 
         let body = if let Some(arg_name) = name {
-            // Create helper retrieving parent based on env reference.
-            let param_and_path_list = param_names_and_paths(context.args.clone());
-            let Some((_path, _name)) = param_and_path_list
-                .iter()
-                .find(|(_path, name)| *name == arg_name)
-            else {
-                return Err(CompileErr(
-                    loc.clone(),
-                    format!(
-                        "Referenced name {} isn't a binding in environment {}",
-                        decode_string(&arg_name),
-                        context.args
-                    ),
-                ));
+            let tree_arg_access = || {
+                // Create helper retrieving parent based on env reference.
+                let param_and_path_list = param_names_and_paths(context.args.clone());
+                let Some((mut path, _name)) = param_and_path_list
+                    .into_iter()
+                    .find(|(_path, name)| *name == arg_name)
+                else {
+                    return Err(CompileErr(
+                        loc.clone(),
+                        format!(
+                            "Referenced name {} isn't a binding in environment {}",
+                            decode_string(&arg_name),
+                            context.args
+                        ),
+                    ));
+                };
+                let Some(arg_symbol) = lookup_symbol_in_scope(&self.db, scope, "_$_args__") else {
+                    return Err(CompileErr(
+                        loc.clone(),
+                        "can't find arguments for function".to_string(),
+                    ));
+                };
+
+                let Some(path_as_usize) = path_or_parent.to_usize() else {
+                    return Err(CompileErr(
+                        loc.clone(),
+                        "failed to convert path steps to usize".to_string(),
+                    ));
+                };
+
+                path >>= path_as_usize;
+                Ok((arg_symbol, path))
             };
 
-            todo!();
+            let arg_tail_access = |_args, _tail| -> Result<(SymbolId, Number), CompileErr> {
+                // Create helper retrieving parent based on env reference.
+                let param_and_path_list = param_names_and_paths(context.args.clone());
+                let Some((_path, _name)) = param_and_path_list
+                    .iter()
+                    .find(|(_path, name)| *name == arg_name)
+                else {
+                    return Err(CompileErr(
+                        loc.clone(),
+                        format!(
+                            "Referenced name {} isn't a binding in environment {}",
+                            decode_string(&arg_name),
+                            context.args
+                        ),
+                    ));
+                };
+
+                // If the selected argument is the tail, then
+
+                todo!();
+            };
+
+            let (arg_symbol, path) = if context.inline {
+                if let Some(args) = context.args.proper_list() {
+                    arg_tail_access(args, None)?
+                } else if let Some((args, tail)) = improper_list(context.args.clone()) {
+                    arg_tail_access(args, Some(tail))?
+                } else {
+                    tree_arg_access()?
+                }
+            } else {
+                tree_arg_access()?
+            };
+
+            self.accessor_hir_for_path(arg_symbol, &path)
         } else {
             // Create helper retrieving absolute reference.
             todo!();
@@ -1021,7 +1074,7 @@ impl RueConversion {
         let new_function_scope = self.db.alloc_scope(Scope::new(Some(scope)));
 
         let function_symbol = self.db.alloc_symbol(Symbol::Function(FunctionSymbol {
-            name: Some(Name::new(name, None)),
+            name: Some(Name::new(name.clone(), None)),
             ty: self.any_type_id,
             scope: new_function_scope,
             vars: Default::default(),
@@ -1031,11 +1084,9 @@ impl RueConversion {
             body,
             kind: FunctionKind::Inline,
         }));
-        self.db.scope_mut(scope).insert_symbol(
-            name,
-            function_symbol,
-            false
-        );
+        self.db
+            .scope_mut(scope)
+            .insert_symbol(name, function_symbol, false);
 
         let use_hir = self.db.alloc_hir(Hir::Reference(function_symbol));
 
