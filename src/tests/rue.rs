@@ -759,7 +759,7 @@ fn test_rue_no_repeat_large_constants() {
 fn test_rue_argument_parent_access_1() {
     let program = do_basic_run(&vec![
         "run".to_string(),
-        "(mod (X Y) (include *standard-cl-rue1*) (defun F (A B C D) (if (@ D 1) (+ A D) A)) (list (F 1 79 89 X) (F 2 79 89)))".to_string()
+        format!("(mod (X Y) (include *standard-cl-rue1*) (defun F (A B C D) (if (@ D 1) (+ A D) A)) (list (F 1 79 89 X) (F 2 79 89)))")
     ]);
     assert_eq!(
         do_basic_brun(&vec!["brun".to_string(), program, "(99)".to_string()]).trim(),
@@ -767,11 +767,38 @@ fn test_rue_argument_parent_access_1() {
     );
 }
 
+/*
+#[test]
+fn test_rue_argument_parent_access_1_inline() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        format!("(mod (X Y) (include *standard-cl-rue1*) (defun-inline F (A B C D) (if (@ D 1) (+ A D) A)) (list (F 1 79 89 X) (F 2 79 89)))")
+    ]);
+    eprintln!("program {program}");
+    assert_eq!(
+        do_basic_brun(&vec!["brun".to_string(), program, "(99)".to_string()]).trim(),
+        "(100 2)"
+    );
+}
+*/
+
 #[test]
 fn test_rue_argument_parent_access_2() {
     let program = do_basic_run(&vec![
         "run".to_string(),
         "(mod (X Y) (include *standard-cl-rue1*) (defun F ((C D)) (list (@ D 1) (@ D 2))) (F (list X Y)))".to_string()
+    ]);
+    assert_eq!(
+        do_basic_brun(&vec!["brun".to_string(), program, "(99 103)".to_string()]).trim(),
+        "((103) (99 103))"
+    );
+}
+
+#[test]
+fn test_rue_argument_parent_access_2_inline() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (X Y) (include *standard-cl-rue1*) (defun-inline F ((C D)) (list (@ D 1) (@ D 2))) (F (list X Y)))".to_string()
     ]);
     assert_eq!(
         do_basic_brun(&vec!["brun".to_string(), program, "(99 103)".to_string()]).trim(),

@@ -297,6 +297,7 @@ struct RueConversion {
     any_type_id: TypeId,
     predeclared_helpers: PredeclaredHelperSymbols,
     env_path_helpers: HashMap<PathHelperCacheKey, HirId>,
+    context_stack: Vec<BodyForm>,
 }
 
 impl RueConversion {
@@ -314,6 +315,7 @@ impl RueConversion {
             any_type_id,
             predeclared_helpers: PredeclaredHelperSymbols::default(),
             env_path_helpers: HashMap::default(),
+            context_stack: Vec::default(),
         }
     }
 
@@ -468,6 +470,29 @@ impl RueConversion {
     }
 
     fn intern_expr_hir(
+        &mut self,
+        context: &ExprTranslationContext,
+        scope: ScopeId,
+        e: &BodyForm,
+    ) -> Result<HirId, CompileErr> {
+        self.context_stack.push(e.clone());
+        let res = self.intern_expr_hir_(context, scope, e);
+        if let Err(CompileErr(l, desc)) = res {
+            let context: Vec<String> = self
+                .context_stack
+                .iter()
+                .map(|b| format!("{}", b.to_sexp()))
+                .collect();
+            return Err(CompileErr(
+                l,
+                format!("{}:\ncontext:\n{}", desc, context.join("\n")),
+            ));
+        }
+        self.context_stack.pop();
+        res
+    }
+
+    fn intern_expr_hir_(
         &mut self,
         context: &ExprTranslationContext,
         scope: ScopeId,
@@ -995,73 +1020,77 @@ impl RueConversion {
             return Ok(*preexisting);
         }
 
-        let body = if let Some(arg_name) = name {
-            let tree_arg_access = || {
-                // Create helper retrieving parent based on env reference.
-                let param_and_path_list = param_names_and_paths(context.args.clone());
-                let Some((mut path, _name)) = param_and_path_list
-                    .into_iter()
-                    .find(|(_path, name)| *name == arg_name)
-                else {
-                    return Err(CompileErr(
-                        loc.clone(),
-                        format!(
-                            "Referenced name {} isn't a binding in environment {}",
-                            decode_string(&arg_name),
-                            context.args
-                        ),
-                    ));
-                };
-                let Some(arg_symbol) = lookup_symbol_in_scope(&self.db, scope, "_$_args__") else {
-                    return Err(CompileErr(
-                        loc.clone(),
-                        "can't find arguments for function".to_string(),
-                    ));
-                };
-
-                let Some(path_as_usize) = path_or_parent.to_usize() else {
-                    return Err(CompileErr(
-                        loc.clone(),
-                        "failed to convert path steps to usize".to_string(),
-                    ));
-                };
-
-                path >>= path_as_usize;
-                Ok((arg_symbol, path))
+        let tree_arg_access = |choose_name: &[u8], arg_name: &[u8], arg_desc: Rc<SExp>| {
+            eprintln!(
+                "find name {} in binding {} with shape {}",
+                decode_string(choose_name),
+                decode_string(arg_name),
+                arg_desc
+            );
+            // Create helper retrieving parent based on env reference.
+            let param_and_path_list = param_names_and_paths(arg_desc);
+            let Some((mut path, _name)) = param_and_path_list
+                .into_iter()
+                .find(|(_path, name)| name == choose_name)
+            else {
+                return Err(CompileErr(
+                    loc.clone(),
+                    format!(
+                        "Referenced name {} isn't a binding in environment {}",
+                        decode_string(arg_name),
+                        context.args
+                    ),
+                ));
+            };
+            let Some(arg_symbol) =
+                lookup_symbol_in_scope(&self.db, scope, &decode_string(arg_name))
+            else {
+                return Err(CompileErr(
+                    loc.clone(),
+                    "can't find arguments for function".to_string(),
+                ));
             };
 
-            let arg_tail_access = |_args, _tail| -> Result<(SymbolId, Number), CompileErr> {
-                // Create helper retrieving parent based on env reference.
-                let param_and_path_list = param_names_and_paths(context.args.clone());
-                let Some((_path, _name)) = param_and_path_list
-                    .iter()
-                    .find(|(_path, name)| *name == arg_name)
-                else {
-                    return Err(CompileErr(
-                        loc.clone(),
-                        format!(
-                            "Referenced name {} isn't a binding in environment {}",
-                            decode_string(&arg_name),
-                            context.args
-                        ),
-                    ));
-                };
+            let Some(path_as_usize) = path_or_parent.to_usize() else {
+                return Err(CompileErr(
+                    loc.clone(),
+                    "failed to convert path steps to usize".to_string(),
+                ));
+            };
 
-                // If the selected argument is the tail, then
+            path >>= path_as_usize;
+            Ok((arg_symbol, path))
+        };
+
+        let arg_tail_access =
+            |arg_name: &[u8], args: &[SExp], __tail| -> Result<(SymbolId, Number), CompileErr> {
+                // Create helper retrieving parent based on env reference.
+                for (i, a) in args.iter().enumerate() {
+                    let inline_name = if let SExp::Atom(_, name) = a {
+                        name.to_vec()
+                    } else {
+                        format!("_$_arg_{i}").as_bytes().to_vec()
+                    };
+                    if let Ok(result) = tree_arg_access(arg_name, &inline_name, Rc::new(a.clone()))
+                    {
+                        return Ok(result);
+                    }
+                }
 
                 todo!();
             };
 
+        let body = if let Some(arg_name) = name {
             let (arg_symbol, path) = if context.inline {
                 if let Some(args) = context.args.proper_list() {
-                    arg_tail_access(args, None)?
+                    arg_tail_access(&arg_name, &args, None)?
                 } else if let Some((args, tail)) = improper_list(context.args.clone()) {
-                    arg_tail_access(args, Some(tail))?
+                    arg_tail_access(&arg_name, &args, Some(tail))?
                 } else {
-                    tree_arg_access()?
+                    tree_arg_access(&arg_name, b"_$_args", context.args.clone())?
                 }
             } else {
-                tree_arg_access()?
+                tree_arg_access(&arg_name, b"_$_args", context.args.clone())?
             };
 
             self.accessor_hir_for_path(arg_symbol, &path)
