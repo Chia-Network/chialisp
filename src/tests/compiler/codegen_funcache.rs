@@ -131,6 +131,7 @@ fn test_codegen_function_cache() {
             stepping: Some(25),
             strict: true,
             int_fix: true,
+            extra_numeric_constants: false,
         });
     let fs_opts = TestModuleCompilerOpts::new(orig_opts);
     let opts: Rc<dyn CompilerOpts> = Rc::new(fs_opts.clone());
