@@ -8,6 +8,7 @@ use clvm_rs::error::EvalErr;
 use crate::classic::clvm::__type_compatibility__::Stream;
 use crate::classic::clvm::serialize::sexp_to_stream;
 use crate::classic::clvm_tools::binutils::{assemble_from_ir, disassemble};
+use crate::classic::clvm_tools::ir::r#type::NEW_BIT_CONSTANTS;
 use crate::classic::clvm_tools::ir::reader::read_ir;
 use crate::classic::clvm_tools::stages::run;
 use crate::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
@@ -96,8 +97,9 @@ pub fn compile_clvm_text_maybe_opt(
     input_path: &str,
     classic_with_opts: bool,
 ) -> Result<NodePtr, CompileError> {
-    let ir_src = read_ir(text).map_err(|s| EvalErr::InternalError(NodePtr::NIL, s.to_string()))?;
-    let assembled_sexp = assemble_from_ir(allocator, Rc::new(ir_src))?;
+    let ir_src =
+        read_ir(text, 0).map_err(|s| EvalErr::InternalError(NodePtr::NIL, s.to_string()))?;
+    let mut assembled_sexp = assemble_from_ir(allocator, Rc::new(ir_src))?;
 
     let dialect = detect_modern(allocator, assembled_sexp);
     // Now the stepping is optional (None for classic) but we may communicate
@@ -127,9 +129,26 @@ pub fn compile_clvm_text_maybe_opt(
 
         Ok(convert_to_clvm_rs(allocator, res)?)
     } else {
+        let language_flags = if dialect.extra_numeric_constants {
+            NEW_BIT_CONSTANTS
+        } else {
+            0
+        };
+        // Ensure we re-parse with the flags detected during sigil detection.
+        if language_flags != 0 {
+            let ir_src = read_ir(text, language_flags)
+                .map_err(|s| EvalErr::InternalError(NodePtr::NIL, s.to_string()))?;
+            assembled_sexp = assemble_from_ir(allocator, Rc::new(ir_src))?;
+        }
+
         let compile_invoke_code = run(allocator);
         let input_sexp = allocator.new_pair(assembled_sexp, NodePtr::NIL)?;
-        let run_program = run_program_for_search_paths(input_path, &opts.get_search_paths(), false);
+        let run_program = run_program_for_search_paths(
+            input_path,
+            &opts.get_search_paths(),
+            false,
+            language_flags,
+        );
         if classic_with_opts {
             run_program.set_compiler_opts(Some(opts));
         }

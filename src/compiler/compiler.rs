@@ -12,6 +12,7 @@ use std::time::UNIX_EPOCH;
 use clvm_rs::allocator::Allocator;
 
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
+use crate::classic::clvm_tools::ir::r#type::NEW_BIT_CONSTANTS;
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 
 use crate::classic::clvm::__type_compatibility__::Stream;
@@ -32,7 +33,7 @@ use crate::compiler::optimize::depgraph::{DepgraphOptions, FunctionDependencyGra
 use crate::compiler::optimize::get_optimizer;
 use crate::compiler::prims;
 use crate::compiler::resolve::{find_helper_target, resolve_namespaces};
-use crate::compiler::sexp::{decode_string, enlist, parse_sexp, SExp};
+use crate::compiler::sexp::{decode_string, enlist, parse_sexp_flags, SExp};
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::{BasicCompileContext, CompileContextWrapper};
 use crate::util::Number;
@@ -750,8 +751,8 @@ fn add_main_fingerprint(cf: &mut CompileForm, forms: &[Rc<SExp>]) {
 
 fn form_hash_expression(inner_exp: Rc<BodyForm>) -> Rc<BodyForm> {
     let shloc = Srcloc::start("*sha256tree*");
-    let parsed =
-        parse_sexp(shloc.clone(), SHA256TREE_PROGRAM_CLVM.bytes()).expect("should have parsed");
+    let parsed = parse_sexp_flags(shloc.clone(), SHA256TREE_PROGRAM_CLVM.bytes(), 0)
+        .expect("should have parsed");
     let p0_borrowed: &SExp = parsed[0].borrow();
 
     Rc::new(BodyForm::Call(
@@ -873,7 +874,12 @@ pub fn compile_file(
 ) -> Result<CompilerOutput, CompileErr> {
     let _int_conversion_bug = NewStyleIntConversion::new(opts.dialect().int_fix);
     let srcloc = Srcloc::start(&opts.filename());
-    let pre_forms = parse_sexp(srcloc.clone(), content.bytes())?;
+    let flags = if opts.dialect().extra_numeric_constants {
+        NEW_BIT_CONSTANTS
+    } else {
+        0
+    };
+    let pre_forms = parse_sexp_flags(srcloc.clone(), content.bytes(), flags)?;
     let mut context_wrapper = CompileContextWrapper::new(
         allocator,
         runner,

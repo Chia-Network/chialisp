@@ -28,13 +28,13 @@ fn test_expand_macro(
     macros: String,
     symbols: String,
 ) -> String {
-    let macro_ir = read_ir(&macro_data).unwrap();
+    let macro_ir = read_ir(&macro_data, 0).unwrap();
     let macro_source = assemble_from_ir(allocator, Rc::new(macro_ir)).unwrap();
-    let prog_ir = read_ir(&prog_rest).unwrap();
+    let prog_ir = read_ir(&prog_rest, 0).unwrap();
     let prog_source = assemble_from_ir(allocator, Rc::new(prog_ir)).unwrap();
-    let macros_ir = read_ir(&macros).unwrap();
+    let macros_ir = read_ir(&macros, 0).unwrap();
     let macros_source = assemble_from_ir(allocator, Rc::new(macros_ir)).unwrap();
-    let symbols_ir = read_ir(&symbols).unwrap();
+    let symbols_ir = read_ir(&symbols, 0).unwrap();
     let symbols_source = assemble_from_ir(allocator, Rc::new(symbols_ir)).unwrap();
     let exp_res = try_expand_macro_for_atom(
         allocator,
@@ -52,9 +52,9 @@ fn test_inner_expansion(
     macro_code: String,
     prog_rest: String,
 ) -> String {
-    let macro_ir = read_ir(&macro_code).unwrap();
+    let macro_ir = read_ir(&macro_code, 0).unwrap();
     let macro_source = assemble_from_ir(allocator, Rc::new(macro_ir)).unwrap();
-    let prog_ir = read_ir(&prog_rest).unwrap();
+    let prog_ir = read_ir(&prog_rest, 0).unwrap();
     let prog_source = assemble_from_ir(allocator, Rc::new(prog_ir)).unwrap();
     let exp_res = brun(allocator, macro_source, prog_source).unwrap();
     disassemble(allocator, exp_res, Some(0))
@@ -66,12 +66,12 @@ fn test_do_com_prog(
     macro_lookup_src: String,
     symbol_table_src: String,
 ) -> String {
-    let runner = run_program_for_search_paths("*test*", &vec![".".to_string()], false);
-    let prog_ir = read_ir(&program_src).unwrap();
+    let runner = run_program_for_search_paths("*test*", &vec![".".to_string()], false, 0);
+    let prog_ir = read_ir(&program_src, 0).unwrap();
     let program = assemble_from_ir(allocator, Rc::new(prog_ir)).unwrap();
-    let macro_ir = read_ir(&macro_lookup_src).unwrap();
+    let macro_ir = read_ir(&macro_lookup_src, 0).unwrap();
     let macro_lookup = assemble_from_ir(allocator, Rc::new(macro_ir)).unwrap();
-    let sym_ir = read_ir(&symbol_table_src).unwrap();
+    let sym_ir = read_ir(&symbol_table_src, 0).unwrap();
     let symbol_table = assemble_from_ir(allocator, Rc::new(sym_ir)).unwrap();
     let result = do_com_prog(allocator, 849, program, macro_lookup, symbol_table, runner).unwrap();
     disassemble(allocator, result.1, Some(0))
@@ -182,7 +182,7 @@ fn test_stage_2_run() {
 fn test_present_file_smoke_not_exists() {
     let mut allocator = Allocator::new();
     let runner =
-        run_program_for_search_paths("*test*", &vec!["resources/tests".to_string()], false);
+        run_program_for_search_paths("*test*", &vec!["resources/tests".to_string()], false, 0);
     let sexp_triggering_read = assemble(&mut allocator, "(embed-file test-file sexp embed.sexp)")
         .expect("should assemble");
     let res = read_file(
@@ -198,7 +198,7 @@ fn test_present_file_smoke_not_exists() {
 fn test_present_file_smoke_exists() {
     let mut allocator = Allocator::new();
     let runner =
-        run_program_for_search_paths("*test*", &vec!["resources/tests".to_string()], false);
+        run_program_for_search_paths("*test*", &vec!["resources/tests".to_string()], false, 0);
     let sexp_triggering_read = assemble(&mut allocator, "(embed-file test-file sexp embed.sexp)")
         .expect("should assemble");
     let res = read_file(runner, &mut allocator, sexp_triggering_read, "embed.sexp")
@@ -210,7 +210,7 @@ fn test_present_file_smoke_exists() {
 fn test_process_embed_file_as_sexp() {
     let mut allocator = Allocator::new();
     let runner =
-        run_program_for_search_paths("*test*", &vec!["resources/tests".to_string()], false);
+        run_program_for_search_paths("*test*", &vec!["resources/tests".to_string()], false, 0);
     let declaration_sexp = assemble(&mut allocator, "(embed-file test-embed sexp embed.sexp)")
         .expect("should assemble");
     let want_exp = assemble(&mut allocator, "(q 23 24 25)").expect("should assemble");
@@ -233,6 +233,7 @@ fn test_process_embed_file_as_sexp_in_an_unexpected_location() {
         "*test*",
         &vec!["resources/tests/stage_2".to_string()],
         false,
+        0,
     );
     let sexp_triggering_read = assemble(&mut allocator, "(embed-file test-file hex act.clvm.hex)")
         .expect("should assemble");
@@ -253,6 +254,7 @@ fn test_process_embed_file_as_sexp_in_an_expected_location() {
         "*test*",
         &vec!["resources/tests/steprun".to_string()],
         false,
+        0,
     );
     let sexp_triggering_read = assemble(&mut allocator, "(embed-file test-file hex act.clvm.hex)")
         .expect("should assemble");
@@ -272,7 +274,7 @@ fn test_process_embed_file_as_sexp_in_an_expected_location() {
 fn test_process_embed_file_as_hex() {
     let mut allocator = Allocator::new();
     let runner =
-        run_program_for_search_paths("*test*", &vec!["resources/tests".to_string()], false);
+        run_program_for_search_paths("*test*", &vec!["resources/tests".to_string()], false, 0);
     let declaration_sexp = assemble(
         &mut allocator,
         "(embed-file test-embed-from-hex hex steprun/fact.clvm.hex)",
@@ -396,7 +398,7 @@ fn test_classic_compiler_with_compiler_opts() {
 fn test_classic_runner_has_compile_filename() {
     let mut allocator = Allocator::new();
     let use_filename = "test-classic-runner-has-compile-filename.clsp";
-    let runner = run_program_for_search_paths(use_filename, &vec![], false);
+    let runner = run_program_for_search_paths(use_filename, &vec![], false, 0);
 
     let result_filename = get_compile_filename(runner, &mut allocator)
         .expect("should be able to tell us the file name given")

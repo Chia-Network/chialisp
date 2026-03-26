@@ -36,6 +36,7 @@ use crate::classic::clvm_tools::debug::{
     program_hash_from_program_env_cons, start_log_after, trace_pre_eval, trace_to_table,
     trace_to_text,
 };
+use crate::classic::clvm_tools::ir::r#type::NEW_BIT_CONSTANTS;
 use crate::classic::clvm_tools::ir::reader::read_ir;
 use crate::classic::clvm_tools::sha256tree::sha256tree;
 use crate::classic::clvm_tools::stages;
@@ -236,7 +237,7 @@ impl TConversion for OpcConversion {
         allocator: &mut Allocator,
         hex_text: &str,
     ) -> Result<Tuple<NodePtr, String>, String> {
-        read_ir(hex_text)
+        read_ir(hex_text, 0)
             .map_err(|e| e.to_string())
             .and_then(|ir_sexp| {
                 assemble_from_ir(allocator, Rc::new(ir_sexp)).map_err(|e| match e {
@@ -1146,6 +1147,11 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
         &parsed.use_filename(),
         &parsed.search_paths,
         extra_symbol_info,
+        if parsed.dialect.extra_numeric_constants {
+            NEW_BIT_CONSTANTS
+        } else {
+            0
+        },
     );
     // Ensure we know the user's wishes about the disassembly version here.
     special_runner.set_operators_version(get_disassembly_ver(&parsed_args));

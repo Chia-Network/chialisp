@@ -243,7 +243,7 @@ fn big_decode_opd() {
 }
 
 fn run_from_source<'a>(allocator: &'a mut Allocator, src: String) -> NodePtr {
-    let ir = read_ir(&src).unwrap();
+    let ir = read_ir(&src, 0).unwrap();
     let assembled = assemble_from_ir(allocator, Rc::new(ir)).unwrap();
     let runner = DefaultProgramRunner::new();
     let res = runner
@@ -258,8 +258,8 @@ fn compile_program<'a>(
     src: String,
 ) -> Result<String, EvalErr> {
     let run_script = stages::run(allocator);
-    let runner = run_program_for_search_paths("*test*", &vec![include_path], false);
-    let input_ir = read_ir(&src);
+    let runner = run_program_for_search_paths("*test*", &vec![include_path], false, 0);
+    let input_ir = read_ir(&src, 0);
     let input_program = assemble_from_ir(allocator, Rc::new(input_ir.unwrap())).unwrap();
     let input_sexp = allocator.new_pair(input_program, NodePtr::NIL).unwrap();
     let res = runner.run_program(allocator, run_script, input_sexp, None);

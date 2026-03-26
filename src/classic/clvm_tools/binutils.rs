@@ -29,6 +29,8 @@ pub fn assemble_from_ir(
         IRRepr::Quotes(b) => allocator.new_atom(b.data()),
         IRRepr::Int(b, _signed) => allocator.new_atom(b.data()),
         IRRepr::Hex(b) => allocator.new_atom(b.data()),
+        IRRepr::Octal(o) => allocator.new_atom(o.data()),
+        IRRepr::Binary(b) => allocator.new_atom(b.data()),
         IRRepr::Symbol(s) => {
             let mut s_real_name = s.clone();
             if let Some(stripped) = s.strip_prefix('#') {
@@ -134,30 +136,48 @@ pub fn disassemble_to_ir_with_kw(
     }
 }
 
+pub fn disassemble_with_kw_and_flags(
+    allocator: &Allocator,
+    sexp: NodePtr,
+    keyword_from_atom: &Record<Vec<u8>, String>,
+    language_flags: u32,
+) -> String {
+    let with_keywords = !matches!(allocator.sexp(sexp), SExp::Atom);
+    let symbols = disassemble_to_ir_with_kw(allocator, sexp, keyword_from_atom, with_keywords);
+    write_ir(Rc::new(symbols), language_flags)
+}
+
 pub fn disassemble_with_kw(
     allocator: &Allocator,
     sexp: NodePtr,
     keyword_from_atom: &Record<Vec<u8>, String>,
 ) -> String {
-    let with_keywords = !matches!(allocator.sexp(sexp), SExp::Atom);
-    let symbols = disassemble_to_ir_with_kw(allocator, sexp, keyword_from_atom, with_keywords);
-    write_ir(Rc::new(symbols))
+    disassemble_with_kw_and_flags(allocator, sexp, keyword_from_atom, 0)
 }
 
 pub fn disassemble(allocator: &Allocator, sexp: NodePtr, version: Option<usize>) -> String {
-    disassemble_with_kw(
+    disassemble_with_kw_and_flags(
         allocator,
         sexp,
         keyword_from_atom(version.unwrap_or(OPERATORS_LATEST_VERSION)),
+        0,
     )
 }
 
-pub fn assemble(allocator: &mut Allocator, s: &str) -> Result<NodePtr, EvalErr> {
+pub fn assemble_with_flags(
+    allocator: &mut Allocator,
+    s: &str,
+    flags: u32,
+) -> Result<NodePtr, EvalErr> {
     let v = s.as_bytes().to_vec();
     let stream = Stream::new(Some(Bytes::new(Some(BytesFromType::Raw(v)))));
-    let mut reader = IRReader::new(stream);
+    let mut reader = IRReader::new(stream, flags);
     reader
         .read_expr()
         .map_err(|e| EvalErr::InternalError(NodePtr::NIL, e.to_string()))
         .and_then(|ir| assemble_from_ir(allocator, Rc::new(ir)))
+}
+
+pub fn assemble(allocator: &mut Allocator, s: &str) -> Result<NodePtr, EvalErr> {
+    assemble_with_flags(allocator, s, 0)
 }

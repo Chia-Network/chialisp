@@ -14,11 +14,13 @@ pub const OPT_STRATEGY_BASE_STEPPING: i32 = 23;
 pub const MAX_STEPPING: i32 = 26;
 
 /// Specifying how the language is spoken.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AcceptedDialect {
     pub stepping: Option<i32>,
     pub strict: bool,
     pub int_fix: bool,
+    // Extra numeric constants
+    pub extra_numeric_constants: bool,
 }
 
 /// A package containing the content we should insert when a dialect include is
@@ -53,6 +55,7 @@ lazy_static! {
                         stepping: Some(21),
                         strict: true,
                         int_fix: false,
+                        extra_numeric_constants: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 22)
@@ -67,6 +70,7 @@ lazy_static! {
                         stepping: Some(22),
                         strict: false,
                         int_fix: false,
+                        extra_numeric_constants: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 22)
@@ -81,6 +85,7 @@ lazy_static! {
                         stepping: Some(23),
                         strict: true,
                         int_fix: false,
+                        extra_numeric_constants: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 23)
@@ -95,6 +100,7 @@ lazy_static! {
                         stepping: Some(23),
                         strict: true,
                         int_fix: true,
+                        extra_numeric_constants: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 23)
@@ -109,6 +115,7 @@ lazy_static! {
                         stepping: Some(24),
                         strict: true,
                         int_fix: true,
+                        extra_numeric_constants: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 24)
@@ -123,11 +130,39 @@ lazy_static! {
                         stepping: Some(25),
                         strict: true,
                         int_fix: true,
+                        extra_numeric_constants: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 25)
                 )"}
                     .to_string(),
+                },
+            ),
+            (
+                "*standard-cl-nc25*",
+                DialectDescription {
+                    accepted: AcceptedDialect {
+                        stepping: Some(25),
+                        strict: true,
+                        int_fix: true,
+                        extra_numeric_constants: true,
+                    },
+                    content: indoc! {"(
+                    (defconstant *chialisp-version* 25)
+                )"}
+                    .to_string(),
+                },
+            ),
+            (
+                "*bitconst*",
+                DialectDescription {
+                    accepted: AcceptedDialect {
+                        stepping: None,
+                        strict: false,
+                        int_fix: true,
+                        extra_numeric_constants: true,
+                    },
+                    content: indoc! {"()"}.to_string(),
                 },
             ),
         ];
@@ -176,7 +211,7 @@ pub fn detect_modern(allocator: &mut Allocator, sexp: NodePtr) -> AcceptedDialec
 
         for elt in l.iter() {
             let detect_modern_result = detect_modern(allocator, *elt);
-            if detect_modern_result.stepping.is_some() {
+            if detect_modern_result != result {
                 result = detect_modern_result;
                 break;
             }
