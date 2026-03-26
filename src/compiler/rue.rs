@@ -13,7 +13,7 @@ use id_arena::Arena;
 use indexmap::IndexMap;
 use rue_diagnostic::Name;
 use rue_hir::{
-    Database, DependencyGraph, Environment, FunctionCall, FunctionKind, FunctionSymbol, Hir, HirId,
+    ConstantSymbol, Database, DependencyGraph, Environment, FunctionCall, FunctionKind, FunctionSymbol, Hir, HirId,
     Lowerer, ParameterSymbol, Scope, ScopeId, Symbol, SymbolId, UnaryOp, Value,
 };
 use rue_lir::{ClvmOp, Lir};
@@ -560,6 +560,7 @@ impl RueConversion {
                 .iter()
                 .map(|b| format!("{}", b.to_sexp()))
                 .collect();
+            self.context_stack.clear();
             return Err(CompileErr(
                 l,
                 format!("{}:\ncontext:\n{}", desc, context.join("\n")),
@@ -567,6 +568,22 @@ impl RueConversion {
         }
         self.context_stack.pop();
         res
+    }
+
+    fn local_function(
+        &mut self,
+        scope: ScopeId,
+        data: &DefunData,
+    ) -> Result<HirId, CompileErr> {
+        let scope_id = self.db.alloc_scope(Scope::new(Some(scope)));
+        let symbol_id = self.empty_symbol();
+        self.create_defun(
+            false,
+            symbol_id,
+            scope_id,
+            data,
+        )?;
+        Ok(self.db.alloc_hir(Hir::Reference(symbol_id)))
     }
 
     fn intern_expr_hir_(
@@ -888,40 +905,18 @@ impl RueConversion {
                 Ok(self.intern_sexp_hir(&generated_code))
             }
             BodyForm::Lambda(data) => {
-                let new_args = skip_captures_for_lambda(data.args.clone());
-                let scope_id = self.db.alloc_scope(Scope::new(Some(scope)));
                 let name = gensym(b"_$_lambda".to_vec());
-                let unresolved_body = self.db.alloc_hir(Hir::Unresolved);
-                let symbol_id = self.db.alloc_symbol(Symbol::Function(FunctionSymbol {
-                    name: Some(Name::new(decode_string(&name), None)),
-                    ty: self.any_type_id,
-                    scope,
-                    vars: Default::default(),
-                    parameters: IndexMap::default(),
-                    nil_terminated: true,
-                    return_type: self.any_type_id,
-                    body: unresolved_body,
-                    kind: FunctionKind::BinaryTree,
-                }));
-                let description = PredeclaredHelperSymbol {
-                    symbol_id,
-                    scope_id,
-                };
-                self.predeclared_helpers.insert(name.to_vec(), description);
-                self.create_defun(
-                    false,
-                    &DefunData {
-                        loc: data.loc.clone(),
-                        name: name.clone(),
-                        args: new_args.clone(),
-                        orig_args: new_args,
-                        kw: data.kw.clone(),
-                        nl: data.loc.clone(),
-                        synthetic: None,
-                        body: data.body.clone(),
-                    },
-                )?;
-                Ok(self.db.alloc_hir(Hir::Reference(symbol_id)))
+                let new_args = skip_captures_for_lambda(data.args.clone());
+                self.local_function(scope, &DefunData {
+                    loc: data.loc.clone(),
+                    name: name.clone(),
+                    args: new_args.clone(),
+                    orig_args: new_args,
+                    kw: data.kw.clone(),
+                    nl: data.loc.clone(),
+                    synthetic: None,
+                    body: data.body.clone(),
+                })
             }
         }
     }
@@ -1259,17 +1254,7 @@ impl RueConversion {
         Ok(())
     }
 
-    fn create_defun(&mut self, inline: bool, data: &DefunData) -> Result<(), CompileErr> {
-        let Some(predecl) = self.predeclared_helpers.get(&data.name).cloned() else {
-            return Err(rue_err(
-                data.loc.clone(),
-                format!(
-                    "missing predeclared symbol for helper `{}`",
-                    decode_string(&data.name)
-                ),
-            ));
-        };
-
+    fn create_defun(&mut self, inline: bool, symbol_id: SymbolId, scope_id: ScopeId, data: &DefunData) -> Result<(), CompileErr> {
         let mut install_argument =
             |plist: &mut IndexMap<String, SymbolId>, param_index: usize, param_sexp: &SExp| {
                 if let SExp::Atom(ploc, atom_name) = param_sexp {
@@ -1281,7 +1266,7 @@ impl RueConversion {
                         )),
                         ty: self.any_type_id,
                     }));
-                    self.db.scope_mut(predecl.scope_id).insert_symbol(
+                    self.db.scope_mut(scope_id).insert_symbol(
                         param_name.clone(),
                         param_symbol,
                         false,
@@ -1295,7 +1280,7 @@ impl RueConversion {
                         plist,
                         &param_name,
                         Rc::new(param_sexp.clone()),
-                        predecl.scope_id,
+                        scope_id,
                     );
                 }
             };
@@ -1323,7 +1308,7 @@ impl RueConversion {
                     &mut plist,
                     "_$_args__",
                     data.args.clone(),
-                    predecl.scope_id,
+                    scope_id,
                 );
             }
             _ => {
@@ -1335,7 +1320,7 @@ impl RueConversion {
                     &mut plist,
                     "_$_args__",
                     data.args.clone(),
-                    predecl.scope_id,
+                    scope_id,
                 );
             }
         }
@@ -1345,11 +1330,11 @@ impl RueConversion {
             args: data.args.clone(),
             inline,
         };
-        let body_hir = self.intern_expr_hir(&context, predecl.scope_id, &data.body)?;
+        let body_hir = self.intern_expr_hir(&context, scope_id, &data.body)?;
         let function_name = decode_string(&data.name);
-        *self.db.symbol_mut(predecl.symbol_id) = Symbol::Function(self.function_from_defun(
+        *self.db.symbol_mut(symbol_id) = Symbol::Function(self.function_from_defun(
             &function_name,
-            predecl.scope_id,
+            scope_id,
             inline,
             data,
             plist,
@@ -1545,6 +1530,15 @@ impl RueConversion {
         self.install_tree_arg_accessors(program_scope, args.clone(), main_args_symbol);
     }
 
+    fn empty_symbol(&mut self) -> SymbolId {
+        let nil_value = Value::new(self.db.alloc_hir(Hir::Nil), self.any_type_id);
+        self.db.alloc_symbol(Symbol::Constant(ConstantSymbol {
+            inline: true,
+            name: None,
+            value: nil_value,
+        }))
+    }
+
     fn intern_hir(&mut self, program: &CompileForm) -> Result<SymbolId, CompileErr> {
         let main_scope_id: ScopeId = self.db.alloc_scope(Scope::new(None));
         self.predeclare_helper_symbols(main_scope_id, &program.helpers)?;
@@ -1558,7 +1552,9 @@ impl RueConversion {
                 } else {
                     self.functions.insert(data.name.clone(), *data.clone());
                 }
-                self.create_defun(*inline, data)?;
+                if let Some(predecl) = self.predeclared_helpers.get(&data.name) {
+                    self.create_defun(*inline, predecl.symbol_id, predecl.scope_id, data)?;
+                }
             }
         }
 
