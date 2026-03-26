@@ -13,8 +13,9 @@ use id_arena::Arena;
 use indexmap::IndexMap;
 use rue_diagnostic::Name;
 use rue_hir::{
-    ConstantSymbol, Database, DependencyGraph, Environment, FunctionCall, FunctionKind, FunctionSymbol, Hir, HirId,
-    Lowerer, ParameterSymbol, Scope, ScopeId, Symbol, SymbolId, UnaryOp, Value,
+    ConstantSymbol, Database, DependencyGraph, Environment, FunctionCall, FunctionKind,
+    FunctionSymbol, Hir, HirId, Lowerer, ParameterSymbol, Scope, ScopeId, Symbol, SymbolId,
+    UnaryOp, Value,
 };
 use rue_lir::{ClvmOp, Lir};
 use rue_options::CompilerOptions as RueCompilerOptions;
@@ -380,13 +381,10 @@ impl RueConversion {
     }
 
     fn function_kind_by_name(&self, name: &[u8]) -> Option<PredeclaredSymbolKind> {
-        if let Some(data) = self.functions.get(name) {
-            Some(function_kind(false, data))
-        } else if let Some(data) = self.inlines.get(name) {
-            Some(function_kind(true, data))
-        } else {
-            None
-        }
+        self.functions
+            .get(name)
+            .map(|data| function_kind(false, data))
+            .or_else(|| self.inlines.get(name).map(|data| function_kind(true, data)))
     }
 
     fn apply_rest_n(&mut self, value: HirId, count: usize) -> HirId {
@@ -495,16 +493,13 @@ impl RueConversion {
         forms: &[Rc<BodyForm>],
         tail: Option<Rc<BodyForm>>,
     ) -> Result<Option<HirId>, CompileErr> {
-        eprintln!("calling {}", decode_string(op_name));
-        let function_result =
-            if let Some(mut inline_data) = self.inlines.get(op_name).cloned() {
-                let inline_carrier = self.db.alloc_scope(Scope::new(Some(scope)));
-                inline_data.name = gensym(b"__inline__".to_vec());
-                eprintln!("expanding local inline function {}", decode_string(&inline_data.name));
-                self.local_function(inline_carrier, &inline_data)
-            } else {
-                self.intern_expr_hir(context, scope, &forms[0])
-            };
+        let function_result = if let Some(mut inline_data) = self.inlines.get(op_name).cloned() {
+            let inline_carrier = self.db.alloc_scope(Scope::new(Some(scope)));
+            inline_data.name = gensym(b"__inline__".to_vec());
+            self.local_function(inline_carrier, &inline_data)
+        } else {
+            self.intern_expr_hir(context, scope, &forms[0])
+        };
 
         let Ok(function) = function_result else {
             return Ok(None);
@@ -523,7 +518,7 @@ impl RueConversion {
         let mut nil_terminated = tail_arg.is_none();
         let mut rewritten_inline = false;
 
-        match self.function_kind_by_name(&op_name) {
+        match self.function_kind_by_name(op_name) {
             Some(PredeclaredSymbolKind::InlineDefunNormalArgs(fixed_args)) => {
                 args = self.normalize_inline_normal_call_args(loc, &fixed_args, &args, tail_arg)?;
                 rewritten_inline = true;
@@ -550,7 +545,7 @@ impl RueConversion {
             }
         }
         Ok(Some(self.db.alloc_hir(Hir::FunctionCall(FunctionCall {
-            function: function,
+            function,
             args,
             nil_terminated,
         }))))
@@ -580,19 +575,10 @@ impl RueConversion {
         res
     }
 
-    fn local_function(
-        &mut self,
-        scope: ScopeId,
-        data: &DefunData,
-    ) -> Result<HirId, CompileErr> {
+    fn local_function(&mut self, scope: ScopeId, data: &DefunData) -> Result<HirId, CompileErr> {
         let scope_id = self.db.alloc_scope(Scope::new(Some(scope)));
         let symbol_id = self.empty_symbol();
-        self.create_defun(
-            false,
-            symbol_id,
-            scope_id,
-            data,
-        )?;
+        self.create_defun(false, symbol_id, scope_id, data)?;
         Ok(self.db.alloc_hir(Hir::Reference(symbol_id)))
     }
 
@@ -643,10 +629,10 @@ impl RueConversion {
                 if let Some(op_name) = op_atom {
                     if let Some(res) = self.intern_function_call(
                         context,
-                        &loc,
+                        loc,
                         scope,
                         op_name,
-                        &forms,
+                        forms,
                         tail.clone(),
                     )? {
                         return Ok(res);
@@ -917,16 +903,19 @@ impl RueConversion {
             BodyForm::Lambda(data) => {
                 let name = gensym(b"_$_lambda".to_vec());
                 let new_args = skip_captures_for_lambda(data.args.clone());
-                self.local_function(scope, &DefunData {
-                    loc: data.loc.clone(),
-                    name: name.clone(),
-                    args: new_args.clone(),
-                    orig_args: new_args,
-                    kw: data.kw.clone(),
-                    nl: data.loc.clone(),
-                    synthetic: None,
-                    body: data.body.clone(),
-                })
+                self.local_function(
+                    scope,
+                    &DefunData {
+                        loc: data.loc.clone(),
+                        name: name.clone(),
+                        args: new_args.clone(),
+                        orig_args: new_args,
+                        kw: data.kw.clone(),
+                        nl: data.loc.clone(),
+                        synthetic: None,
+                        body: data.body.clone(),
+                    },
+                )
             }
         }
     }
@@ -1054,12 +1043,6 @@ impl RueConversion {
         }
 
         let tree_arg_access = |choose_name: &[u8], arg_name: &[u8], arg_desc: Rc<SExp>| {
-            eprintln!(
-                "find name {} in binding {} with shape {}",
-                decode_string(choose_name),
-                decode_string(arg_name),
-                arg_desc
-            );
             // Create helper retrieving parent based on env reference.
             let param_and_path_list = param_names_and_paths(arg_desc);
             let Some((mut path, _name)) = param_and_path_list
@@ -1264,36 +1247,41 @@ impl RueConversion {
         Ok(())
     }
 
-    fn create_defun(&mut self, inline: bool, symbol_id: SymbolId, scope_id: ScopeId, data: &DefunData) -> Result<(), CompileErr> {
-        let mut install_argument =
-            |plist: &mut IndexMap<String, SymbolId>, param_index: usize, param_sexp: &SExp| {
-                if let SExp::Atom(ploc, atom_name) = param_sexp {
-                    let param_name = decode_string(atom_name);
-                    let param_symbol = self.db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
-                        name: Some(Name::new(
-                            param_name.clone(),
-                            Some(self.to_rue_srcloc(ploc.clone())),
-                        )),
-                        ty: self.any_type_id,
-                    }));
-                    self.db.scope_mut(scope_id).insert_symbol(
+    fn create_defun(
+        &mut self,
+        inline: bool,
+        symbol_id: SymbolId,
+        scope_id: ScopeId,
+        data: &DefunData,
+    ) -> Result<(), CompileErr> {
+        let mut install_argument = |plist: &mut IndexMap<String, SymbolId>,
+                                    param_index: usize,
+                                    param_sexp: &SExp| {
+            if let SExp::Atom(ploc, atom_name) = param_sexp {
+                let param_name = decode_string(atom_name);
+                let param_symbol = self.db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
+                    name: Some(Name::new(
                         param_name.clone(),
-                        param_symbol,
-                        false,
-                    );
-                    plist.insert(param_name, param_symbol);
-                } else {
-                    // Inline helpers may still destructure argument trees.
-                    // Bind the incoming argument, then create accessor helpers for leaves.
-                    let param_name = format!("_$_arg_{param_index}");
-                    self.create_argument_helpers(
-                        plist,
-                        &param_name,
-                        Rc::new(param_sexp.clone()),
-                        scope_id,
-                    );
-                }
-            };
+                        Some(self.to_rue_srcloc(ploc.clone())),
+                    )),
+                    ty: self.any_type_id,
+                }));
+                self.db
+                    .scope_mut(scope_id)
+                    .insert_symbol(param_name.clone(), param_symbol, false);
+                plist.insert(param_name, param_symbol);
+            } else {
+                // Inline helpers may still destructure argument trees.
+                // Bind the incoming argument, then create accessor helpers for leaves.
+                let param_name = format!("_$_arg_{param_index}");
+                self.create_argument_helpers(
+                    plist,
+                    &param_name,
+                    Rc::new(param_sexp.clone()),
+                    scope_id,
+                );
+            }
+        };
 
         let mut plist: IndexMap<String, SymbolId> = IndexMap::default();
         match &function_kind(inline, data) {
@@ -1317,24 +1305,14 @@ impl RueConversion {
                     install_argument(&mut plist, arg_index, p);
                 }
                 install_argument(&mut plist, prefix.len(), tail);
-                self.create_argument_helpers(
-                    &mut plist,
-                    "_$_args__",
-                    data.args.clone(),
-                    scope_id,
-                );
+                self.create_argument_helpers(&mut plist, "_$_args__", data.args.clone(), scope_id);
             }
             _ => {
                 // Chialisp allows an arbitrary argument tree which specifies the exact environment
                 // shape. Rue uses either sequential or tree shaped and choose the tree shape at
                 // lowering time. The right approach is to use a single argument in BinaryTree
                 // mode and make accessors for the individual destructurings chialisp would allow.
-                self.create_argument_helpers(
-                    &mut plist,
-                    "_$_args__",
-                    data.args.clone(),
-                    scope_id,
-                );
+                self.create_argument_helpers(&mut plist, "_$_args__", data.args.clone(), scope_id);
             }
         }
 
