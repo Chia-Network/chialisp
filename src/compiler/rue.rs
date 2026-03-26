@@ -882,7 +882,6 @@ impl RueConversion {
                 let new_args = skip_captures_for_lambda(data.args.clone());
                 let scope_id = self.db.alloc_scope(Scope::new(Some(scope)));
                 let name = gensym(b"_$_lambda".to_vec());
-                let unresolved_body = self.db.alloc_hir(Hir::Unresolved);
                 let symbol_id = self.empty_symbol();
                 self.create_defun(
                     false,
