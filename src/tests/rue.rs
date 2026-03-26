@@ -756,6 +756,27 @@ fn test_rue_no_repeat_large_constants() {
 }
 
 #[test]
+fn test_rue_if_in_inline() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (S) (include *standard-cl-rue1*) (defun-inline F (X) (if X 103 107)) (defun G (X) (F (- X 1))) (G S))".to_string(),
+    ]);
+    assert_eq!(
+        do_basic_brun(&vec![
+            "brun".to_string(),
+            program.clone(),
+            "(1)".to_string()
+        ])
+            .trim(),
+        "107"
+    );
+    assert_eq!(
+        do_basic_brun(&vec!["brun".to_string(), program, "(2)".to_string()]).trim(),
+        "103"
+    );
+}
+
+#[test]
 fn test_rue_argument_parent_access_1() {
     let program = do_basic_run(&vec![
         "run".to_string(),

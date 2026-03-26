@@ -230,6 +230,19 @@ fn match_prim(_opts: Rc<dyn CompilerOpts>, prim: &[u8]) -> Option<ClvmOp> {
     None
 }
 
+fn function_kind(inline: bool, data: &DefunData) -> PredeclaredSymbolKind {
+    if !inline {
+        return PredeclaredSymbolKind::Defun;
+    }
+    if let Some(args) = data.args.proper_list() {
+        PredeclaredSymbolKind::InlineDefunNormalArgs(args)
+    } else if let Some((args, tail)) = improper_list(data.args.clone()) {
+        PredeclaredSymbolKind::InlineDefunImproperListArgs(args, tail)
+    } else {
+        PredeclaredSymbolKind::InlineDefunTreeArgs
+    }
+}
+
 fn body_cons(loc: Srcloc, left: Rc<BodyForm>, right: Rc<BodyForm>) -> BodyForm {
     BodyForm::Call(
         loc.clone(),
@@ -279,7 +292,6 @@ enum PredeclaredSymbolKind {
 struct PredeclaredHelperSymbol {
     symbol_id: SymbolId,
     scope_id: ScopeId,
-    kind: PredeclaredSymbolKind,
 }
 type PredeclaredHelperSymbols = HashMap<Vec<u8>, PredeclaredHelperSymbol>;
 
@@ -297,6 +309,8 @@ struct RueConversion {
     any_type_id: TypeId,
     predeclared_helpers: PredeclaredHelperSymbols,
     env_path_helpers: HashMap<PathHelperCacheKey, HirId>,
+    inlines: HashMap<Vec<u8>, DefunData>,
+    functions: HashMap<Vec<u8>, DefunData>,
 }
 
 impl RueConversion {
@@ -314,6 +328,8 @@ impl RueConversion {
             any_type_id,
             predeclared_helpers: PredeclaredHelperSymbols::default(),
             env_path_helpers: HashMap::default(),
+            inlines: HashMap::default(),
+            functions: HashMap::default(),
         }
     }
 
@@ -361,13 +377,11 @@ impl RueConversion {
         Ok(self.db.alloc_hir(Hir::ClvmOp(clvm_op, result)))
     }
 
-    fn predeclared_kind_for_function_hir(&self, function: HirId) -> Option<PredeclaredSymbolKind> {
-        let Hir::Reference(target_symbol) = self.db.hir(function) else {
-            return None;
-        };
-        self.predeclared_helpers
-            .values()
-            .find_map(|helper| (helper.symbol_id == *target_symbol).then_some(helper.kind.clone()))
+    fn function_kind_by_name(&self, name: &[u8]) -> Option<PredeclaredSymbolKind> {
+        self.functions
+            .get(name)
+            .map(|data| function_kind(false, data))
+            .or_else(|| self.inlines.get(name).map(|data| function_kind(true, data)))
     }
 
     fn apply_rest_n(&mut self, value: HirId, count: usize) -> HirId {
@@ -505,142 +519,139 @@ impl RueConversion {
                     return Err(rue_err(e.loc(), "empty call expression"));
                 }
 
-                let op_atom = if let BodyForm::Value(SExp::Atom(_, atom)) = &*forms[0] {
-                    Some(atom.as_slice())
+                let op_name = if let BodyForm::Value(SExp::Atom(_, atom)) = &*forms[0] {
+                    atom.as_slice()
                 } else {
-                    None
+                    return Err(CompileErr(forms[0].loc(), "called object must be an identifier".to_string()));
                 };
-                if let Some(op_name) = op_atom {
-                    if op_name == b"f" && forms.len() == 2 {
-                        let inner = self.intern_expr_hir(context, scope, &forms[1])?;
-                        return Ok(self.db.alloc_hir(Hir::Unary(UnaryOp::First, inner)));
+
+                if op_name == b"f" && forms.len() == 2 {
+                    let inner = self.intern_expr_hir(context, scope, &forms[1])?;
+                    return Ok(self.db.alloc_hir(Hir::Unary(UnaryOp::First, inner)));
+                }
+                if op_name == b"r" && forms.len() == 2 {
+                    let inner = self.intern_expr_hir(context, scope, &forms[1])?;
+                    return Ok(self.db.alloc_hir(Hir::Unary(UnaryOp::Rest, inner)));
+                }
+                if op_name == b"c" && forms.len() == 3 {
+                    let left = self.intern_expr_hir(context, scope, &forms[1])?;
+                    let right = self.intern_expr_hir(context, scope, &forms[2])?;
+                    return Ok(self.db.alloc_hir(Hir::Pair(left, right)));
+                }
+                if op_name == b"com" && forms.len() == 2 {
+                    // com is special.  It wraps code which will be callable.
+                    let com_symbol_name = decode_string(&gensym(b"_$_com_".to_vec()));
+                    let new_scope = self.db.alloc_scope(Scope::new(Some(scope)));
+                    let value_hir = self.intern_expr_hir(context, new_scope, &forms[1])?;
+                    let com_symbol = self.db.alloc_symbol(Symbol::Function(FunctionSymbol {
+                        name: Some(Name::new(com_symbol_name.clone(), None)),
+                        ty: self.any_type_id,
+                        scope,
+                        vars: Default::default(),
+                        parameters: IndexMap::default(),
+                        nil_terminated: true,
+                        return_type: self.any_type_id,
+                        body: value_hir,
+                        kind: FunctionKind::BinaryTree,
+                    }));
+                    self.db.scope_mut(scope).insert_symbol(
+                        com_symbol_name.clone(),
+                        com_symbol,
+                        false,
+                    );
+                    return Ok(self.db.alloc_hir(Hir::Reference(com_symbol)));
+                }
+                if op_name == b"@" {
+                    // At forms.
+                    let bad_format_error = Err(CompileErr(loc.clone(), "Only (@ name parents) and (@ path) forms are allowed for @ invocation.".to_string()));
+                    if forms.len() < 2 {
+                        return bad_format_error;
                     }
-                    if op_name == b"r" && forms.len() == 2 {
-                        let inner = self.intern_expr_hir(context, scope, &forms[1])?;
-                        return Ok(self.db.alloc_hir(Hir::Unary(UnaryOp::Rest, inner)));
-                    }
-                    if op_name == b"c" && forms.len() == 3 {
-                        let left = self.intern_expr_hir(context, scope, &forms[1])?;
-                        let right = self.intern_expr_hir(context, scope, &forms[2])?;
-                        return Ok(self.db.alloc_hir(Hir::Pair(left, right)));
-                    }
-                    if op_name == b"com" && forms.len() == 2 {
-                        // com is special.  It wraps code which will be callable.
-                        let com_symbol_name = decode_string(&gensym(b"_$_com_".to_vec()));
-                        let new_scope = self.db.alloc_scope(Scope::new(Some(scope)));
-                        let value_hir = self.intern_expr_hir(context, new_scope, &forms[1])?;
-                        let com_symbol = self.db.alloc_symbol(Symbol::Function(FunctionSymbol {
-                            name: Some(Name::new(com_symbol_name.clone(), None)),
-                            ty: self.any_type_id,
-                            scope,
-                            vars: Default::default(),
-                            parameters: IndexMap::default(),
-                            nil_terminated: true,
-                            return_type: self.any_type_id,
-                            body: value_hir,
-                            kind: FunctionKind::BinaryTree,
-                        }));
-                        self.db.scope_mut(scope).insert_symbol(
-                            com_symbol_name.clone(),
-                            com_symbol,
-                            false,
-                        );
-                        return Ok(self.db.alloc_hir(Hir::Reference(com_symbol)));
-                    }
-                    if op_name == b"@" {
-                        // At forms.
-                        let bad_format_error = Err(CompileErr(loc.clone(), "Only (@ name parents) and (@ path) forms are allowed for @ invocation.".to_string()));
-                        if forms.len() < 2 {
-                            return bad_format_error;
+
+                    let get_integer = |i: usize| {
+                        if let BodyForm::Value(SExp::Integer(_, int_value))
+                            | BodyForm::Quoted(SExp::Integer(_, int_value)) = &*forms[i]
+                        {
+                            Ok(int_value.clone())
+                        } else {
+                            Err(CompileErr(loc.clone(), format!("@ invocation form requires an integer argument at position {i}")))
+                        }
+                    };
+
+                    let two = 2_i32.to_bigint().unwrap();
+                    let (path, name) = if forms.len() == 2 {
+                        // @ <number> env reference.
+                        let int_value = get_integer(1)?;
+                        if int_value.is_multiple_of(&two) {
+                            return Err(CompileErr(
+                                loc.clone(),
+                                "rue mode doesn't allow peeking at the program's environment"
+                                    .to_string(),
+                            ));
                         }
 
-                        let get_integer = |i: usize| {
-                            if let BodyForm::Value(SExp::Integer(_, int_value))
-                            | BodyForm::Quoted(SExp::Integer(_, int_value)) = &*forms[i]
-                            {
-                                Ok(int_value.clone())
-                            } else {
-                                Err(CompileErr(loc.clone(), format!("@ invocation form requires an integer argument at position {i}")))
-                            }
-                        };
-
-                        let two = 2_i32.to_bigint().unwrap();
-                        let (path, name) = if forms.len() == 2 {
-                            // @ <number> env reference.
-                            let int_value = get_integer(1)?;
-                            if int_value.is_multiple_of(&two) {
-                                return Err(CompileErr(
-                                    loc.clone(),
-                                    "rue mode doesn't allow peeking at the program's environment"
-                                        .to_string(),
-                                ));
-                            }
-
-                            (int_value / two, None)
-                        } else if forms.len() == 3 {
-                            // @ <name> <number> parent reference.
-                            let int_value = get_integer(2)?;
-                            let BodyForm::Value(SExp::Atom(_, arg_name)) = &*forms[1] else {
-                                return Err(CompileErr(
-                                    loc.clone(),
-                                    "Name must be an atom in (@ name parents) forms.".to_string(),
-                                ));
-                            };
-
-                            (int_value, Some(arg_name.to_vec()))
-                        } else {
-                            return bad_format_error;
-                        };
-
-                        let function_ref =
-                            self.create_env_path_helper(context, loc, scope, path, name)?;
-
-                        return Ok(self.db.alloc_hir(Hir::FunctionCall(FunctionCall {
-                            function: function_ref,
-                            args: vec![],
-                            nil_terminated: true,
-                        })));
-                    }
-                    if op_name == b"softfork" && forms.len() == 5 {
-                        // Softfork is special here since it isn't an opcode rue lets us produce
-                        // directly.
-                        let softfork_args = Rc::new(body_list(loc.clone(), &forms[1..]));
-                        return self.intern_expr_hir(
-                            context,
-                            scope,
-                            &BodyForm::Call(
+                        (int_value / two, None)
+                    } else if forms.len() == 3 {
+                        // @ <name> <number> parent reference.
+                        let int_value = get_integer(2)?;
+                        let BodyForm::Value(SExp::Atom(_, arg_name)) = &*forms[1] else {
+                            return Err(CompileErr(
                                 loc.clone(),
-                                vec![
-                                    Rc::new(BodyForm::Value(SExp::Atom(loc.clone(), vec![2]))),
-                                    Rc::new(BodyForm::Quoted(enlist(
-                                        loc.clone(),
-                                        &[
-                                            Rc::new(SExp::Atom(loc.clone(), vec![36])),
-                                            Rc::new(SExp::Atom(loc.clone(), vec![2])),
-                                            Rc::new(SExp::Atom(loc.clone(), vec![5])),
-                                            Rc::new(SExp::Atom(loc.clone(), vec![11])),
-                                            Rc::new(SExp::Atom(loc.clone(), vec![23])),
-                                        ],
-                                    ))),
-                                    softfork_args,
-                                ],
-                                None,
-                            ),
-                        );
-                    }
-                    if let Some(prim) = match_prim(self.opts.clone(), op_name) {
-                        return self.primcall(context, scope, prim, loc, forms);
-                    }
+                                "Name must be an atom in (@ name parents) forms.".to_string(),
+                            ));
+                        };
+
+                        (int_value, Some(arg_name.to_vec()))
+                    } else {
+                        return bad_format_error;
+                    };
+
+                    let function_ref =
+                        self.create_env_path_helper(context, loc, scope, path, name)?;
+
+                    return Ok(self.db.alloc_hir(Hir::FunctionCall(FunctionCall {
+                        function: function_ref,
+                        args: vec![],
+                        nil_terminated: true,
+                    })));
+                }
+                if op_name == b"softfork" && forms.len() == 5 {
+                    // Softfork is special here since it isn't an opcode rue lets us produce
+                    // directly.
+                    let softfork_args = Rc::new(body_list(loc.clone(), &forms[1..]));
+                    return self.intern_expr_hir(
+                        context,
+                        scope,
+                        &BodyForm::Call(
+                            loc.clone(),
+                            vec![
+                                Rc::new(BodyForm::Value(SExp::Atom(loc.clone(), vec![2]))),
+                                Rc::new(BodyForm::Quoted(enlist(
+                                    loc.clone(),
+                                    &[
+                                        Rc::new(SExp::Atom(loc.clone(), vec![36])),
+                                        Rc::new(SExp::Atom(loc.clone(), vec![2])),
+                                        Rc::new(SExp::Atom(loc.clone(), vec![5])),
+                                        Rc::new(SExp::Atom(loc.clone(), vec![11])),
+                                        Rc::new(SExp::Atom(loc.clone(), vec![23])),
+                                    ],
+                                ))),
+                                softfork_args,
+                            ],
+                            None,
+                        ),
+                    );
+                }
+                if let Some(prim) = match_prim(self.opts.clone(), op_name) {
+                    return self.primcall(context, scope, prim, loc, forms);
                 }
 
                 let function_result = self.intern_expr_hir(context, scope, &forms[0]);
                 let function = match &function_result {
                     Ok(f) => f,
                     Err(_e) => {
-                        if let Some(atom) = &op_atom {
-                            if let Some(prim) = match_prim(self.opts.clone(), atom) {
-                                return self.primcall(context, scope, prim, loc, forms);
-                            }
+                        if let Some(prim) = match_prim(self.opts.clone(), op_name) {
+                            return self.primcall(context, scope, prim, loc, forms);
                         }
                         return function_result;
                     }
@@ -658,35 +669,33 @@ impl RueConversion {
 
                 let mut nil_terminated = tail_arg.is_none();
                 let mut rewritten_inline = false;
-                if let Some(predeclared_kind) = self.predeclared_kind_for_function_hir(*function) {
-                    match predeclared_kind {
-                        PredeclaredSymbolKind::InlineDefunNormalArgs(fixed_args) => {
-                            args = self.normalize_inline_normal_call_args(
-                                loc,
-                                &fixed_args,
-                                &args,
-                                tail_arg,
-                            )?;
-                            rewritten_inline = true;
-                            nil_terminated = true;
-                        }
-                        PredeclaredSymbolKind::InlineDefunImproperListArgs(prefix, _tail) => {
-                            args = self.normalize_inline_improper_call_args(
-                                loc,
-                                prefix.len(),
-                                &args,
-                                tail_arg,
-                            )?;
-                            rewritten_inline = true;
-                            nil_terminated = true;
-                        }
-                        PredeclaredSymbolKind::InlineDefunTreeArgs => {
-                            args = self.normalize_inline_tree_call_args(&args, tail_arg);
-                            rewritten_inline = true;
-                            nil_terminated = true;
-                        }
-                        _ => {}
+                match self.function_kind_by_name(op_name) {
+                    Some(PredeclaredSymbolKind::InlineDefunNormalArgs(fixed_args)) => {
+                        args = self.normalize_inline_normal_call_args(
+                            loc,
+                            &fixed_args,
+                            &args,
+                            tail_arg,
+                        )?;
+                        rewritten_inline = true;
+                        nil_terminated = true;
                     }
+                    Some(PredeclaredSymbolKind::InlineDefunImproperListArgs(prefix, _tail)) => {
+                        args = self.normalize_inline_improper_call_args(
+                            loc,
+                            prefix.len(),
+                            &args,
+                            tail_arg,
+                        )?;
+                        rewritten_inline = true;
+                        nil_terminated = true;
+                    }
+                    Some(PredeclaredSymbolKind::InlineDefunTreeArgs) => {
+                        args = self.normalize_inline_tree_call_args(&args, tail_arg);
+                        rewritten_inline = true;
+                        nil_terminated = true;
+                    }
+                    _ => {}
                 }
 
                 if !rewritten_inline {
@@ -852,7 +861,6 @@ impl RueConversion {
                 let description = PredeclaredHelperSymbol {
                     symbol_id,
                     scope_id,
-                    kind: PredeclaredSymbolKind::Defun,
                 };
                 self.predeclared_helpers.insert(name.to_vec(), description);
                 self.create_defun(
@@ -1210,7 +1218,6 @@ impl RueConversion {
         PredeclaredHelperSymbol {
             symbol_id: function_sym,
             scope_id: function_scope,
-            kind,
         }
     }
 
@@ -1261,7 +1268,6 @@ impl RueConversion {
                     PredeclaredHelperSymbol {
                         symbol_id: constant_sym,
                         scope_id: main_scope,
-                        kind: PredeclaredSymbolKind::Constant,
                     },
                 );
             }
@@ -1311,7 +1317,7 @@ impl RueConversion {
             };
 
         let mut plist: IndexMap<String, SymbolId> = IndexMap::default();
-        match &predecl.kind {
+        match &function_kind(inline, data) {
             PredeclaredSymbolKind::InlineDefunNormalArgs(args) => {
                 // In the case of inlines, it's appropriate to try to match the arguments to
                 // positions as well as possible.  If the parameter list is a proper list, we can
@@ -1563,6 +1569,11 @@ impl RueConversion {
             // Macros and other forms were handled during preprocessing and other
             // passes before code generation.
             if let HelperForm::Defun(inline, data) = &h {
+                if *inline {
+                    self.inlines.insert(data.name.clone(), *data.clone());
+                } else {
+                    self.functions.insert(data.name.clone(), *data.clone());
+                }
                 self.create_defun(*inline, data)?;
             }
         }
