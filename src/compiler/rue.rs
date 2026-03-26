@@ -940,9 +940,7 @@ impl RueConversion {
         let Some(symbol_id) = lookup_symbol_in_scope(&self.db, scope, &symbol_name) else {
             return Err(CompileErr(
                 loc.clone(),
-                format!(
-                    "can't find inline argument symbol `{symbol_name}` in current scope"
-                ),
+                format!("can't find inline argument symbol `{symbol_name}` in current scope"),
             ));
         };
         Ok(self.db.alloc_hir(Hir::Reference(symbol_id)))
