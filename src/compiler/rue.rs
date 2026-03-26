@@ -886,6 +886,11 @@ impl RueConversion {
     }
 
     fn accessor_hir_for_path(&mut self, args_symbol: SymbolId, path: &Number) -> HirId {
+        let root = self.db.alloc_hir(Hir::Reference(args_symbol));
+        self.apply_selector_path(root, path)
+    }
+
+    fn apply_selector_path(&mut self, root: HirId, path: &Number) -> HirId {
         let two = 2_i32.to_bigint().unwrap();
         let mut selectors = Vec::new();
         let mut cursor = path.clone();
@@ -894,7 +899,7 @@ impl RueConversion {
             cursor /= two.clone();
         }
 
-        let mut result = self.db.alloc_hir(Hir::Reference(args_symbol));
+        let mut result = root;
         for is_right in selectors.into_iter().rev() {
             result = if is_right {
                 self.db.alloc_hir(Hir::Unary(UnaryOp::Rest, result))
@@ -903,6 +908,98 @@ impl RueConversion {
             };
         }
         result
+    }
+
+    fn ascend_parent_path(&self, path: &Number, steps: usize) -> Number {
+        let mut result = path.clone();
+        for _ in 0..steps {
+            if result <= bi_one() {
+                return bi_one();
+            }
+            result >>= 1;
+        }
+        if result < bi_one() {
+            bi_one()
+        } else {
+            result
+        }
+    }
+
+    fn inline_arg_reference_hir(
+        &mut self,
+        scope: ScopeId,
+        loc: &Srcloc,
+        arg_index: usize,
+        arg_spec: &SExp,
+    ) -> Result<HirId, CompileErr> {
+        let symbol_name = if let SExp::Atom(_, name) = arg_spec {
+            decode_string(name)
+        } else {
+            format!("_$_arg_{arg_index}")
+        };
+        let Some(symbol_id) = lookup_symbol_in_scope(&self.db, scope, &symbol_name) else {
+            return Err(CompileErr(
+                loc.clone(),
+                format!(
+                    "can't find inline argument symbol `{symbol_name}` in current scope"
+                ),
+            ));
+        };
+        Ok(self.db.alloc_hir(Hir::Reference(symbol_id)))
+    }
+
+    fn inline_arguments_root_hir(
+        &mut self,
+        scope: ScopeId,
+        loc: &Srcloc,
+        args_spec: Rc<SExp>,
+    ) -> Result<HirId, CompileErr> {
+        if let Some(args) = args_spec.proper_list() {
+            let mut result = self.db.alloc_hir(Hir::Nil);
+            for (idx, arg) in args.iter().enumerate().rev() {
+                let head = self.inline_arg_reference_hir(scope, loc, idx, arg)?;
+                result = self.db.alloc_hir(Hir::Pair(head, result));
+            }
+            return Ok(result);
+        }
+
+        if let Some((prefix, tail)) = improper_list(args_spec.clone()) {
+            let mut result = self.inline_arg_reference_hir(scope, loc, prefix.len(), &tail)?;
+            for (idx, arg) in prefix.iter().enumerate().rev() {
+                let head = self.inline_arg_reference_hir(scope, loc, idx, arg)?;
+                result = self.db.alloc_hir(Hir::Pair(head, result));
+            }
+            return Ok(result);
+        }
+
+        // Tree-shaped argument specs for inline defuns are represented with _$_args__.
+        let Some(tree_symbol) = lookup_symbol_in_scope(&self.db, scope, "_$_args__") else {
+            return Err(CompileErr(
+                loc.clone(),
+                "can't find arguments for function".to_string(),
+            ));
+        };
+        Ok(self.db.alloc_hir(Hir::Reference(tree_symbol)))
+    }
+
+    fn context_arguments_root_hir(
+        &mut self,
+        context: &ExprTranslationContext,
+        loc: &Srcloc,
+        scope: ScopeId,
+    ) -> Result<HirId, CompileErr> {
+        if let Some(args_symbol) = lookup_symbol_in_scope(&self.db, scope, "_$_args__") {
+            return Ok(self.db.alloc_hir(Hir::Reference(args_symbol)));
+        }
+
+        if context.inline {
+            return self.inline_arguments_root_hir(scope, loc, context.args.clone());
+        }
+
+        Err(CompileErr(
+            loc.clone(),
+            "can't find arguments for function".to_string(),
+        ))
     }
 
     fn create_param_helper(
@@ -996,78 +1093,36 @@ impl RueConversion {
         }
 
         let body = if let Some(arg_name) = name {
-            let tree_arg_access = || {
-                // Create helper retrieving parent based on env reference.
-                let param_and_path_list = param_names_and_paths(context.args.clone());
-                let Some((mut path, _name)) = param_and_path_list
-                    .into_iter()
-                    .find(|(_path, name)| *name == arg_name)
-                else {
-                    return Err(CompileErr(
-                        loc.clone(),
-                        format!(
-                            "Referenced name {} isn't a binding in environment {}",
-                            decode_string(&arg_name),
-                            context.args
-                        ),
-                    ));
-                };
-                let Some(arg_symbol) = lookup_symbol_in_scope(&self.db, scope, "_$_args__") else {
-                    return Err(CompileErr(
-                        loc.clone(),
-                        "can't find arguments for function".to_string(),
-                    ));
-                };
-
-                let Some(path_as_usize) = path_or_parent.to_usize() else {
-                    return Err(CompileErr(
-                        loc.clone(),
-                        "failed to convert path steps to usize".to_string(),
-                    ));
-                };
-
-                path >>= path_as_usize;
-                Ok((arg_symbol, path))
+            let Some(parent_steps) = path_or_parent.to_usize() else {
+                return Err(CompileErr(
+                    loc.clone(),
+                    "failed to convert path steps to usize".to_string(),
+                ));
             };
 
-            let arg_tail_access = |_args, _tail| -> Result<(SymbolId, Number), CompileErr> {
-                // Create helper retrieving parent based on env reference.
-                let param_and_path_list = param_names_and_paths(context.args.clone());
-                let Some((_path, _name)) = param_and_path_list
-                    .iter()
-                    .find(|(_path, name)| *name == arg_name)
-                else {
-                    return Err(CompileErr(
-                        loc.clone(),
-                        format!(
-                            "Referenced name {} isn't a binding in environment {}",
-                            decode_string(&arg_name),
-                            context.args
-                        ),
-                    ));
-                };
-
-                // If the selected argument is the tail, then
-
-                todo!();
+            // Find the selected binding's absolute path in this function's argument environment.
+            let param_and_path_list = param_names_and_paths(context.args.clone());
+            let Some((path, _name)) = param_and_path_list
+                .into_iter()
+                .find(|(_path, name)| *name == arg_name)
+            else {
+                return Err(CompileErr(
+                    loc.clone(),
+                    format!(
+                        "Referenced name {} isn't a binding in environment {}",
+                        decode_string(&arg_name),
+                        context.args
+                    ),
+                ));
             };
 
-            let (arg_symbol, path) = if context.inline {
-                if let Some(args) = context.args.proper_list() {
-                    arg_tail_access(args, None)?
-                } else if let Some((args, tail)) = improper_list(context.args.clone()) {
-                    arg_tail_access(args, Some(tail))?
-                } else {
-                    tree_arg_access()?
-                }
-            } else {
-                tree_arg_access()?
-            };
-
-            self.accessor_hir_for_path(arg_symbol, &path)
+            let parent_path = self.ascend_parent_path(&path, parent_steps);
+            let args_root = self.context_arguments_root_hir(context, loc, scope)?;
+            self.apply_selector_path(args_root, &parent_path)
         } else {
-            // Create helper retrieving absolute reference.
-            todo!();
+            // Create helper retrieving absolute reference from the current argument root.
+            let args_root = self.context_arguments_root_hir(context, loc, scope)?;
+            self.apply_selector_path(args_root, &path_or_parent)
         };
 
         let name = decode_string(&gensym(b"path_op_helper".to_vec()));
