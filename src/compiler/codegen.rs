@@ -864,21 +864,6 @@ fn compile_call(
                             format!("@ form with two arguments requires argument and integer, got (@ {} {})", tl[0].to_sexp(), tl[1].to_sexp()),
                         )),
                     }
-                } else if tl.len() == 2 {
-                    match (tl[0].borrow(), tl[1].borrow()) {
-                        (
-                            BodyForm::Value(SExp::Atom(_al, a)),
-                            BodyForm::Value(SExp::Integer(_il, i)),
-                        ) => produce_argument_check(compiler, opts, call.loc.clone(), a, i.clone()),
-                        (
-                            BodyForm::Value(SExp::Atom(_al, a)),
-                            BodyForm::Quoted(SExp::Integer(_il, i)),
-                        ) => produce_argument_check(compiler, opts, call.loc.clone(), a, i.clone()),
-                        _ => Err(CompileErr(
-                            al.clone(),
-                            "@ form with two arguments requires argument and integer".to_string(),
-                        )),
-                    }
                 } else {
                     Err(CompileErr(
                         al.clone(),
