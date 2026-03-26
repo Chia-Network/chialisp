@@ -482,6 +482,71 @@ impl RueConversion {
         vec![packed_args]
     }
 
+    fn intern_function_call(
+        &mut self,
+        context: &ExprTranslationContext,
+        loc: &Srcloc,
+        scope: ScopeId,
+        op_name: &[u8],
+        forms: &[Rc<BodyForm>],
+        tail: Option<Rc<BodyForm>>,
+    ) -> Result<HirId, CompileErr> {
+        let function = self.intern_expr_hir(context, scope, &forms[0])?;
+
+        let mut args = Vec::new();
+        for arg in forms.iter().skip(1) {
+            args.push(self.intern_expr_hir(context, scope, arg)?);
+        }
+        let tail_arg = if let Some(tail_expr) = tail.as_ref() {
+            Some(self.intern_expr_hir(context, scope, tail_expr)?)
+        } else {
+            None
+        };
+
+        let mut nil_terminated = tail_arg.is_none();
+        let mut rewritten_inline = false;
+        match self.function_kind_by_name(op_name) {
+            Some(PredeclaredSymbolKind::InlineDefunNormalArgs(fixed_args)) => {
+                args = self.normalize_inline_normal_call_args(
+                    loc,
+                    &fixed_args,
+                    &args,
+                    tail_arg,
+                )?;
+                rewritten_inline = true;
+                nil_terminated = true;
+            }
+            Some(PredeclaredSymbolKind::InlineDefunImproperListArgs(prefix, _tail)) => {
+                args = self.normalize_inline_improper_call_args(
+                    loc,
+                    prefix.len(),
+                    &args,
+                    tail_arg,
+                )?;
+                rewritten_inline = true;
+                nil_terminated = true;
+            }
+            Some(PredeclaredSymbolKind::InlineDefunTreeArgs) => {
+                args = self.normalize_inline_tree_call_args(&args, tail_arg);
+                rewritten_inline = true;
+                nil_terminated = true;
+            }
+            _ => {}
+        }
+
+        if !rewritten_inline {
+            if let Some(t) = tail_arg {
+                args.push(t);
+                nil_terminated = false;
+            }
+        }
+        return Ok(self.db.alloc_hir(Hir::FunctionCall(FunctionCall {
+            function,
+            args,
+            nil_terminated,
+        })));
+    }
+
     fn intern_expr_hir(
         &mut self,
         context: &ExprTranslationContext,
@@ -520,203 +585,149 @@ impl RueConversion {
                     return Err(rue_err(e.loc(), "empty call expression"));
                 }
 
-                let op_name = if let BodyForm::Value(SExp::Atom(_, atom)) = &*forms[0] {
-                    atom.as_slice()
-                } else {
-                    return Err(CompileErr(
-                        forms[0].loc(),
-                        "called object must be an identifier".to_string(),
-                    ));
-                };
-
-                if op_name == b"f" && forms.len() == 2 {
-                    let inner = self.intern_expr_hir(context, scope, &forms[1])?;
-                    return Ok(self.db.alloc_hir(Hir::Unary(UnaryOp::First, inner)));
-                }
-                if op_name == b"r" && forms.len() == 2 {
-                    let inner = self.intern_expr_hir(context, scope, &forms[1])?;
-                    return Ok(self.db.alloc_hir(Hir::Unary(UnaryOp::Rest, inner)));
-                }
-                if op_name == b"c" && forms.len() == 3 {
-                    let left = self.intern_expr_hir(context, scope, &forms[1])?;
-                    let right = self.intern_expr_hir(context, scope, &forms[2])?;
-                    return Ok(self.db.alloc_hir(Hir::Pair(left, right)));
-                }
-                if op_name == b"com" && forms.len() == 2 {
-                    // com is special.  It wraps code which will be callable.
-                    let com_symbol_name = decode_string(&gensym(b"_$_com_".to_vec()));
-                    let new_scope = self.db.alloc_scope(Scope::new(Some(scope)));
-                    let value_hir = self.intern_expr_hir(context, new_scope, &forms[1])?;
-                    let com_symbol = self.db.alloc_symbol(Symbol::Function(FunctionSymbol {
-                        name: Some(Name::new(com_symbol_name.clone(), None)),
-                        ty: self.any_type_id,
-                        scope,
-                        vars: Default::default(),
-                        parameters: IndexMap::default(),
-                        nil_terminated: true,
-                        return_type: self.any_type_id,
-                        body: value_hir,
-                        kind: FunctionKind::BinaryTree,
-                    }));
-                    self.db.scope_mut(scope).insert_symbol(
-                        com_symbol_name.clone(),
-                        com_symbol,
-                        false,
-                    );
-                    return Ok(self.db.alloc_hir(Hir::Reference(com_symbol)));
-                }
-                if op_name == b"@" {
-                    // At forms.
-                    let bad_format_error = Err(CompileErr(
-                        loc.clone(),
-                        "Only (@ name parents) and (@ path) forms are allowed for @ invocation."
-                            .to_string(),
-                    ));
-                    if forms.len() < 2 {
-                        return bad_format_error;
-                    }
-
-                    let get_integer = |i: usize| {
-                        if let BodyForm::Value(SExp::Integer(_, int_value))
-                        | BodyForm::Quoted(SExp::Integer(_, int_value)) = &*forms[i]
-                        {
-                            Ok(int_value.clone())
-                        } else {
-                            Err(CompileErr(loc.clone(), format!("@ invocation form requires an integer argument at position {i}")))
-                        }
-                    };
-
-                    let two = 2_i32.to_bigint().unwrap();
-                    let (path, name) = if forms.len() == 2 {
-                        // @ <number> env reference.
-                        let int_value = get_integer(1)?;
-                        if int_value.is_multiple_of(&two) {
-                            return Err(CompileErr(
-                                loc.clone(),
-                                "rue mode doesn't allow peeking at the program's environment"
-                                    .to_string(),
-                            ));
-                        }
-
-                        (int_value / two, None)
-                    } else if forms.len() == 3 {
-                        // @ <name> <number> parent reference.
-                        let int_value = get_integer(2)?;
-                        let BodyForm::Value(SExp::Atom(_, arg_name)) = &*forms[1] else {
-                            return Err(CompileErr(
-                                loc.clone(),
-                                "Name must be an atom in (@ name parents) forms.".to_string(),
-                            ));
-                        };
-
-                        (int_value, Some(arg_name.to_vec()))
-                    } else {
-                        return bad_format_error;
-                    };
-
-                    let function_ref =
-                        self.create_env_path_helper(context, loc, scope, path, name)?;
-
-                    return Ok(self.db.alloc_hir(Hir::FunctionCall(FunctionCall {
-                        function: function_ref,
-                        args: vec![],
-                        nil_terminated: true,
-                    })));
-                }
-                if op_name == b"softfork" && forms.len() == 5 {
-                    // Softfork is special here since it isn't an opcode rue lets us produce
-                    // directly.
-                    let softfork_args = Rc::new(body_list(loc.clone(), &forms[1..]));
-                    return self.intern_expr_hir(
-                        context,
-                        scope,
-                        &BodyForm::Call(
-                            loc.clone(),
-                            vec![
-                                Rc::new(BodyForm::Value(SExp::Atom(loc.clone(), vec![2]))),
-                                Rc::new(BodyForm::Quoted(enlist(
-                                    loc.clone(),
-                                    &[
-                                        Rc::new(SExp::Atom(loc.clone(), vec![36])),
-                                        Rc::new(SExp::Atom(loc.clone(), vec![2])),
-                                        Rc::new(SExp::Atom(loc.clone(), vec![5])),
-                                        Rc::new(SExp::Atom(loc.clone(), vec![11])),
-                                        Rc::new(SExp::Atom(loc.clone(), vec![23])),
-                                    ],
-                                ))),
-                                softfork_args,
-                            ],
-                            None,
-                        ),
-                    );
-                }
-                if let Some(prim) = match_prim(self.opts.clone(), op_name) {
-                    return self.primcall(context, scope, prim, loc, forms);
-                }
-
-                let function_result = self.intern_expr_hir(context, scope, &forms[0]);
-                let function = match &function_result {
-                    Ok(f) => f,
-                    Err(_e) => {
-                        if let Some(prim) = match_prim(self.opts.clone(), op_name) {
-                            return self.primcall(context, scope, prim, loc, forms);
-                        }
-                        return function_result;
-                    }
-                };
-
-                let mut args = Vec::new();
-                for arg in forms.iter().skip(1) {
-                    args.push(self.intern_expr_hir(context, scope, arg)?);
-                }
-                let tail_arg = if let Some(tail_expr) = tail.as_ref() {
-                    Some(self.intern_expr_hir(context, scope, tail_expr)?)
+                let op_atom = if let BodyForm::Value(SExp::Atom(_, atom)) = &*forms[0] {
+                    Some(atom.as_slice())
                 } else {
                     None
                 };
 
-                let mut nil_terminated = tail_arg.is_none();
-                let mut rewritten_inline = false;
-                match self.function_kind_by_name(op_name) {
-                    Some(PredeclaredSymbolKind::InlineDefunNormalArgs(fixed_args)) => {
-                        args = self.normalize_inline_normal_call_args(
-                            loc,
-                            &fixed_args,
-                            &args,
-                            tail_arg,
-                        )?;
-                        rewritten_inline = true;
-                        nil_terminated = true;
+                if let Some(op_name) = op_atom {
+                    if op_name == b"f" && forms.len() == 2 {
+                        let inner = self.intern_expr_hir(context, scope, &forms[1])?;
+                        return Ok(self.db.alloc_hir(Hir::Unary(UnaryOp::First, inner)));
                     }
-                    Some(PredeclaredSymbolKind::InlineDefunImproperListArgs(prefix, _tail)) => {
-                        args = self.normalize_inline_improper_call_args(
-                            loc,
-                            prefix.len(),
-                            &args,
-                            tail_arg,
-                        )?;
-                        rewritten_inline = true;
-                        nil_terminated = true;
+                    if op_name == b"r" && forms.len() == 2 {
+                        let inner = self.intern_expr_hir(context, scope, &forms[1])?;
+                        return Ok(self.db.alloc_hir(Hir::Unary(UnaryOp::Rest, inner)));
                     }
-                    Some(PredeclaredSymbolKind::InlineDefunTreeArgs) => {
-                        args = self.normalize_inline_tree_call_args(&args, tail_arg);
-                        rewritten_inline = true;
-                        nil_terminated = true;
+                    if op_name == b"c" && forms.len() == 3 {
+                        let left = self.intern_expr_hir(context, scope, &forms[1])?;
+                        let right = self.intern_expr_hir(context, scope, &forms[2])?;
+                        return Ok(self.db.alloc_hir(Hir::Pair(left, right)));
                     }
-                    _ => {}
+                    if op_name == b"com" && forms.len() == 2 {
+                        // com is special.  It wraps code which will be callable.
+                        let com_symbol_name = decode_string(&gensym(b"_$_com_".to_vec()));
+                        let new_scope = self.db.alloc_scope(Scope::new(Some(scope)));
+                        let value_hir = self.intern_expr_hir(context, new_scope, &forms[1])?;
+                        let com_symbol = self.db.alloc_symbol(Symbol::Function(FunctionSymbol {
+                            name: Some(Name::new(com_symbol_name.clone(), None)),
+                            ty: self.any_type_id,
+                            scope,
+                            vars: Default::default(),
+                            parameters: IndexMap::default(),
+                            nil_terminated: true,
+                            return_type: self.any_type_id,
+                            body: value_hir,
+                            kind: FunctionKind::BinaryTree,
+                        }));
+                        self.db.scope_mut(scope).insert_symbol(
+                            com_symbol_name.clone(),
+                            com_symbol,
+                            false,
+                        );
+                        return Ok(self.db.alloc_hir(Hir::Reference(com_symbol)));
+                    }
+                    if op_name == b"@" {
+                        // At forms.
+                        let bad_format_error = Err(CompileErr(
+                            loc.clone(),
+                            "Only (@ name parents) and (@ path) forms are allowed for @ invocation."
+                                .to_string(),
+                        ));
+                        if forms.len() < 2 {
+                            return bad_format_error;
+                        }
+
+                        let get_integer = |i: usize| {
+                            if let BodyForm::Value(SExp::Integer(_, int_value))
+                            | BodyForm::Quoted(SExp::Integer(_, int_value)) = &*forms[i]
+                            {
+                                Ok(int_value.clone())
+                            } else {
+                                Err(CompileErr(loc.clone(), format!("@ invocation form requires an integer argument at position {i}")))
+                            }
+                        };
+
+                        let two = 2_i32.to_bigint().unwrap();
+                        let (path, name) = if forms.len() == 2 {
+                            // @ <number> env reference.
+                            let int_value = get_integer(1)?;
+                            if int_value.is_multiple_of(&two) {
+                                return Err(CompileErr(
+                                    loc.clone(),
+                                    "rue mode doesn't allow peeking at the program's environment"
+                                        .to_string(),
+                                ));
+                            }
+
+                            (int_value / two, None)
+                        } else if forms.len() == 3 {
+                            // @ <name> <number> parent reference.
+                            let int_value = get_integer(2)?;
+                            let BodyForm::Value(SExp::Atom(_, arg_name)) = &*forms[1] else {
+                                return Err(CompileErr(
+                                    loc.clone(),
+                                    "Name must be an atom in (@ name parents) forms.".to_string(),
+                                ));
+                            };
+
+                            (int_value, Some(arg_name.to_vec()))
+                        } else {
+                            return bad_format_error;
+                        };
+
+                        let function_ref =
+                            self.create_env_path_helper(context, loc, scope, path, name)?;
+
+                        return Ok(self.db.alloc_hir(Hir::FunctionCall(FunctionCall {
+                            function: function_ref,
+                            args: vec![],
+                            nil_terminated: true,
+                        })));
+                    }
+                    if op_name == b"softfork" && forms.len() == 5 {
+                        // Softfork is special here since it isn't an opcode rue lets us produce
+                        // directly.
+                        let softfork_args = Rc::new(body_list(loc.clone(), &forms[1..]));
+                        return self.intern_expr_hir(
+                            context,
+                            scope,
+                            &BodyForm::Call(
+                                loc.clone(),
+                                vec![
+                                    Rc::new(BodyForm::Value(SExp::Atom(loc.clone(), vec![2]))),
+                                    Rc::new(BodyForm::Quoted(enlist(
+                                        loc.clone(),
+                                        &[
+                                            Rc::new(SExp::Atom(loc.clone(), vec![36])),
+                                            Rc::new(SExp::Atom(loc.clone(), vec![2])),
+                                            Rc::new(SExp::Atom(loc.clone(), vec![5])),
+                                            Rc::new(SExp::Atom(loc.clone(), vec![11])),
+                                            Rc::new(SExp::Atom(loc.clone(), vec![23])),
+                                        ],
+                                    ))),
+                                    softfork_args,
+                                ],
+                                None,
+                            ),
+                        );
+                    }
+                    if let Some(prim) = match_prim(self.opts.clone(), op_name) {
+                        return self.primcall(context, scope, prim, loc, forms);
+                    }
+
+                    return self.intern_function_call(
+                        context,
+                        loc,
+                        scope,
+                        op_name,
+                        forms,
+                        tail.clone(),
+                    );
                 }
 
-                if !rewritten_inline {
-                    if let Some(t) = tail_arg {
-                        args.push(t);
-                        nil_terminated = false;
-                    }
-                }
-                Ok(self.db.alloc_hir(Hir::FunctionCall(FunctionCall {
-                    function: *function,
-                    args,
-                    nil_terminated,
-                })))
+                todo!();
             }
             BodyForm::Let(let_kind, let_data) => {
                 let mut statements = Vec::new();
