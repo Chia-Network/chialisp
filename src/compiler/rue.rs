@@ -514,23 +514,14 @@ impl RueConversion {
         let mut nil_terminated = tail_arg.is_none();
         let mut rewritten_inline = false;
         match self.function_kind_by_name(op_name) {
-            Some(PredeclaredSymbolKind::InlineDefunNormalArgs(fixed_args)) => {
-                args = self.normalize_inline_normal_call_args(
-                    loc,
-                    &fixed_args,
-                    &args,
-                    tail_arg,
-                )?;
-                rewritten_inline = true;
-                nil_terminated = true;
+            Some(PredeclaredSymbolKind::InlineDefunNormalArgs(_fixed_args)) => {
+                // Preserve call shape for normal-arg inline calls so selectors based on
+                // argument ancestry (e.g. (@ name parent)) observe the same environment
+                // structure as non-inline defuns.
             }
             Some(PredeclaredSymbolKind::InlineDefunImproperListArgs(prefix, _tail)) => {
-                args = self.normalize_inline_improper_call_args(
-                    loc,
-                    prefix.len(),
-                    &args,
-                    tail_arg,
-                )?;
+                args =
+                    self.normalize_inline_improper_call_args(loc, prefix.len(), &args, tail_arg)?;
                 rewritten_inline = true;
                 nil_terminated = true;
             }
