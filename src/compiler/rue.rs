@@ -495,7 +495,17 @@ impl RueConversion {
         forms: &[Rc<BodyForm>],
         tail: Option<Rc<BodyForm>>,
     ) -> Result<Option<HirId>, CompileErr> {
-        let function_result = self.intern_expr_hir(context, scope, &forms[0]);
+        eprintln!("calling {}", decode_string(op_name));
+        let function_result =
+            if let Some(mut inline_data) = self.inlines.get(op_name).cloned() {
+                let inline_carrier = self.db.alloc_scope(Scope::new(Some(scope)));
+                inline_data.name = gensym(b"__inline__".to_vec());
+                eprintln!("expanding local inline function {}", decode_string(&inline_data.name));
+                self.local_function(inline_carrier, &inline_data)
+            } else {
+                self.intern_expr_hir(context, scope, &forms[0])
+            };
+
         let Ok(function) = function_result else {
             return Ok(None);
         };
@@ -1294,6 +1304,9 @@ impl RueConversion {
                 for (arg_index, p) in args.iter().enumerate() {
                     install_argument(&mut plist, arg_index, p);
                 }
+                if let Some(args_symbol) = lookup_symbol_in_scope(&self.db, scope_id, "_$_args__") {
+                    self.install_env_alias_helpers(scope_id, args_symbol);
+                }
             }
             PredeclaredSymbolKind::InlineDefunImproperListArgs(prefix, tail) => {
                 // Improper argument list for inline.
@@ -1551,9 +1564,9 @@ impl RueConversion {
                     self.inlines.insert(data.name.clone(), *data.clone());
                 } else {
                     self.functions.insert(data.name.clone(), *data.clone());
-                }
-                if let Some(predecl) = self.predeclared_helpers.get(&data.name) {
-                    self.create_defun(*inline, predecl.symbol_id, predecl.scope_id, data)?;
+                    if let Some(predecl) = self.predeclared_helpers.get(&data.name) {
+                        self.create_defun(*inline, predecl.symbol_id, predecl.scope_id, data)?;
+                    }
                 }
             }
         }
