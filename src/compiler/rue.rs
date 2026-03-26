@@ -415,25 +415,6 @@ impl RueConversion {
         Ok(self.db.alloc_hir(Hir::Unary(UnaryOp::First, tail_element)))
     }
 
-    fn normalize_inline_normal_call_args(
-        &mut self,
-        callsite: &Srcloc,
-        fixed_args: &[SExp],
-        positional_args: &[HirId],
-        tail: Option<HirId>,
-    ) -> Result<Vec<HirId>, CompileErr> {
-        let mut rewritten_args = Vec::with_capacity(fixed_args.len());
-        for index in 0..fixed_args.len() {
-            rewritten_args.push(self.choose_inline_argument(
-                callsite,
-                positional_args,
-                tail,
-                index,
-            )?);
-        }
-        Ok(rewritten_args)
-    }
-
     fn normalize_inline_improper_call_args(
         &mut self,
         callsite: &Srcloc,
@@ -495,7 +476,7 @@ impl RueConversion {
             let inline_carrier = self.db.alloc_scope(Scope::new(Some(scope)));
             inline_data.name = gensym(b"__inline__".to_vec());
             self.local_function(inline_carrier, &inline_data)?
-        } else if let Some(predecl) = self.predeclared_helpers.get(op_name).clone() {
+        } else if let Some(predecl) = self.predeclared_helpers.get(op_name) {
             self.db.alloc_hir(Hir::Reference(predecl.symbol_id))
         } else {
             return Ok(None);
@@ -539,11 +520,11 @@ impl RueConversion {
                 nil_terminated = false;
             }
         }
-        return Ok(Some(self.db.alloc_hir(Hir::FunctionCall(FunctionCall {
+        Ok(Some(self.db.alloc_hir(Hir::FunctionCall(FunctionCall {
             function,
             args,
             nil_terminated,
-        }))));
+        }))))
     }
 
     fn local_function(&mut self, scope: ScopeId, data: &DefunData) -> Result<HirId, CompileErr> {
