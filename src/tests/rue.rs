@@ -767,7 +767,7 @@ fn test_rue_if_in_inline() {
             program.clone(),
             "(1)".to_string()
         ])
-            .trim(),
+        .trim(),
         "107"
     );
     assert_eq!(

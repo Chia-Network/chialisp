@@ -13,8 +13,9 @@ use id_arena::Arena;
 use indexmap::IndexMap;
 use rue_diagnostic::Name;
 use rue_hir::{
-    ConstantSymbol, Database, DependencyGraph, Environment, FunctionCall, FunctionKind, FunctionSymbol, Hir, HirId,
-    Lowerer, ParameterSymbol, Scope, ScopeId, Symbol, SymbolId, UnaryOp, Value,
+    ConstantSymbol, Database, DependencyGraph, Environment, FunctionCall, FunctionKind,
+    FunctionSymbol, Hir, HirId, Lowerer, ParameterSymbol, Scope, ScopeId, Symbol, SymbolId,
+    UnaryOp, Value,
 };
 use rue_lir::{ClvmOp, Lir};
 use rue_options::CompilerOptions as RueCompilerOptions;
@@ -522,7 +523,10 @@ impl RueConversion {
                 let op_name = if let BodyForm::Value(SExp::Atom(_, atom)) = &*forms[0] {
                     atom.as_slice()
                 } else {
-                    return Err(CompileErr(forms[0].loc(), "called object must be an identifier".to_string()));
+                    return Err(CompileErr(
+                        forms[0].loc(),
+                        "called object must be an identifier".to_string(),
+                    ));
                 };
 
                 if op_name == b"f" && forms.len() == 2 {
@@ -563,14 +567,18 @@ impl RueConversion {
                 }
                 if op_name == b"@" {
                     // At forms.
-                    let bad_format_error = Err(CompileErr(loc.clone(), "Only (@ name parents) and (@ path) forms are allowed for @ invocation.".to_string()));
+                    let bad_format_error = Err(CompileErr(
+                        loc.clone(),
+                        "Only (@ name parents) and (@ path) forms are allowed for @ invocation."
+                            .to_string(),
+                    ));
                     if forms.len() < 2 {
                         return bad_format_error;
                     }
 
                     let get_integer = |i: usize| {
                         if let BodyForm::Value(SExp::Integer(_, int_value))
-                            | BodyForm::Quoted(SExp::Integer(_, int_value)) = &*forms[i]
+                        | BodyForm::Quoted(SExp::Integer(_, int_value)) = &*forms[i]
                         {
                             Ok(int_value.clone())
                         } else {
@@ -1269,35 +1277,34 @@ impl RueConversion {
         scope_id: ScopeId,
         data: &DefunData,
     ) -> Result<(), CompileErr> {
-        let mut install_argument =
-            |plist: &mut IndexMap<String, SymbolId>, param_index: usize, param_sexp: &SExp| {
-                if let SExp::Atom(ploc, atom_name) = param_sexp {
-                    let param_name = decode_string(atom_name);
-                    let param_symbol = self.db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
-                        name: Some(Name::new(
-                            param_name.clone(),
-                            Some(self.to_rue_srcloc(ploc.clone())),
-                        )),
-                        ty: self.any_type_id,
-                    }));
-                    self.db.scope_mut(scope_id).insert_symbol(
+        let mut install_argument = |plist: &mut IndexMap<String, SymbolId>,
+                                    param_index: usize,
+                                    param_sexp: &SExp| {
+            if let SExp::Atom(ploc, atom_name) = param_sexp {
+                let param_name = decode_string(atom_name);
+                let param_symbol = self.db.alloc_symbol(Symbol::Parameter(ParameterSymbol {
+                    name: Some(Name::new(
                         param_name.clone(),
-                        param_symbol,
-                        false,
-                    );
-                    plist.insert(param_name, param_symbol);
-                } else {
-                    // Inline helpers may still destructure argument trees.
-                    // Bind the incoming argument, then create accessor helpers for leaves.
-                    let param_name = format!("_$_arg_{param_index}");
-                    self.create_argument_helpers(
-                        plist,
-                        &param_name,
-                        Rc::new(param_sexp.clone()),
-                        scope_id,
-                    );
-                }
-            };
+                        Some(self.to_rue_srcloc(ploc.clone())),
+                    )),
+                    ty: self.any_type_id,
+                }));
+                self.db
+                    .scope_mut(scope_id)
+                    .insert_symbol(param_name.clone(), param_symbol, false);
+                plist.insert(param_name, param_symbol);
+            } else {
+                // Inline helpers may still destructure argument trees.
+                // Bind the incoming argument, then create accessor helpers for leaves.
+                let param_name = format!("_$_arg_{param_index}");
+                self.create_argument_helpers(
+                    plist,
+                    &param_name,
+                    Rc::new(param_sexp.clone()),
+                    scope_id,
+                );
+            }
+        };
 
         let mut plist: IndexMap<String, SymbolId> = IndexMap::default();
         match &function_kind(inline, data) {
@@ -1318,24 +1325,14 @@ impl RueConversion {
                     install_argument(&mut plist, arg_index, p);
                 }
                 install_argument(&mut plist, prefix.len(), tail);
-                self.create_argument_helpers(
-                    &mut plist,
-                    "_$_args__",
-                    data.args.clone(),
-                    scope_id,
-                );
+                self.create_argument_helpers(&mut plist, "_$_args__", data.args.clone(), scope_id);
             }
             _ => {
                 // Chialisp allows an arbitrary argument tree which specifies the exact environment
                 // shape. Rue uses either sequential or tree shaped and choose the tree shape at
                 // lowering time. The right approach is to use a single argument in BinaryTree
                 // mode and make accessors for the individual destructurings chialisp would allow.
-                self.create_argument_helpers(
-                    &mut plist,
-                    "_$_args__",
-                    data.args.clone(),
-                    scope_id,
-                );
+                self.create_argument_helpers(&mut plist, "_$_args__", data.args.clone(), scope_id);
             }
         }
 
