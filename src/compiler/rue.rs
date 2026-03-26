@@ -1198,18 +1198,6 @@ impl RueConversion {
                 unresolved_body,
             )));
 
-        let kind = if inline {
-            if let Some(args) = data.args.proper_list() {
-                PredeclaredSymbolKind::InlineDefunNormalArgs(args)
-            } else if let Some((args, tail)) = improper_list(data.args.clone()) {
-                PredeclaredSymbolKind::InlineDefunImproperListArgs(args, tail)
-            } else {
-                PredeclaredSymbolKind::InlineDefunTreeArgs
-            }
-        } else {
-            PredeclaredSymbolKind::Defun
-        };
-
         PredeclaredHelperSymbol {
             symbol_id: function_sym,
             scope_id: function_scope,
@@ -1314,6 +1302,9 @@ impl RueConversion {
                 // just use each argument.
                 for (arg_index, p) in args.iter().enumerate() {
                     install_argument(&mut plist, arg_index, p);
+                }
+                if let Some(args_symbol) = lookup_symbol_in_scope(&self.db, scope_id, "_$_args__") {
+                    self.install_env_alias_helpers(scope_id, args_symbol);
                 }
             }
             PredeclaredSymbolKind::InlineDefunImproperListArgs(prefix, tail) => {
