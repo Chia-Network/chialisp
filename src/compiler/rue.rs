@@ -230,6 +230,19 @@ fn match_prim(_opts: Rc<dyn CompilerOpts>, prim: &[u8]) -> Option<ClvmOp> {
     None
 }
 
+fn function_kind(inline: bool, data: &DefunData) -> PredeclaredSymbolKind {
+    if !inline {
+        return PredeclaredSymbolKind::Defun;
+    }
+    if let Some(args) = data.args.proper_list() {
+        PredeclaredSymbolKind::InlineDefunNormalArgs(args)
+    } else if let Some((args, tail)) = improper_list(data.args.clone()) {
+        PredeclaredSymbolKind::InlineDefunImproperListArgs(args, tail)
+    } else {
+        PredeclaredSymbolKind::InlineDefunTreeArgs
+    }
+}
+
 fn body_cons(loc: Srcloc, left: Rc<BodyForm>, right: Rc<BodyForm>) -> BodyForm {
     BodyForm::Call(
         loc.clone(),
@@ -279,7 +292,6 @@ enum PredeclaredSymbolKind {
 struct PredeclaredHelperSymbol {
     symbol_id: SymbolId,
     scope_id: ScopeId,
-    kind: PredeclaredSymbolKind,
 }
 type PredeclaredHelperSymbols = HashMap<Vec<u8>, PredeclaredHelperSymbol>;
 
@@ -295,6 +307,8 @@ struct RueConversion {
     opts: Rc<dyn CompilerOpts>,
     text: Arc<str>,
     any_type_id: TypeId,
+    inlines: HashMap<Vec<u8>, DefunData>,
+    functions: HashMap<Vec<u8>, DefunData>,
     predeclared_helpers: PredeclaredHelperSymbols,
     env_path_helpers: HashMap<PathHelperCacheKey, HirId>,
     context_stack: Vec<BodyForm>,
@@ -316,6 +330,8 @@ impl RueConversion {
             predeclared_helpers: PredeclaredHelperSymbols::default(),
             env_path_helpers: HashMap::default(),
             context_stack: Vec::default(),
+            inlines: HashMap::default(),
+            functions: HashMap::default(),
         }
     }
 
@@ -363,13 +379,14 @@ impl RueConversion {
         Ok(self.db.alloc_hir(Hir::ClvmOp(clvm_op, result)))
     }
 
-    fn predeclared_kind_for_function_hir(&self, function: HirId) -> Option<PredeclaredSymbolKind> {
-        let Hir::Reference(target_symbol) = self.db.hir(function) else {
-            return None;
-        };
-        self.predeclared_helpers
-            .values()
-            .find_map(|helper| (helper.symbol_id == *target_symbol).then_some(helper.kind.clone()))
+    fn function_kind_by_name(&self, name: &[u8]) -> Option<PredeclaredSymbolKind> {
+        if let Some(data) = self.functions.get(name) {
+            Some(function_kind(false, data))
+        } else if let Some(data) = self.inlines.get(name) {
+            Some(function_kind(true, data))
+        } else {
+            None
+        }
     }
 
     fn apply_rest_n(&mut self, value: HirId, count: usize) -> HirId {
@@ -469,6 +486,66 @@ impl RueConversion {
         vec![packed_args]
     }
 
+    fn intern_function_call(
+        &mut self,
+        context: &ExprTranslationContext,
+        loc: &Srcloc,
+        scope: ScopeId,
+        op_name: &[u8],
+        forms: &[Rc<BodyForm>],
+        tail: Option<Rc<BodyForm>>,
+    ) -> Result<Option<HirId>, CompileErr> {
+        let function_result = self.intern_expr_hir(context, scope, &forms[0]);
+        let Ok(function) = function_result else {
+            return Ok(None);
+        };
+
+        let mut args = Vec::new();
+        for arg in forms.iter().skip(1) {
+            args.push(self.intern_expr_hir(context, scope, arg)?);
+        }
+        let tail_arg = if let Some(tail_expr) = tail.as_ref() {
+            Some(self.intern_expr_hir(context, scope, tail_expr)?)
+        } else {
+            None
+        };
+
+        let mut nil_terminated = tail_arg.is_none();
+        let mut rewritten_inline = false;
+
+        match self.function_kind_by_name(&op_name) {
+            Some(PredeclaredSymbolKind::InlineDefunNormalArgs(fixed_args)) => {
+                args = self.normalize_inline_normal_call_args(loc, &fixed_args, &args, tail_arg)?;
+                rewritten_inline = true;
+                nil_terminated = true;
+            }
+            Some(PredeclaredSymbolKind::InlineDefunImproperListArgs(prefix, _tail)) => {
+                args =
+                    self.normalize_inline_improper_call_args(loc, prefix.len(), &args, tail_arg)?;
+                rewritten_inline = true;
+                nil_terminated = true;
+            }
+            Some(PredeclaredSymbolKind::InlineDefunTreeArgs) => {
+                args = self.normalize_inline_tree_call_args(&args, tail_arg);
+                rewritten_inline = true;
+                nil_terminated = true;
+            }
+            _ => {}
+        }
+
+        if !rewritten_inline {
+            if let Some(t) = tail_arg {
+                args.push(t);
+                nil_terminated = false;
+            }
+        }
+        Ok(Some(self.db.alloc_hir(Hir::FunctionCall(FunctionCall {
+            function: function,
+            args,
+            nil_terminated,
+        }))))
+    }
+
     fn intern_expr_hir(
         &mut self,
         context: &ExprTranslationContext,
@@ -535,7 +612,22 @@ impl RueConversion {
                 } else {
                     None
                 };
+
                 if let Some(op_name) = op_atom {
+                    if let Some(res) = self.intern_function_call(
+                        context,
+                        &loc,
+                        scope,
+                        op_name,
+                        &forms,
+                        tail.clone(),
+                    )? {
+                        return Ok(res);
+                    }
+
+                    if let Some(prim) = match_prim(self.opts.clone(), op_name) {
+                        return self.primcall(context, scope, prim, loc, forms);
+                    }
                     if op_name == b"f" && forms.len() == 2 {
                         let inner = self.intern_expr_hir(context, scope, &forms[1])?;
                         return Ok(self.db.alloc_hir(Hir::Unary(UnaryOp::First, inner)));
@@ -658,73 +750,10 @@ impl RueConversion {
                     }
                 }
 
-                let function_result = self.intern_expr_hir(context, scope, &forms[0]);
-                let function = match &function_result {
-                    Ok(f) => f,
-                    Err(_e) => {
-                        if let Some(atom) = &op_atom {
-                            if let Some(prim) = match_prim(self.opts.clone(), atom) {
-                                return self.primcall(context, scope, prim, loc, forms);
-                            }
-                        }
-                        return function_result;
-                    }
-                };
-
-                let mut args = Vec::new();
-                for arg in forms.iter().skip(1) {
-                    args.push(self.intern_expr_hir(context, scope, arg)?);
-                }
-                let tail_arg = if let Some(tail_expr) = tail.as_ref() {
-                    Some(self.intern_expr_hir(context, scope, tail_expr)?)
-                } else {
-                    None
-                };
-
-                let mut nil_terminated = tail_arg.is_none();
-                let mut rewritten_inline = false;
-                if let Some(predeclared_kind) = self.predeclared_kind_for_function_hir(*function) {
-                    match predeclared_kind {
-                        PredeclaredSymbolKind::InlineDefunNormalArgs(fixed_args) => {
-                            args = self.normalize_inline_normal_call_args(
-                                loc,
-                                &fixed_args,
-                                &args,
-                                tail_arg,
-                            )?;
-                            rewritten_inline = true;
-                            nil_terminated = true;
-                        }
-                        PredeclaredSymbolKind::InlineDefunImproperListArgs(prefix, _tail) => {
-                            args = self.normalize_inline_improper_call_args(
-                                loc,
-                                prefix.len(),
-                                &args,
-                                tail_arg,
-                            )?;
-                            rewritten_inline = true;
-                            nil_terminated = true;
-                        }
-                        PredeclaredSymbolKind::InlineDefunTreeArgs => {
-                            args = self.normalize_inline_tree_call_args(&args, tail_arg);
-                            rewritten_inline = true;
-                            nil_terminated = true;
-                        }
-                        _ => {}
-                    }
-                }
-
-                if !rewritten_inline {
-                    if let Some(t) = tail_arg {
-                        args.push(t);
-                        nil_terminated = false;
-                    }
-                }
-                Ok(self.db.alloc_hir(Hir::FunctionCall(FunctionCall {
-                    function: *function,
-                    args,
-                    nil_terminated,
-                })))
+                Err(CompileErr(
+                    loc.clone(),
+                    format!("unknown callable {}", forms[0].to_sexp()),
+                ))
             }
             BodyForm::Let(let_kind, let_data) => {
                 let mut statements = Vec::new();
@@ -877,7 +906,6 @@ impl RueConversion {
                 let description = PredeclaredHelperSymbol {
                     symbol_id,
                     scope_id,
-                    kind: PredeclaredSymbolKind::Defun,
                 };
                 self.predeclared_helpers.insert(name.to_vec(), description);
                 self.create_defun(
@@ -1171,22 +1199,9 @@ impl RueConversion {
                 unresolved_body,
             )));
 
-        let kind = if inline {
-            if let Some(args) = data.args.proper_list() {
-                PredeclaredSymbolKind::InlineDefunNormalArgs(args)
-            } else if let Some((args, tail)) = improper_list(data.args.clone()) {
-                PredeclaredSymbolKind::InlineDefunImproperListArgs(args, tail)
-            } else {
-                PredeclaredSymbolKind::InlineDefunTreeArgs
-            }
-        } else {
-            PredeclaredSymbolKind::Defun
-        };
-
         PredeclaredHelperSymbol {
             symbol_id: function_sym,
             scope_id: function_scope,
-            kind,
         }
     }
 
@@ -1237,7 +1252,6 @@ impl RueConversion {
                     PredeclaredHelperSymbol {
                         symbol_id: constant_sym,
                         scope_id: main_scope,
-                        kind: PredeclaredSymbolKind::Constant,
                     },
                 );
             }
@@ -1287,7 +1301,7 @@ impl RueConversion {
             };
 
         let mut plist: IndexMap<String, SymbolId> = IndexMap::default();
-        match &predecl.kind {
+        match &function_kind(inline, data) {
             PredeclaredSymbolKind::InlineDefunNormalArgs(args) => {
                 // In the case of inlines, it's appropriate to try to match the arguments to
                 // positions as well as possible.  If the parameter list is a proper list, we can
@@ -1539,6 +1553,11 @@ impl RueConversion {
             // Macros and other forms were handled during preprocessing and other
             // passes before code generation.
             if let HelperForm::Defun(inline, data) = &h {
+                if *inline {
+                    self.inlines.insert(data.name.clone(), *data.clone());
+                } else {
+                    self.functions.insert(data.name.clone(), *data.clone());
+                }
                 self.create_defun(*inline, data)?;
             }
         }
