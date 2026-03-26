@@ -778,3 +778,15 @@ fn test_rue_parent_access_2() {
         "((103) (99 103))"
     );
 }
+
+#[test]
+fn test_rue_argument_parent_access_2_inline() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (X Y) (include *standard-cl-rue1*) (defun-inline F ((C D)) (list (@ D 1) (@ D 2))) (F (list X Y)))".to_string()
+    ]);
+    assert_eq!(
+        do_basic_brun(&vec!["brun".to_string(), program, "(99 103)".to_string()]).trim(),
+        "((103) (99 103))"
+    );
+}
