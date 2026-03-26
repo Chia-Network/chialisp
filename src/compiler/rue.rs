@@ -490,8 +490,16 @@ impl RueConversion {
         op_name: &[u8],
         forms: &[Rc<BodyForm>],
         tail: Option<Rc<BodyForm>>,
-    ) -> Result<HirId, CompileErr> {
-        let function = self.intern_expr_hir(context, scope, &forms[0])?;
+    ) -> Result<Option<HirId>, CompileErr> {
+        let function = if let Some(mut inline_data) = self.inlines.get(op_name).cloned() {
+            let inline_carrier = self.db.alloc_scope(Scope::new(Some(scope)));
+            inline_data.name = gensym(b"__inline__".to_vec());
+            self.local_function(inline_carrier, &inline_data)?
+        } else if let Some(predecl) = self.predeclared_helpers.get(op_name).clone() {
+            self.db.alloc_hir(Hir::Reference(predecl.symbol_id))
+        } else {
+            return Ok(None);
+        };
 
         let mut args = Vec::new();
         for arg in forms.iter().skip(1) {
@@ -540,11 +548,18 @@ impl RueConversion {
                 nil_terminated = false;
             }
         }
-        return Ok(self.db.alloc_hir(Hir::FunctionCall(FunctionCall {
+        return Ok(Some(self.db.alloc_hir(Hir::FunctionCall(FunctionCall {
             function,
             args,
             nil_terminated,
-        })));
+        }))));
+    }
+
+    fn local_function(&mut self, scope: ScopeId, data: &DefunData) -> Result<HirId, CompileErr> {
+        let scope_id = self.db.alloc_scope(Scope::new(Some(scope)));
+        let symbol_id = self.empty_symbol();
+        self.create_defun(false, symbol_id, scope_id, data)?;
+        Ok(self.db.alloc_hir(Hir::Reference(symbol_id)))
     }
 
     fn intern_expr_hir(
@@ -592,6 +607,17 @@ impl RueConversion {
                 };
 
                 if let Some(op_name) = op_atom {
+                    if let Some(res) = self.intern_function_call(
+                        context,
+                        loc,
+                        scope,
+                        op_name,
+                        forms,
+                        tail.clone(),
+                    )? {
+                        return Ok(res);
+                    }
+
                     if op_name == b"f" && forms.len() == 2 {
                         let inner = self.intern_expr_hir(context, scope, &forms[1])?;
                         return Ok(self.db.alloc_hir(Hir::Unary(UnaryOp::First, inner)));
@@ -716,15 +742,6 @@ impl RueConversion {
                     if let Some(prim) = match_prim(self.opts.clone(), op_name) {
                         return self.primcall(context, scope, prim, loc, forms);
                     }
-
-                    return self.intern_function_call(
-                        context,
-                        loc,
-                        scope,
-                        op_name,
-                        forms,
-                        tail.clone(),
-                    );
                 }
 
                 todo!();
@@ -1564,9 +1581,9 @@ impl RueConversion {
                     self.inlines.insert(data.name.clone(), *data.clone());
                 } else {
                     self.functions.insert(data.name.clone(), *data.clone());
-                }
-                if let Some(predecl) = self.predeclared_helpers.get(&data.name) {
-                    self.create_defun(*inline, predecl.symbol_id, predecl.scope_id, data)?;
+                    if let Some(predecl) = self.predeclared_helpers.get(&data.name) {
+                        self.create_defun(*inline, predecl.symbol_id, predecl.scope_id, data)?;
+                    }
                 }
             }
         }
