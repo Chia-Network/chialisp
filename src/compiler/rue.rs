@@ -716,7 +716,10 @@ impl RueConversion {
                     }
                 }
 
-                todo!();
+                Err(CompileErr(
+                    loc.clone(),
+                    format!("No translation for {}", e.to_sexp()),
+                ))
             }
             BodyForm::Let(let_kind, let_data) => {
                 let mut statements = Vec::new();
