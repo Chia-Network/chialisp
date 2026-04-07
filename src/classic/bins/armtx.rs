@@ -138,8 +138,5 @@ fn main() {
 
     let _ = emu_startup_complete.recv().expect("should be able to start emu");
     // Startup done, so we can spawn gdb.
-    let mut p = Popen::create(&["sleep", "5000"], PopenConfig {
-        .. Default::default()
-    }).expect("should be able to start gdb");
     t.join().expect("thread should join successfully");
 }
