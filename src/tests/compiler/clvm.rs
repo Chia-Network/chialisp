@@ -15,7 +15,7 @@ use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero, Bytes, Bytes
 use crate::classic::clvm::casts::{bigint_to_bytes_clvm, bigint_to_bytes_unsigned};
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 
-use crate::compiler::clvm::{parse_and_run, sha256tree};
+use crate::compiler::clvm::{convert_to_clvm_rs, parse_and_run, sha256tree, NewStyleIntConversion};
 use crate::compiler::runtypes::RunFailure;
 use crate::compiler::sexp::{parse_sexp, SExp};
 use crate::compiler::srcloc::Srcloc;
@@ -167,9 +167,9 @@ fn does_number_need_extension_byte(n: Number) -> bool {
 // in a broad way i suppose.
 #[test]
 fn test_random_int_just_the_conversion_functions_and_no_other_things_from_the_stack_1() {
-    let mut rng = ChaChaRng::from_entropy();
+    let mut rng = ChaChaRng::from_os_rng();
     for _ in 1..=200 {
-        let number_spec: RandomClvmNumber = rng.gen();
+        let number_spec: RandomClvmNumber = rng.random();
 
         let to_bytes_clvm = bigint_to_bytes_clvm(&number_spec.intended_value).raw();
         let to_bytes_unsigned = if number_spec.intended_value < bi_zero() {
@@ -229,5 +229,85 @@ fn test_sha256_tree_hash() {
     assert_eq!(
         hash_result,
         "156e86309040ed6bbfee805c9c6ca7eebc140490bd1b97d6d18fb8ebc91fd05a"
+    );
+}
+
+#[test]
+fn test_sha256_integer_0_hash() {
+    let srcloc = Srcloc::start("*test*");
+    let value = Rc::new(SExp::Integer(srcloc, bi_zero()));
+    let hash_result = Bytes::new(Some(BytesFromType::Raw(sha256tree(value)))).hex();
+    assert_eq!(
+        hash_result,
+        "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+    );
+}
+
+#[test]
+fn test_sha256_integer_0_hash_pre_fix() {
+    let srcloc = Srcloc::start("*test*");
+    let value = Rc::new(SExp::Integer(srcloc, bi_zero()));
+    let _old_style = NewStyleIntConversion::new(false);
+    let hash_result = Bytes::new(Some(BytesFromType::Raw(sha256tree(value)))).hex();
+    assert_eq!(
+        hash_result,
+        "47dc540c94ceb704a23875c11273e16bb0b8a87aed84de911f2133568115f254"
+    );
+}
+
+#[test]
+fn test_integer_0_to_clvm() {
+    let srcloc = Srcloc::start("*test*");
+    let value = Rc::new(SExp::Integer(srcloc, bi_zero()));
+    let mut allocator = Allocator::new();
+    let clvm_target = convert_to_clvm_rs(&mut allocator, value).expect("ok");
+    let empty: [u8; 0] = [];
+    let atom = allocator.atom(clvm_target);
+    assert_eq!(atom.as_ref(), &empty);
+}
+
+#[test]
+fn test_integer_hash_255() {
+    let srcloc = Srcloc::start("*test*");
+    let value = Rc::new(SExp::Integer(srcloc, 255_u32.to_bigint().unwrap()));
+    let hash_result = Bytes::new(Some(BytesFromType::Raw(sha256tree(value)))).hex();
+    assert_eq!(
+        hash_result,
+        "b7ae7729555ec6829c579c2602edc6cb94b4ed3d820ddda0a45ac54030f8a53d"
+    );
+}
+
+#[test]
+fn test_integer_hash_255_pre_fix() {
+    let srcloc = Srcloc::start("*test*");
+    let value = Rc::new(SExp::Integer(srcloc, 255_u32.to_bigint().unwrap()));
+    let _old_style = NewStyleIntConversion::new(false);
+    let hash_result = Bytes::new(Some(BytesFromType::Raw(sha256tree(value)))).hex();
+    assert_eq!(
+        hash_result,
+        "b7ae7729555ec6829c579c2602edc6cb94b4ed3d820ddda0a45ac54030f8a53d"
+    );
+}
+
+#[test]
+fn test_integer_hash_m129() {
+    let srcloc = Srcloc::start("*test*");
+    let value = Rc::new(SExp::Integer(srcloc, -129_i32.to_bigint().unwrap()));
+    let hash_result = Bytes::new(Some(BytesFromType::Raw(sha256tree(value)))).hex();
+    assert_eq!(
+        hash_result,
+        "5a0c1fec64751e82c0d4861d0bc19c7580525d2f47667956bbd9d79e260aae00"
+    );
+}
+
+#[test]
+fn test_integer_hash_m129_pre_fix() {
+    let srcloc = Srcloc::start("*test*");
+    let value = Rc::new(SExp::Integer(srcloc, -129_i32.to_bigint().unwrap()));
+    let _old_style = NewStyleIntConversion::new(false);
+    let hash_result = Bytes::new(Some(BytesFromType::Raw(sha256tree(value)))).hex();
+    assert_eq!(
+        hash_result,
+        "5a0c1fec64751e82c0d4861d0bc19c7580525d2f47667956bbd9d79e260aae00"
     );
 }

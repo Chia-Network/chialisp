@@ -3,11 +3,12 @@ use std::collections::HashMap;
 use std::mem::swap;
 use std::rc::Rc;
 
+use clvm_rs::error::EvalErr;
 use num_bigint::ToBigInt;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::cost::Cost;
-use clvm_rs::reduction::{EvalErr, Reduction, Response};
+use clvm_rs::reduction::{Reduction, Response};
 
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
 use crate::classic::clvm::sexp::{
@@ -42,7 +43,7 @@ pub fn seems_constant_tail(allocator: &mut Allocator, sexp_: NodePtr) -> bool {
                 sexp = r;
             }
             SExp::Atom => {
-                return sexp == allocator.null();
+                return sexp == NodePtr::NIL;
             }
         }
     }
@@ -51,16 +52,16 @@ pub fn seems_constant_tail(allocator: &mut Allocator, sexp_: NodePtr) -> bool {
 pub fn seems_constant(allocator: &mut Allocator, sexp: NodePtr) -> bool {
     match allocator.sexp(sexp) {
         SExp::Atom => {
-            return sexp == allocator.null();
+            return sexp == NodePtr::NIL;
         }
         SExp::Pair(operator, r) => {
             match allocator.sexp(operator) {
                 SExp::Atom => {
                     // Was buf of operator.
                     let atom = allocator.atom(operator);
-                    if atom.len() == 1 && atom[0] == 1 {
+                    if atom.as_ref().len() == 1 && atom.as_ref()[0] == 1 {
                         return true;
-                    } else if atom.len() == 1 && atom[0] == 8 {
+                    } else if atom.as_ref().len() == 1 && atom.as_ref()[0] == 8 {
                         return false;
                     }
                 }
@@ -95,7 +96,7 @@ pub fn constant_optimizer(
         // first relevant in scope.
         if let SExp::Atom = allocator.sexp(first) {
             let buf = allocator.atom(first);
-            if buf.len() == 1 && buf[0] == 1 {
+            if buf.as_ref().len() == 1 && buf.as_ref()[0] == 1 {
                 // Short circuit already quoted expression.
                 return Ok(r);
             }
@@ -117,7 +118,7 @@ pub fn constant_optimizer(
             res <- runner.run_program(
                 allocator,
                 r,
-                allocator.null(),
+                NodePtr::NIL,
                 None
             );
             let r1 = res.1;
@@ -140,7 +141,7 @@ pub fn is_args_call(allocator: &Allocator, r: NodePtr) -> bool {
     if let SExp::Atom = allocator.sexp(r) {
         // Only r in scope.
         let buf = allocator.atom(r);
-        buf.len() == 1 && buf[0] == 1
+        buf.as_ref().len() == 1 && buf.as_ref()[0] == 1
     } else {
         false
     }
@@ -165,7 +166,7 @@ pub fn cons_q_a_optimizer(
 
     let matched = match_sexp(allocator, cons_q_a_optimizer_pattern, r, HashMap::new());
 
-    return match (
+    match (
         matched.as_ref().and_then(|t1| t1.get("args").copied()),
         matched.as_ref().and_then(|t1| t1.get("sexp").copied()),
     ) {
@@ -177,7 +178,7 @@ pub fn cons_q_a_optimizer(
             }
         }
         _ => Ok(r),
-    };
+    }
 }
 
 fn cons_pattern(allocator: &mut Allocator) -> NodePtr {
@@ -192,7 +193,7 @@ fn cons_f(allocator: &mut Allocator, args: NodePtr) -> Result<NodePtr, EvalErr> 
         } else {
             m! {
                 first_atom <- allocator.new_atom(&[5]);
-                tail <- allocator.new_pair(args, allocator.null());
+                tail <- allocator.new_pair(args, NodePtr::NIL);
                 allocator.new_pair(first_atom, tail)
             }
         }
@@ -207,7 +208,7 @@ fn cons_r(allocator: &mut Allocator, args: NodePtr) -> Result<NodePtr, EvalErr> 
         } else {
             m! {
                 rest_atom <- allocator.new_atom(&[6]);
-                tail <- allocator.new_pair(args, allocator.null());
+                tail <- allocator.new_pair(args, NodePtr::NIL);
                 allocator.new_pair(rest_atom, tail)
             }
         }
@@ -222,7 +223,8 @@ fn path_from_args(
     match allocator.sexp(sexp) {
         SExp::Atom => {
             // Only sexp in scope.
-            let v = number_from_u8(allocator.atom(sexp));
+            let atom = allocator.atom(sexp);
+            let v = number_from_u8(atom.as_ref());
             if v <= bi_one() {
                 Ok(new_args)
             } else {
@@ -257,7 +259,7 @@ pub fn sub_args(
                 SExp::Atom => {
                     // Atom is a reflection of first_pre.
                     let atom = allocator.atom(first_pre);
-                    if atom.len() == 1 && atom[0] == 1 {
+                    if atom.as_ref().len() == 1 && atom.as_ref()[0] == 1 {
                         return Ok(sexp);
                     } else {
                         first = first_pre;
@@ -308,9 +310,9 @@ pub fn var_change_optimizer_cons_eval(
     match match_sexp(allocator, pattern, r, HashMap::new()).as_ref() {
         None => Ok(r),
         Some(t1) => {
-            let original_args = t1
-                .get("args")
-                .ok_or_else(|| EvalErr(r, "bad pattern match on args".to_string()))?;
+            let original_args = t1.get("args").ok_or_else(|| {
+                EvalErr::InternalError(r, "bad pattern match on args".to_string())
+            })?;
 
             if DIAG_OPTIMIZATIONS {
                 println!(
@@ -318,9 +320,9 @@ pub fn var_change_optimizer_cons_eval(
                     disassemble(allocator, *original_args, None)
                 );
             };
-            let original_call = t1
-                .get("sexp")
-                .ok_or_else(|| EvalErr(r, "bad pattern match on sexp".to_string()))?;
+            let original_call = t1.get("sexp").ok_or_else(|| {
+                EvalErr::InternalError(r, "bad pattern match on sexp".to_string())
+            })?;
 
             if DIAG_OPTIMIZATIONS {
                 println!(
@@ -377,14 +379,15 @@ pub fn var_change_optimizer_cons_eval(
                                         SExp::Atom => {
                                             // Atom reflects val_first.
                                             let vf_buf = allocator.atom(val_first);
-                                            (vf_buf.len() != 1 || vf_buf[0] != 1) as i32
+                                            (vf_buf.as_ref().len() != 1 || vf_buf.as_ref()[0] != 1)
+                                                as i32
                                         }
                                         _ => 0,
                                     },
                                     _ => 0,
                                 };
 
-                                Ok(acc + increment)
+                                Ok::<_, EvalErr>(acc + increment)
                             },
                             0,
                             &mut opt_operands.iter().copied(),
@@ -420,7 +423,8 @@ pub fn children_optimizer(
                 return Ok(r);
             }
             if let SExp::Atom = allocator.sexp(list[0]) {
-                if allocator.atom(list[0]).to_vec() == vec![1] {
+                let atom = allocator.atom(list[0]);
+                if atom.as_ref().to_vec() == vec![1] {
                     return Ok(r);
                 }
             }
@@ -518,41 +522,35 @@ fn path_optimizer(
     let first_match = match_sexp(allocator, first_atom_pattern, r, HashMap::new());
     let rest_match = match_sexp(allocator, rest_atom_pattern, r, HashMap::new());
 
-    return m! {
-        match (first_match, rest_match) {
-            (Some(first), _) => {
-                match first.
-                    get("atom").
-                    and_then(|a| atom(allocator, *a).ok()).
-                    map(|atom| number_from_u8(&atom))
-                {
-                    Some(atom) => {
-                        let node =
-                            NodePath::new(Some(atom)).
-                            add(NodePath::new(None).first());
-                        allocator.new_atom(node.as_path().data())
-                    },
-                    _ => { Ok(r) }
+    match (first_match, rest_match) {
+        (Some(first), _) => {
+            match first
+                .get("atom")
+                .and_then(|a| atom(allocator, *a).ok())
+                .map(|atom| number_from_u8(&atom))
+            {
+                Some(atom) => {
+                    let node = NodePath::new(Some(atom)).add(NodePath::new(None).first());
+                    allocator.new_atom(node.as_path().data())
                 }
-            },
-            (_, Some(rest)) => {
-                match rest.
-                    get("atom").
-                    and_then(|a| atom(allocator, *a).ok()).
-                    map(|atom| number_from_u8(&atom))
-                {
-                    Some(atom) => {
-                        let node =
-                            NodePath::new(Some(atom)).
-                            add(NodePath::new(None).rest());
-                        allocator.new_atom(node.as_path().data())
-                    },
-                    _ => { Ok(r) }
-                }
-            },
-            _ => Ok(r)
+                _ => Ok(r),
+            }
         }
-    };
+        (_, Some(rest)) => {
+            match rest
+                .get("atom")
+                .and_then(|a| atom(allocator, *a).ok())
+                .map(|atom| number_from_u8(&atom))
+            {
+                Some(atom) => {
+                    let node = NodePath::new(Some(atom)).add(NodePath::new(None).rest());
+                    allocator.new_atom(node.as_path().data())
+                }
+                _ => Ok(r),
+            }
+        }
+        _ => Ok(r),
+    }
 }
 
 fn quote_pattern_1(allocator: &mut Allocator) -> NodePtr {
@@ -569,7 +567,7 @@ fn quote_null_optimizer(
 
     // This applies the transform `(q . 0)` => `0`
     let t1 = match_sexp(allocator, quote_pattern_1, r, HashMap::new());
-    Ok(t1.map(|_| allocator.null()).unwrap_or_else(|| r))
+    Ok(t1.map(|_| NodePtr::NIL).unwrap_or_else(|| r))
 }
 
 fn apply_null_pattern_1(allocator: &mut Allocator) -> NodePtr {
@@ -586,7 +584,7 @@ fn apply_null_optimizer(
 
     // This applies the transform `(a 0 ARGS)` => `0`
     let t1 = match_sexp(allocator, apply_null_pattern_1, r, HashMap::new());
-    Ok(t1.map(|_| allocator.null()).unwrap_or_else(|| r))
+    Ok(t1.map(|_| NodePtr::NIL).unwrap_or_else(|| r))
 }
 
 struct OptimizerRunner<'a> {
@@ -688,7 +686,7 @@ pub fn optimize_sexp_(
             }
             SExp::Pair(_, _) => {
                 for opt in optimizers.iter() {
-                    name = opt.name.clone();
+                    name.clone_from(&opt.name);
                     match opt.invoke(allocator, memo, r, eval_f.clone()) {
                         Err(e) => {
                             return Err(e);
@@ -737,15 +735,14 @@ pub fn optimize_sexp(
     if DIAG_OPTIMIZATIONS {
         println!("START OPTIMIZE {}", disassemble(allocator, r, None));
     }
-    optimize_sexp_(allocator, &optimized, r, eval_f).map(|x| {
+    optimize_sexp_(allocator, &optimized, r, eval_f).inspect(|x| {
         if DIAG_OPTIMIZATIONS {
             println!(
                 "OPTIMIZE_SEXP {} GIVING {}",
                 disassemble(allocator, r, None),
-                disassemble(allocator, x, None)
+                disassemble(allocator, *x, None)
             );
         }
-        x
     })
 }
 

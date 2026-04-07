@@ -1520,7 +1520,7 @@ fn start_codegen(
         )),
     };
 
-    code_generator.to_process = program.helpers.clone();
+    code_generator.to_process.clone_from(&program.helpers);
     // Ensure that we have the synthesis of the previous codegen's helpers and
     // The ones provided with the new form if any.
     let mut combined_helpers_for_codegen = program.helpers.clone();
@@ -1716,7 +1716,9 @@ pub fn codegen(
     // If stepping 23 or greater, we support no-env mode.
     enable_nil_env_mode_for_stepping_23_or_greater(opts.clone(), &mut code_generator);
 
-    *context.symbols() = code_generator.function_symbols.clone();
+    context
+        .symbols()
+        .clone_from(&code_generator.function_symbols);
     context
         .symbols()
         .insert("source_file".to_string(), opts.filename());

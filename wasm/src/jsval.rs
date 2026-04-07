@@ -6,14 +6,13 @@ use num_bigint::ToBigInt;
 
 use std::borrow::Borrow;
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::rc::Rc;
 use std::str::FromStr;
 
-use clvm_tools_rs::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
-use clvm_tools_rs::compiler::sexp::SExp;
-use clvm_tools_rs::compiler::srcloc::{Srcloc, Until};
-use clvm_tools_rs::util::Number;
+use chialisp::classic::clvm::__type_compatibility__::{bi_zero, Bytes, BytesFromType};
+use chialisp::compiler::sexp::SExp;
+use chialisp::compiler::srcloc::{Srcloc, Until};
+use chialisp::util::Number;
 
 use wasm_bindgen::prelude::*;
 
@@ -122,21 +121,20 @@ pub fn detect_serializable(loc: &Srcloc, v: &JsValue) -> Option<Rc<SExp>> {
             Reflect::apply(serialize.unchecked_ref(), v, &js_sys::Array::new())
                 .ok()
                 .and_then(|array| {
-                    Array::try_from(array).ok().and_then(|array| {
-                        let mut bytes_array: Vec<u8> = vec![];
-                        for item in array.iter() {
-                            if let Some(n) = item.as_f64() {
-                                if !(0.0..=255.0).contains(&n) {
-                                    return None;
-                                }
-                                bytes_array.push(n as u8);
-                            } else {
+                    let array = Array::from(&array);
+                    let mut bytes_array: Vec<u8> = vec![];
+                    for item in array.iter() {
+                        if let Some(n) = item.as_f64() {
+                            if !(0.0..=255.0).contains(&n) {
                                 return None;
                             }
+                            bytes_array.push(n as u8);
+                        } else {
+                            return None;
                         }
+                    }
 
-                        Some(Rc::new(SExp::QuotedString(loc.clone(), b'x', bytes_array)))
-                    })
+                    Some(Rc::new(SExp::QuotedString(loc.clone(), b'x', bytes_array)))
                 })
         })
 }
@@ -166,9 +164,13 @@ pub fn sexp_from_js_object(sstart: Srcloc, v: &JsValue) -> Option<Rc<SExp>> {
             .and_then(|v| v.parse::<Number>().ok())
             .map(|x| Rc::new(SExp::Integer(sstart.clone(), x)))
     } else if let Some(fval) = v.as_f64() {
-        (fval as i64)
-            .to_bigint()
-            .map(|x| Rc::new(SExp::Integer(sstart.clone(), x)))
+        (fval as i64).to_bigint().map(|x| {
+            if x == bi_zero() {
+                Rc::new(SExp::Nil(sstart.clone()))
+            } else {
+                Rc::new(SExp::Integer(sstart.clone(), x))
+            }
+        })
     } else if let Some(g1_bytes) = detect_serializable(&sstart, v) {
         Some(g1_bytes)
     } else if let Ok(converted) = detect_convertible(v) {
@@ -242,7 +244,7 @@ pub fn read_string_to_string_map(
                 result.insert(key, val);
             }
             _ => {
-                return Err(format!("key {} wasn't string", key));
+                return Err(format!("key {key} wasn't string"));
             }
         }
     }

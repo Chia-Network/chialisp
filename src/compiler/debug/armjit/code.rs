@@ -11,17 +11,25 @@ use std::str::FromStr;
 
 use faerie::{ArtifactBuilder, Decl, Link, SectionKind};
 use gimli;
-use gimli::{Encoding, Format, LineEncoding, DwAte, DW_ATE_unsigned};
-use gimli::constants::{DW_AT_byte_size, DW_AT_low_pc, DW_AT_high_pc, DW_AT_name, DW_TAG_subprogram, DW_TAG_base_type, DW_TAG_pointer_type, DW_TAG_formal_parameter, DW_AT_location, DW_AT_type, DW_AT_encoding, DW_AT_frame_base, DW_TAG_variable, DW_AT_language, DW_LANG_C99};
-use gimli::write::{Address, Attribute, AttributeValue, DirectoryId, Dwarf, FileId, LineProgram, LineString, Location, LocationList, Range, RangeList, Section, Sections, Unit, UnitId, UnitEntryId, Expression, DwarfUnit};
+use gimli::constants::{
+    DW_AT_byte_size, DW_AT_encoding, DW_AT_frame_base, DW_AT_high_pc, DW_AT_language,
+    DW_AT_location, DW_AT_low_pc, DW_AT_name, DW_AT_type, DW_TAG_base_type,
+    DW_TAG_formal_parameter, DW_TAG_pointer_type, DW_TAG_subprogram, DW_TAG_variable, DW_LANG_C99,
+};
+use gimli::write::{
+    Address, Attribute, AttributeValue, DirectoryId, Dwarf, DwarfUnit, Expression, FileId,
+    LineProgram, LineString, Location, LocationList, Range, RangeList, Section, Sections, Unit,
+    UnitEntryId, UnitId,
+};
+use gimli::{DW_ATE_unsigned, DwAte, Encoding, Format, LineEncoding};
 use target_lexicon::triple;
 use tempfile::NamedTempFile;
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
 use crate::classic::clvm::casts::bigint_to_bytes_clvm;
 use crate::compiler::clvm::{sha256tree, truthy};
-use crate::compiler::debug::armjit::load::{ElfLoader, write_u32};
-use crate::compiler::sexp::{Atom, NodeSel, SelectNode, SExp, ThisNode, decode_string, parse_sexp};
+use crate::compiler::debug::armjit::load::{write_u32, ElfLoader};
+use crate::compiler::sexp::{decode_string, parse_sexp, Atom, NodeSel, SExp, SelectNode, ThisNode};
 use crate::compiler::srcloc::Srcloc;
 
 const ENV_PTR: i32 = 0;
@@ -144,7 +152,7 @@ impl ToU32 for Register {
             Register::FP => 11,
             Register::SP => 13,
             Register::LR => 14,
-            Register::PC => 15
+            Register::PC => 15,
         }
     }
 }
@@ -155,27 +163,27 @@ enum Instr {
     Section(String),
     Globl(String),
     Label(String),
-    Space(usize,u8),
-    Add(Register,Register,Register),
-    Addi(Register,Register,i32),
-    Sub(Register,Register,Register),
-    Subi(Register,Register,i32),
-    Andi(Register,Register,i32),
+    Space(usize, u8),
+    Add(Register, Register, Register),
+    Addi(Register, Register, i32),
+    Sub(Register, Register, Register),
+    Subi(Register, Register, i32),
+    Andi(Register, Register, i32),
     Push(Vec<Register>),
     Pop(Vec<Register>),
-    Mov(Register,i32),
-    Str(Register,Register,i32),
-    Ldr(Register,Register,i32),
+    Mov(Register, i32),
+    Str(Register, Register, i32),
+    Ldr(Register, Register, i32),
     B(String),
     BEq(String),
     Bl(String),
     Bx(Register),
-    Lea(Register,String),
+    Lea(Register, String),
     Swi(usize),
     SwiEq(usize),
-    Cmpi(Register,usize),
+    Cmpi(Register, usize),
     Long(usize),
-    Addr(String,bool),
+    Addr(String, bool),
     Bytes(Vec<u8>),
 }
 
@@ -187,12 +195,12 @@ impl Instr {
                 next - current
             }
             Instr::Section(_) => 0,
-            Instr::Space(size,_fill) => *size,
+            Instr::Space(size, _fill) => *size,
             Instr::Globl(_l) => 0,
             Instr::Label(_l) => 0,
-            Instr::Lea(_,_) => 12,
+            Instr::Lea(_, _) => 12,
             Instr::Bytes(v) => v.len(),
-            _ => 4
+            _ => 4,
         }
     }
 }
@@ -200,7 +208,7 @@ impl Instr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BeginEndBlock {
     BeginBlock,
-    EndBlock
+    EndBlock,
 }
 
 trait Encodable {
@@ -249,13 +257,13 @@ impl ToU32 for ArmDataOp {
 }
 
 enum ArmOp {
-    Swi
+    Swi,
 }
 
 impl ToU32 for ArmOp {
     fn to_u32(&self) -> u32 {
         match self {
-            ArmOp::Swi => 15 << 24
+            ArmOp::Swi => 15 << 24,
         }
     }
 }
@@ -314,7 +322,7 @@ impl Encodable for Instr {
                     v.push(0);
                 }
             }
-            Instr::Space(n,val) => {
+            Instr::Space(n, val) => {
                 for _ in 0..*n {
                     v.push(*val)
                 }
@@ -332,24 +340,100 @@ impl Encodable for Instr {
                     code_location: v.len(),
                     reloc_target: target.clone(),
                 });
-                let offset =
-                    if *text {
-                        4
-                    } else {
-                        0
-                    };
+                let offset = if *text { 4 } else { 0 };
                 vec_from_u32(v, offset);
             }
-            Instr::Add(r_d,r_s,r_a) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | ArmDataOp::Add.to_u32() | Rn(r_s.clone()).to_u32() | Rd(r_d.clone()).to_u32() | Rm(0,r_a.clone()).to_u32()),
-            Instr::Addi(r_d,r_s,imm) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | ArmDataOp::Add.to_u32() | Rn(r_s.clone()).to_u32() | Rd(r_d.clone()).to_u32() | (1 << 25) | (*imm as u32)),
-            Instr::Sub(r_d,r_s,r_a) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | ArmDataOp::Sub.to_u32() | Rn(r_s.clone()).to_u32() | Rd(r_d.clone()).to_u32() | Rm(0,r_a.clone()).to_u32()),
-            Instr::Subi(r_d,r_s,imm) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | ArmDataOp::Sub.to_u32() | Rn(r_s.clone()).to_u32() | Rd(r_d.clone()).to_u32() | (1 << 25) | (*imm as u32)),
-            Instr::Andi(r_d,r_s,imm) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | ArmDataOp::And.to_u32() | Rn(r_s.clone()).to_u32() | Rd(r_d.clone()).to_u32() | (1 << 25) | (*imm as u32)),
-            Instr::Mov(r_d,imm) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | ArmDataOp::Mov.to_u32() | Rd(r_d.clone()).to_u32() | (1 << 25) | (*imm as u32)),
-            Instr::Push(rs) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 4 << 25 | Rn(Register::SP).to_u32() | 1 << 21 | 1 << 24 | rs.to_u32()),
-            Instr::Pop(rs) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 4 << 25 | Rn(Register::SP).to_u32() | 1 << 20 | 1 << 21 | 1 << 23 | rs.to_u32()),
-            Instr::Str(rd,rs,off) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 1 << 26 | 1 << 24 | 1 << 23 | Rn(rs.clone()).to_u32() | Rd(rd.clone()).to_u32() | (((65536 + off) & 0xff) as u32)),
-            Instr::Ldr(rd,rs,off) => vec_from_u32(v, ArmCond::Unconditional.to_u32() | 1 << 26 | 1 << 24 | 1 << 23 | 1 << 20 | Rn(rs.clone()).to_u32() | Rd(rd.clone()).to_u32() | (((65536 + off) & 0xff) as u32)),
+            Instr::Add(r_d, r_s, r_a) => vec_from_u32(
+                v,
+                ArmCond::Unconditional.to_u32()
+                    | ArmDataOp::Add.to_u32()
+                    | Rn(r_s.clone()).to_u32()
+                    | Rd(r_d.clone()).to_u32()
+                    | Rm(0, r_a.clone()).to_u32(),
+            ),
+            Instr::Addi(r_d, r_s, imm) => vec_from_u32(
+                v,
+                ArmCond::Unconditional.to_u32()
+                    | ArmDataOp::Add.to_u32()
+                    | Rn(r_s.clone()).to_u32()
+                    | Rd(r_d.clone()).to_u32()
+                    | (1 << 25)
+                    | (*imm as u32),
+            ),
+            Instr::Sub(r_d, r_s, r_a) => vec_from_u32(
+                v,
+                ArmCond::Unconditional.to_u32()
+                    | ArmDataOp::Sub.to_u32()
+                    | Rn(r_s.clone()).to_u32()
+                    | Rd(r_d.clone()).to_u32()
+                    | Rm(0, r_a.clone()).to_u32(),
+            ),
+            Instr::Subi(r_d, r_s, imm) => vec_from_u32(
+                v,
+                ArmCond::Unconditional.to_u32()
+                    | ArmDataOp::Sub.to_u32()
+                    | Rn(r_s.clone()).to_u32()
+                    | Rd(r_d.clone()).to_u32()
+                    | (1 << 25)
+                    | (*imm as u32),
+            ),
+            Instr::Andi(r_d, r_s, imm) => vec_from_u32(
+                v,
+                ArmCond::Unconditional.to_u32()
+                    | ArmDataOp::And.to_u32()
+                    | Rn(r_s.clone()).to_u32()
+                    | Rd(r_d.clone()).to_u32()
+                    | (1 << 25)
+                    | (*imm as u32),
+            ),
+            Instr::Mov(r_d, imm) => vec_from_u32(
+                v,
+                ArmCond::Unconditional.to_u32()
+                    | ArmDataOp::Mov.to_u32()
+                    | Rd(r_d.clone()).to_u32()
+                    | (1 << 25)
+                    | (*imm as u32),
+            ),
+            Instr::Push(rs) => vec_from_u32(
+                v,
+                ArmCond::Unconditional.to_u32()
+                    | 4 << 25
+                    | Rn(Register::SP).to_u32()
+                    | 1 << 21
+                    | 1 << 24
+                    | rs.to_u32(),
+            ),
+            Instr::Pop(rs) => vec_from_u32(
+                v,
+                ArmCond::Unconditional.to_u32()
+                    | 4 << 25
+                    | Rn(Register::SP).to_u32()
+                    | 1 << 20
+                    | 1 << 21
+                    | 1 << 23
+                    | rs.to_u32(),
+            ),
+            Instr::Str(rd, rs, off) => vec_from_u32(
+                v,
+                ArmCond::Unconditional.to_u32()
+                    | 1 << 26
+                    | 1 << 24
+                    | 1 << 23
+                    | Rn(rs.clone()).to_u32()
+                    | Rd(rd.clone()).to_u32()
+                    | (((65536 + off) & 0xff) as u32),
+            ),
+            Instr::Ldr(rd, rs, off) => vec_from_u32(
+                v,
+                ArmCond::Unconditional.to_u32()
+                    | 1 << 26
+                    | 1 << 24
+                    | 1 << 23
+                    | 1 << 20
+                    | Rn(rs.clone()).to_u32()
+                    | Rd(rd.clone()).to_u32()
+                    | (((65536 + off) & 0xff) as u32),
+            ),
             Instr::B(target) => {
                 r.push(Relocation {
                     kind: RelocationKind::Branch,
@@ -380,28 +464,51 @@ impl Encodable for Instr {
             Instr::Bx(r) => {
                 vec_from_u32(v, ArmCond::Unconditional.to_u32() | 0x12fff10 | r.to_u32());
             }
-            Instr::Lea(rd,target) => {
+            Instr::Lea(rd, target) => {
                 // Emit a load from +8 (0 as encoded).
-                vec_from_u32(v, ArmCond::Unconditional.to_u32() | 1 << 26 | 1 << 24 | 1 << 23 | 1 << 20 | Rn(Register::PC).to_u32() | Rd(rd.clone()).to_u32());
+                vec_from_u32(
+                    v,
+                    ArmCond::Unconditional.to_u32()
+                        | 1 << 26
+                        | 1 << 24
+                        | 1 << 23
+                        | 1 << 20
+                        | Rn(Register::PC).to_u32()
+                        | Rd(rd.clone()).to_u32(),
+                );
                 // Emit a jump to +8
                 vec_from_u32(v, ArmCond::Unconditional.to_u32() | 5 << 25 | 0);
                 r.push(Relocation {
                     kind: RelocationKind::Long,
                     function: function.to_string(),
                     code_location: v.len(),
-                    reloc_target: target.clone()
+                    reloc_target: target.clone(),
                 });
                 // Relocatable space.
                 vec_from_u32(v, 4);
             }
             Instr::Swi(n) => {
-                vec_from_u32(v, ArmCond::Unconditional.to_u32() | ArmOp::Swi.to_u32() | (*n as u32));
+                vec_from_u32(
+                    v,
+                    ArmCond::Unconditional.to_u32() | ArmOp::Swi.to_u32() | (*n as u32),
+                );
             }
             Instr::SwiEq(n) => {
-                vec_from_u32(v, ArmCond::Equal.to_u32() | ArmOp::Swi.to_u32() | (*n as u32));
+                vec_from_u32(
+                    v,
+                    ArmCond::Equal.to_u32() | ArmOp::Swi.to_u32() | (*n as u32),
+                );
             }
-            Instr::Cmpi(r,n) => {
-                vec_from_u32(v, ArmCond::Unconditional.to_u32() | ArmDataOp::Cmp.to_u32() | 1 << 25 | 1 << 20 | Rn(r.clone()).to_u32() | (*n as u32));
+            Instr::Cmpi(r, n) => {
+                vec_from_u32(
+                    v,
+                    ArmCond::Unconditional.to_u32()
+                        | ArmDataOp::Cmp.to_u32()
+                        | 1 << 25
+                        | 1 << 20
+                        | Rn(r.clone()).to_u32()
+                        | (*n as u32),
+                );
             }
             _ => {}
         }
@@ -429,15 +536,15 @@ impl fmt::Display for Instr {
         match self {
             Instr::Align4 => write!(f, "  .align 4"),
             Instr::Section(s) => write!(f, "  .section {s}"),
-            Instr::Space(size,fill) => write!(f, "  .space {size},{fill}"),
+            Instr::Space(size, fill) => write!(f, "  .space {size},{fill}"),
             Instr::Globl(l) => write!(f, "  .globl {l}"),
             Instr::Label(l) => write!(f, "{l}:"),
-            Instr::Add(r_d,r_s,r_a) => write!(f, "  add {r_d}, {r_s}, {r_a}"),
-            Instr::Addi(r_d,r_s,imm) => write!(f, "  add {r_d}, {r_s}, #{imm}"),
-            Instr::Andi(r_d,r_s,imm) => write!(f, "  and {r_d}, {r_s}, #{imm}"),
-            Instr::Sub(r_d,r_s,r_a) => write!(f, "  sub {r_d}, {r_s}, {r_a}"),
-            Instr::Subi(r_d,r_s,imm) => write!(f, "  sub {r_d}, {r_s}, #{imm}"),
-            Instr::Cmpi(r,imm) => write!(f, "  cmp {r}, #{imm}"),
+            Instr::Add(r_d, r_s, r_a) => write!(f, "  add {r_d}, {r_s}, {r_a}"),
+            Instr::Addi(r_d, r_s, imm) => write!(f, "  add {r_d}, {r_s}, #{imm}"),
+            Instr::Andi(r_d, r_s, imm) => write!(f, "  and {r_d}, {r_s}, #{imm}"),
+            Instr::Sub(r_d, r_s, r_a) => write!(f, "  sub {r_d}, {r_s}, {r_a}"),
+            Instr::Subi(r_d, r_s, imm) => write!(f, "  sub {r_d}, {r_s}, #{imm}"),
+            Instr::Cmpi(r, imm) => write!(f, "  cmp {r}, #{imm}"),
             Instr::Push(rs) => {
                 write!(f, "  push {{")?;
                 let mut sep = "";
@@ -446,7 +553,7 @@ impl fmt::Display for Instr {
                     sep = ", ";
                 }
                 write!(f, "}}")
-            },
+            }
             Instr::Pop(rs) => {
                 write!(f, "  pop {{")?;
                 let mut sep = "";
@@ -456,14 +563,14 @@ impl fmt::Display for Instr {
                 }
                 write!(f, "}}")
             }
-            Instr::Mov(r_d,imm) => write!(f, "  mov {r_d}, #{imm}"),
-            Instr::Str(r_s,r_a,imm) => write!(f, "  str {r_s}, [{r_a}, #{imm}]"),
-            Instr::Ldr(r_d,r_a,imm) => write!(f, "  ldr {r_d}, [{r_a}, #{imm}]"),
+            Instr::Mov(r_d, imm) => write!(f, "  mov {r_d}, #{imm}"),
+            Instr::Str(r_s, r_a, imm) => write!(f, "  str {r_s}, [{r_a}, #{imm}]"),
+            Instr::Ldr(r_d, r_a, imm) => write!(f, "  ldr {r_d}, [{r_a}, #{imm}]"),
             Instr::B(l) => write!(f, "  b {l}"),
             Instr::Bl(l) => write!(f, "  bl {l}"),
             Instr::BEq(l) => write!(f, "  beq {l}"),
             Instr::Bx(r) => write!(f, "  bx {r}"),
-            Instr::Lea(r,l) => write!(f, "  ldr {r}, ={l}"),
+            Instr::Lea(r, l) => write!(f, "  ldr {r}, ={l}"),
             Instr::Swi(n) => write!(f, "  swi {n}"),
             Instr::SwiEq(n) => write!(f, "  swieq {n}"),
             Instr::Long(n) => write!(f, "  .long {n}"),
@@ -492,12 +599,12 @@ struct DwarfBuilder {
 
     symbol_table: Rc<HashMap<String, String>>,
 
-    dwarf: Dwarf
+    dwarf: Dwarf,
 }
 
 #[derive(Default, Clone, Debug)]
 struct DwarfSectionWriter {
-    pub written: Vec<u8>
+    pub written: Vec<u8>,
 }
 
 impl gimli::write::Writer for DwarfSectionWriter {
@@ -553,21 +660,24 @@ impl DwarfBuilder {
 
         path = PathBuf::new();
         path.push(filename);
-        let filename = path.file_name().map(|f| f.to_string_lossy().as_bytes().to_vec()).unwrap_or_else(|| filename.as_bytes().to_vec());
+        let filename = path
+            .file_name()
+            .map(|f| f.to_string_lossy().as_bytes().to_vec())
+            .unwrap_or_else(|| filename.as_bytes().to_vec());
 
         let line_encoding = LineEncoding {
             minimum_instruction_length: 4,
             maximum_operations_per_instruction: 1,
             default_is_stmt: false,
             line_base: 0,
-            line_range: 1
+            line_range: 1,
         };
 
         let mut dwarf = Dwarf::default();
         let encoding = Encoding {
             address_size: 4,
             format: Format::Dwarf32,
-            version: 2
+            version: 2,
         };
 
         let dirstring = LineString::String(dirname.clone());
@@ -577,32 +687,30 @@ impl DwarfBuilder {
             line_encoding,
             dirstring.clone(),
             filestring.clone(),
-            None
+            None,
         );
         let mut directory_to_id = HashMap::new();
         let directory_id = line_program.add_directory(dirstring);
         directory_to_id.insert(dirname.clone(), directory_id.clone());
         let mut file_to_id = HashMap::new();
-        let file_id = line_program.add_file(
-            filestring,
-            directory_id.clone(),
-            None
-        );
+        let file_id = line_program.add_file(filestring, directory_id.clone(), None);
         file_to_id.insert(filename.clone(), (directory_id, file_id));
 
         let mut unit = Unit::new(encoding, line_program);
 
-        unit.ranges.add(RangeList(vec![
-            Range::BaseAddress { address: Address::Constant(target_addr as u64) }
-        ]));
-        unit.locations.add(LocationList(vec![
-            Location::BaseAddress { address: Address::Constant(target_addr as u64) }
-        ]));
+        unit.ranges.add(RangeList(vec![Range::BaseAddress {
+            address: Address::Constant(target_addr as u64),
+        }]));
+        unit.locations.add(LocationList(vec![Location::BaseAddress {
+            address: Address::Constant(target_addr as u64),
+        }]));
         let unit_ent = unit.get_mut(unit.root());
-        unit_ent.set(DW_AT_low_pc, AttributeValue::Address(Address::Constant(target_addr as u64)));
+        unit_ent.set(
+            DW_AT_low_pc,
+            AttributeValue::Address(Address::Constant(target_addr as u64)),
+        );
         unit_ent.set(DW_AT_name, AttributeValue::String(filename.clone()));
         unit_ent.set(DW_AT_language, AttributeValue::Language(DW_LANG_C99));
-
 
         let unit_id = dwarf.units.add(unit);
         let mut mutable_unit = dwarf.units.get_mut(unit_id);
@@ -631,22 +739,26 @@ impl DwarfBuilder {
         obj
     }
 
-    fn add_file_having_dirid(&mut self, dirid: DirectoryId, filename: &[u8]) -> (DirectoryId, FileId) {
+    fn add_file_having_dirid(
+        &mut self,
+        dirid: DirectoryId,
+        filename: &[u8],
+    ) -> (DirectoryId, FileId) {
         let unit = self.dwarf.units.get_mut(self.unit_id);
         let filestring = LineString::String(filename.to_vec());
-        let fileid = unit.line_program.add_file(
-            filestring,
-            dirid.clone(),
-            None
-        );
-        self.file_to_id.insert(filename.to_vec(), (dirid.clone(), fileid.clone()));
+        let fileid = unit.line_program.add_file(filestring, dirid.clone(), None);
+        self.file_to_id
+            .insert(filename.to_vec(), (dirid.clone(), fileid.clone()));
         (dirid, fileid)
     }
 
     fn add_file(&mut self, filename_str: &str) -> (DirectoryId, FileId) {
         let mut path = PathBuf::new();
         path.push(filename_str);
-        let filename = path.file_name().map(|f| f.to_string_lossy().as_bytes().to_vec()).unwrap_or_else(|| filename_str.as_bytes().to_vec());
+        let filename = path
+            .file_name()
+            .map(|f| f.to_string_lossy().as_bytes().to_vec())
+            .unwrap_or_else(|| filename_str.as_bytes().to_vec());
         if let Some((dirid, fileid)) = self.file_to_id.get(&filename) {
             return (*dirid, *fileid);
         }
@@ -656,12 +768,11 @@ impl DwarfBuilder {
         path.pop();
 
         let dirname = path.into_os_string().to_string_lossy().as_bytes().to_vec();
-        let use_dirname =
-            if dirname.is_empty() {
-                vec![b'.']
-            } else {
-                dirname.clone()
-            };
+        let use_dirname = if dirname.is_empty() {
+            vec![b'.']
+        } else {
+            dirname.clone()
+        };
 
         if let Some(dirid) = self.directory_to_id.get(&use_dirname) {
             return self.add_file_having_dirid(*dirid, &filename);
@@ -674,7 +785,13 @@ impl DwarfBuilder {
         self.add_file_having_dirid(dirid, &filename)
     }
 
-    fn add_instr(&mut self, addr: usize, loc: &Srcloc, _instr: Instr, begin_end_block: Option<BeginEndBlock>) {
+    fn add_instr(
+        &mut self,
+        addr: usize,
+        loc: &Srcloc,
+        _instr: Instr,
+        begin_end_block: Option<BeginEndBlock>,
+    ) {
         let (_, file_id) = self.add_file(&loc.file);
         let unit = self.dwarf.units.get_mut(self.unit_id);
         if !unit.line_program.in_sequence() {
@@ -694,19 +811,30 @@ impl DwarfBuilder {
     fn start(&mut self, addr: usize) {
         let unit = self.dwarf.units.get_mut(self.unit_id);
         self.seq_addr_start = addr;
-        unit.line_program.begin_sequence(Some(Address::Constant((addr + self.target_addr as usize) as u64)));
+        unit.line_program.begin_sequence(Some(Address::Constant(
+            (addr + self.target_addr as usize) as u64,
+        )));
     }
 
     fn end(&mut self, addr: usize) {
         let unit = self.dwarf.units.get_mut(self.unit_id);
-        unit.line_program.end_sequence((addr - self.seq_addr_start) as u64);
+        unit.line_program
+            .end_sequence((addr - self.seq_addr_start) as u64);
     }
 
     fn match_function(&self, label: &str) -> Option<(String, String)> {
-        let mut stripped: Vec<u8> = label.bytes().skip(1).take_while(|b| *b != b'_').collect();
-        if let Some(name) = self.symbol_table.get(&decode_string(&stripped)).cloned() {
-            stripped.append(&mut b"_arguments".to_vec());
-            let args = self.symbol_table.get(&decode_string(&stripped)).cloned().unwrap_or_else(|| "ENV".to_string());
+        let hash = if let Some(hash) = label.strip_prefix('_').and_then(|s| s.split('_').next()) {
+            hash
+        } else {
+            return None;
+        };
+
+        if let Some(name) = self.symbol_table.get(hash).cloned() {
+            let args = self
+                .symbol_table
+                .get(&format!("{hash}_arguments"))
+                .cloned()
+                .unwrap_or_else(|| "ENV".to_string());
             return Some((name, args));
         }
 
@@ -738,24 +866,30 @@ impl DwarfBuilder {
 
             let at_id = unit.add(subprogram_id, DW_TAG_formal_parameter);
             let at_ent = unit.get_mut(at_id);
-            at_ent.set(DW_AT_name, AttributeValue::String(argname.as_bytes().to_vec()));
-            at_ent.set(DW_AT_type,AttributeValue::UnitRef(self.pointer_type));
+            at_ent.set(
+                DW_AT_name,
+                AttributeValue::String(argname.as_bytes().to_vec()),
+            );
+            at_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
             at_ent.set(DW_AT_location, AttributeValue::Exprloc(expr.clone()));
             let at_id2 = unit.add(subprogram_id, DW_TAG_variable);
             let at_ent = unit.get_mut(at_id2);
-            at_ent.set(DW_AT_name, AttributeValue::String(argname.as_bytes().to_vec()));
-            at_ent.set(DW_AT_type,AttributeValue::UnitRef(self.pointer_type));
+            at_ent.set(
+                DW_AT_name,
+                AttributeValue::String(argname.as_bytes().to_vec()),
+            );
+            at_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
             at_ent.set(DW_AT_location, AttributeValue::Exprloc(expr));
         }
     }
 
     // Create dwarf traffic needed to ensure that gdb can find the locals.
     fn decorate_function(&mut self, label: &str, addr: usize, size: usize) {
-        let (name, args) = self.match_function(&label).map(|c| c.clone()).unwrap_or_else(|| {
-            (label.to_string(), "(() . ENV)".to_string())
-        });
-        let subprogram_id =
-        {
+        let (name, args) = self
+            .match_function(&label)
+            .map(|c| c.clone())
+            .unwrap_or_else(|| (label.to_string(), "(() . ENV)".to_string()));
+        let subprogram_id = {
             let unit = self.dwarf.units.get_mut(self.unit_id);
             let subprogram_id = unit.add(unit.root(), DW_TAG_subprogram);
             let mut fbexpr_mid = Expression::new();
@@ -764,26 +898,53 @@ impl DwarfBuilder {
             loclist.push(Location::StartEnd {
                 begin: Address::Constant(addr as u64),
                 end: Address::Constant((addr + size) as u64),
-                data: fbexpr_mid
+                data: fbexpr_mid,
             });
             let loc_list_id = unit.locations.add(LocationList(loclist));
             let mut sub_ent = unit.get_mut(subprogram_id);
             sub_ent.set(DW_AT_name, AttributeValue::String(name.as_bytes().to_vec()));
-            sub_ent.set(DW_AT_type,AttributeValue::UnitRef(self.pointer_type));
-            sub_ent.set(DW_AT_low_pc, AttributeValue::Address(Address::Constant((self.target_addr as usize + addr) as u64)));
-            sub_ent.set(DW_AT_high_pc, AttributeValue::Address(Address::Constant((self.target_addr as usize + addr + size) as u64)));
-            sub_ent.set(DW_AT_frame_base, AttributeValue::LocationListRef(loc_list_id));
+            sub_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
+            sub_ent.set(
+                DW_AT_low_pc,
+                AttributeValue::Address(Address::Constant(
+                    (self.target_addr as usize + addr) as u64,
+                )),
+            );
+            sub_ent.set(
+                DW_AT_high_pc,
+                AttributeValue::Address(Address::Constant(
+                    (self.target_addr as usize + addr + size) as u64,
+                )),
+            );
+            sub_ent.set(
+                DW_AT_frame_base,
+                AttributeValue::LocationListRef(loc_list_id),
+            );
             subprogram_id
         };
         let srcloc = Srcloc::start("*args*");
         if let Ok(parsed) = parse_sexp(srcloc.clone(), args.bytes()) {
             if !parsed.is_empty() {
-                self.add_arguments(subprogram_id, 1, 0, Rc::new(SExp::Cons(srcloc.clone(), Rc::new(SExp::Nil(srcloc.clone())), parsed[0].clone())));
+                self.add_arguments(
+                    subprogram_id,
+                    1,
+                    0,
+                    Rc::new(SExp::Cons(
+                        srcloc.clone(),
+                        Rc::new(SExp::Nil(srcloc.clone())),
+                        parsed[0].clone(),
+                    )),
+                );
             }
         }
     }
 
-    fn write_section(&self, name: &str, section: &dyn Section<DwarfSectionWriter>, instrs: &mut Vec<Instr>) {
+    fn write_section(
+        &self,
+        name: &str,
+        section: &dyn Section<DwarfSectionWriter>,
+        instrs: &mut Vec<Instr>,
+    ) {
         instrs.push(Instr::Align4);
         instrs.push(Instr::Section(name.to_string()));
         instrs.push(Instr::Bytes(section.written.clone()));
@@ -792,7 +953,12 @@ impl DwarfBuilder {
     fn write(&mut self, current_addr: usize, instrs: &mut Vec<Instr>) -> gimli::write::Result<()> {
         let mut unit = self.dwarf.units.get_mut(self.unit_id);
         let unit_ent = unit.get_mut(unit.root());
-        unit_ent.set(DW_AT_high_pc, AttributeValue::Address(Address::Constant(self.target_addr as u64 + current_addr as u64)));
+        unit_ent.set(
+            DW_AT_high_pc,
+            AttributeValue::Address(Address::Constant(
+                self.target_addr as u64 + current_addr as u64,
+            )),
+        );
 
         let mut sections = Sections::<DwarfSectionWriter>::default();
         self.dwarf.write(&mut sections)?;
@@ -821,8 +987,8 @@ enum Constant {
 impl Constant {
     fn label(&self) -> String {
         match self {
-            Constant::Atom(lbl,_) => lbl.clone(),
-            Constant::Cons(lbl,_,_) => lbl.clone(),
+            Constant::Atom(lbl, _) => lbl.clone(),
+            Constant::Cons(lbl, _, _) => lbl.clone(),
         }
     }
 }
@@ -857,17 +1023,17 @@ impl fmt::Display for Program {
     }
 }
 
-fn hexify(v: &[u8]) -> String{
+fn hexify(v: &[u8]) -> String {
     Bytes::new(Some(BytesFromType::Raw(v.to_vec()))).hex()
 }
 
 fn is_atom(a: Rc<SExp>) -> Option<(Srcloc, Vec<u8>)> {
     match a.borrow() {
-        SExp::Cons(_,_,_) => None,
+        SExp::Cons(_, _, _) => None,
         SExp::Nil(l) => Some((l.clone(), Vec::new())),
-        SExp::Atom(l,a) => Some((l.clone(), a.clone())),
-        SExp::QuotedString(l,_,a) => Some((l.clone(), a.clone())),
-        SExp::Integer(l,i) => {
+        SExp::Atom(l, a) => Some((l.clone(), a.clone())),
+        SExp::QuotedString(l, _, a) => Some((l.clone(), a.clone())),
+        SExp::Integer(l, i) => {
             let bytes = bigint_to_bytes_clvm(&i);
             Some((l.clone(), bytes.data().clone()))
         }
@@ -875,9 +1041,7 @@ fn is_atom(a: Rc<SExp>) -> Option<(Srcloc, Vec<u8>)> {
 }
 
 fn is_wrapped_atom(a: Rc<SExp>) -> Option<(Srcloc, Vec<u8>)> {
-    if let Ok(NodeSel::Cons((l, a), n)) =
-        NodeSel::Cons(Atom::Here(()), ThisNode).select_nodes(a)
-    {
+    if let Ok(NodeSel::Cons((l, a), n)) = NodeSel::Cons(Atom::Here(()), ThisNode).select_nodes(a) {
         if truthy(n) {
             return None;
         }
@@ -889,9 +1053,7 @@ fn is_wrapped_atom(a: Rc<SExp>) -> Option<(Srcloc, Vec<u8>)> {
 }
 
 fn dequote(a: Rc<SExp>) -> Option<Rc<SExp>> {
-    if let Ok(NodeSel::Cons(_q, v)) =
-        NodeSel::Cons(Atom::Here("\x01"), ThisNode).select_nodes(a)
-    {
+    if let Ok(NodeSel::Cons(_q, v)) = NodeSel::Cons(Atom::Here("\x01"), ThisNode).select_nodes(a) {
         return Some(v.clone());
     }
 
@@ -906,14 +1068,13 @@ struct Function {
 
 impl Program {
     fn get_code_label(&mut self, hash: &[u8]) -> String {
-        let n =
-            if let Some(n) = self.encounters_of_code.get(hash).clone() {
-                *n
-            } else {
-                0
-            };
+        let n = if let Some(n) = self.encounters_of_code.get(hash).clone() {
+            *n
+        } else {
+            0
+        };
 
-        self.encounters_of_code.insert(hash.to_vec(), n+1);
+        self.encounters_of_code.insert(hash.to_vec(), n + 1);
         return format!("_{}_{n}", hexify(hash));
     }
 
@@ -928,16 +1089,18 @@ impl Program {
         }
 
         match s.borrow() {
-            SExp::Cons(_l,a,b) => {
+            SExp::Cons(_l, a, b) => {
                 let a_hash = sha256tree(a.clone());
                 let b_hash = sha256tree(b.clone());
                 let a_label = self.add_sexp(loc, &a_hash, a.clone());
                 let b_label = self.add_sexp(loc, &b_hash, b.clone());
                 let label = format!("_{}", hexify(hash));
-                self.constants.insert(hash.to_vec(), Constant::Cons(label.clone(), a_label.clone(), b_label.clone()));
+                self.constants.insert(
+                    hash.to_vec(),
+                    Constant::Cons(label.clone(), a_label.clone(), b_label.clone()),
+                );
                 label
-
-            },
+            }
             SExp::Nil(_) => self.add_atom(hash, &[]),
             SExp::Atom(_, a) => self.add_atom(hash, &a),
             SExp::QuotedString(_, _, a) => self.add_atom(hash, &a),
@@ -967,13 +1130,20 @@ impl Program {
             Instr::Andi(Register::R(1), Register::R(4), 1),
             Instr::Cmpi(Register::R(1), 1),
             Instr::SwiEq(SWI_THROW),
-            Instr::Ldr(Register::R(0), Register::R(0), offset)
+            Instr::Ldr(Register::R(0), Register::R(0), offset),
         ] {
             self.push(loc, i.clone());
         }
     }
 
-    fn do_operator(&mut self, loc: &Srcloc, hash: &[u8], a: &[u8], b: Rc<SExp>, treat_as_quoted: bool) {
+    fn do_operator(
+        &mut self,
+        loc: &Srcloc,
+        hash: &[u8],
+        a: &[u8],
+        b: Rc<SExp>,
+        treat_as_quoted: bool,
+    ) {
         if treat_as_quoted {
             todo!();
         }
@@ -991,12 +1161,11 @@ impl Program {
         }
 
         // Every other operator must have a proper list following it.
-        let lst =
-            if let Some(lst) = b.proper_list() {
-                lst
-            } else {
-                return self.do_throw(loc, hash);
-            };
+        let lst = if let Some(lst) = b.proper_list() {
+            lst
+        } else {
+            return self.do_throw(loc, hash);
+        };
 
         if a == &[2] {
             // Apply operator
@@ -1020,9 +1189,7 @@ impl Program {
                 // Short circuit by reading out the quoted code and running it.
                 let code_comp = self.add(quoted_code.clone());
 
-                for i in &[
-                    Instr::Bl(code_comp),
-                ] {
+                for i in &[Instr::Bl(code_comp)] {
                     self.push(loc, i.clone());
                 }
             } else {
@@ -1069,7 +1236,7 @@ impl Program {
                 // Else clause acts as a function for relocation purposes.
                 Instr::Globl(else_label.clone()),
                 Instr::Label(else_label),
-                Instr::B(else_clause)
+                Instr::B(else_clause),
             ] {
                 self.push(loc, i.clone());
             }
@@ -1098,7 +1265,7 @@ impl Program {
                 Instr::Str(Register::R(0), Register::R(1), 0),
                 Instr::Str(Register::R(4), Register::R(1), 4),
                 // Move the result to r0
-                Instr::Addi(Register::R(0), Register::R(1), 0)
+                Instr::Addi(Register::R(0), Register::R(1), 0),
             ] {
                 self.push(loc, i.clone());
             }
@@ -1117,7 +1284,7 @@ impl Program {
             // Load a nil into R4.
             for i in &[
                 Instr::Andi(Register::R(4), Register::R(4), 0),
-                Instr::Addi(Register::R(4), Register::R(4), 1)
+                Instr::Addi(Register::R(4), Register::R(4), 1),
             ] {
                 self.push(loc, i.clone());
             }
@@ -1158,7 +1325,7 @@ impl Program {
                 // Set R1 to the tail exp.
                 Instr::Addi(Register::R(1), Register::R(4), 0),
                 // Call to do the operator.
-                Instr::Swi(SWI_DISPATCH_INSTRUCTION)
+                Instr::Swi(SWI_DISPATCH_INSTRUCTION),
             ] {
                 self.push(loc, i.clone());
             }
@@ -1173,10 +1340,7 @@ impl Program {
         }
 
         // Let r0 be our pointer.
-        self.push(
-            loc,
-            Instr::Ldr(Register::R(0), Register::R(5), ENV_PTR),
-        );
+        self.push(loc, Instr::Ldr(Register::R(0), Register::R(5), ENV_PTR));
 
         // Whole env ref.
         if v == &[1] {
@@ -1200,7 +1364,7 @@ impl Program {
                         // Break if it was an atom.
                         Instr::SwiEq(SWI_THROW),
                         // Load if it was a cons.
-                        Instr::Ldr(Register::R(0), Register::R(0), offset)
+                        Instr::Ldr(Register::R(0), Register::R(0), offset),
                     ] {
                         self.push(loc, i.clone());
                     }
@@ -1215,16 +1379,14 @@ impl Program {
         }
 
         let label = format!("_{}", hexify(hash));
-        self.constants.insert(hash.to_vec(), Constant::Atom(label.clone(), v.to_vec()));
+        self.constants
+            .insert(hash.to_vec(), Constant::Atom(label.clone(), v.to_vec()));
         label
     }
 
     fn load_atom(&mut self, loc: &Srcloc, hash: &[u8], v: &[u8]) {
         let label = self.add_atom(hash, v);
-        self.push(
-            loc,
-            Instr::Lea(Register::R(0), label)
-        );
+        self.push(loc, Instr::Lea(Register::R(0), label));
     }
 
     fn add(&mut self, sexp: Rc<SExp>) -> String {
@@ -1233,25 +1395,25 @@ impl Program {
         // Note: get_code_label issues a fresh label for this hash every time.
         let body_label = self.get_code_label(&hash);
         eprintln!("label {body_label} for {sexp}");
-        self.waiting_programs.push((body_label.clone(), sexp.clone()));
+        self.waiting_programs
+            .push((body_label.clone(), sexp.clone()));
         body_label
     }
 
     fn push_be(&mut self, srcloc: &Srcloc, instr: Instr, begin_end_block: Option<BeginEndBlock>) {
         let size = instr.size(self.current_addr);
 
-        let insert_instr =
-            if let Instr::Globl(g) = &instr {
-                eprintln!("instr {instr:?}");
-                // Two things: ensure we switch to real function names when we
-                // have them.
-                //
-                // Ensure we set the current symbol.
-                self.current_symbol = Some(g.clone());
-                instr
-            } else {
-                instr
-            };
+        let insert_instr = if let Instr::Globl(g) = &instr {
+            eprintln!("instr {instr:?}");
+            // Two things: ensure we switch to real function names when we
+            // have them.
+            //
+            // Ensure we set the current symbol.
+            self.current_symbol = Some(g.clone());
+            instr
+        } else {
+            instr
+        };
 
         self.finished_insns.push(insert_instr.clone());
         let start_block = matches!(begin_end_block, Some(BeginEndBlock::BeginBlock));
@@ -1265,15 +1427,23 @@ impl Program {
         if end_block {
             self.current_addr = (self.current_addr + 15) & !15;
             if let Some(label) = self.current_symbol.as_ref() {
-                eprintln!("end block for label {label} {:x}-{:x}", self.start_addr, self.current_addr);
-                self.dwarf_builder.decorate_function(label, self.start_addr, self.current_addr - self.start_addr);
+                eprintln!(
+                    "end block for label {label} {:x}-{:x}",
+                    self.start_addr, self.current_addr
+                );
+                self.dwarf_builder.decorate_function(
+                    label,
+                    self.start_addr,
+                    self.current_addr - self.start_addr,
+                );
                 self.current_symbol = None;
             }
         }
 
         if size != 0 {
             let next_addr = self.current_addr + size;
-            self.dwarf_builder.add_instr(self.current_addr, srcloc, insert_instr, begin_end_block);
+            self.dwarf_builder
+                .add_instr(self.current_addr, srcloc, insert_instr, begin_end_block);
             self.current_addr = next_addr;
         }
     }
@@ -1286,22 +1456,22 @@ impl Program {
         while let Some((label, sexp)) = self.waiting_programs.pop() {
             eprintln!("{} sexp {:?} {}", label, sexp.loc(), sexp);
             let hash = sha256tree(sexp.clone());
+            let hash_hex = hexify(&hash);
 
             self.labels_by_hash.insert(hash.clone(), label.clone());
             self.dwarf_builder.start(self.current_addr);
 
-            self.push(
-                &sexp.loc(),
-                Instr::Globl(label.clone())
-            );
-            self.push(
-                &sexp.loc(),
-                Instr::Label(label.clone())
-            );
+            if let Some(function_name) = self.symbol_table.get(&hash_hex).cloned() {
+                self.push(&sexp.loc(), Instr::Globl(function_name.clone()));
+                self.push(&sexp.loc(), Instr::Label(function_name));
+            }
+
+            self.push(&sexp.loc(), Instr::Globl(label.clone()));
+            self.push(&sexp.loc(), Instr::Label(label.clone()));
             self.push_be(
                 &sexp.loc(),
                 Instr::Push(vec![Register::FP, Register::LR]),
-                Some(BeginEndBlock::BeginBlock)
+                Some(BeginEndBlock::BeginBlock),
             );
             for i in &[
                 // Grab the env pointer.
@@ -1318,7 +1488,7 @@ impl Program {
 
             // Translate body.
             match sexp.borrow() {
-                SExp::Cons(l,a,b) => {
+                SExp::Cons(l, a, b) => {
                     if let Some((loc, a)) = is_atom(a.clone()) {
                         // do quoted operator
                         self.do_operator(&loc, &hash, &a, b.clone(), false);
@@ -1329,10 +1499,8 @@ impl Program {
                         // invalid head form, just throw.
                         self.do_throw(&l, &hash);
                     }
-                },
-                SExp::Nil(l) => {
-                    self.load_atom(l, &hash, &[])
                 }
+                SExp::Nil(l) => self.load_atom(l, &hash, &[]),
                 SExp::Atom(l, v) => {
                     if v.is_empty() {
                         return self.load_atom(l, &hash, &[]);
@@ -1369,7 +1537,7 @@ impl Program {
             self.push_be(
                 &sexp.loc(),
                 Instr::Bx(Register::LR),
-                Some(BeginEndBlock::EndBlock)
+                Some(BeginEndBlock::EndBlock),
             );
             self.dwarf_builder.end(self.current_addr);
         }
@@ -1407,8 +1575,10 @@ impl Program {
             Instr::Long(1),
             // Write the constant data.
             Instr::Align4,
-            Instr::Section(".data".to_string())
-        ].iter() {
+            Instr::Section(".data".to_string()),
+        ]
+        .iter()
+        {
             self.push(&srcloc, i.clone());
         }
 
@@ -1421,7 +1591,7 @@ impl Program {
                         Instr::Globl(label.clone()),
                         Instr::Label(label.clone()),
                         Instr::Addr(a_label.clone(), false),
-                        Instr::Addr(b_label.clone(), false)
+                        Instr::Addr(b_label.clone(), false),
                     ] {
                         self.push(&srcloc, i.clone());
                     }
@@ -1432,7 +1602,7 @@ impl Program {
                         Instr::Globl(label.clone()),
                         Instr::Label(label.clone()),
                         Instr::Long(bytes.len() * 2 + 1),
-                        Instr::Bytes(bytes.clone())
+                        Instr::Bytes(bytes.clone()),
                     ] {
                         self.push(&srcloc, i.clone());
                     }
@@ -1441,7 +1611,9 @@ impl Program {
         }
         swap(&mut constants, &mut self.constants);
 
-        self.dwarf_builder.write(self.current_addr, &mut self.finished_insns).unwrap();
+        self.dwarf_builder
+            .write(self.current_addr, &mut self.finished_insns)
+            .unwrap();
 
         Ok(())
     }
@@ -1456,58 +1628,70 @@ impl Program {
         let mut data_section = false;
         let mut data = "".to_string();
 
-        let mut decls: Vec<(String, Decl)> = self.finished_insns.iter().filter_map(|i| {
-            if let Instr::Section(name) = i {
-                if name.starts_with(".debug") || name.starts_with(".eh") {
-                    waiting_for_debug_info = Some(name.clone());
-                    data_section = false;
-                    return Some((name.to_string(), Decl::section(SectionKind::Debug).into()));
-                } else if name == ".text" {
-                    waiting_for_debug_info = None;
-                    data_section = false;
-                    // Predefined.
-                    return None;
-                } else {
-                    eprintln!("data section {name}");
-                    waiting_for_debug_info = None;
-                    data_section = true;
-                    return None;
+        let mut decls: Vec<(String, Decl)> = self
+            .finished_insns
+            .iter()
+            .filter_map(|i| {
+                if let Instr::Section(name) = i {
+                    if name.starts_with(".debug") || name.starts_with(".eh") {
+                        waiting_for_debug_info = Some(name.clone());
+                        data_section = false;
+                        return Some((name.to_string(), Decl::section(SectionKind::Debug).into()));
+                    } else if name == ".text" {
+                        waiting_for_debug_info = None;
+                        data_section = false;
+                        // Predefined.
+                        return None;
+                    } else {
+                        eprintln!("data section {name}");
+                        waiting_for_debug_info = None;
+                        data_section = true;
+                        return None;
+                    }
+                } else if let Instr::Globl(name) = i {
+                    if data_section {
+                        eprintln!("data label {name}");
+                        data = name.clone();
+                        return Some((data.clone(), Decl::data().global().into()));
+                    } else {
+                        return Some((name.to_string(), Decl::function().global().into()));
+                    };
+                } else if let Instr::Bytes(b) = i {
+                    // Define section in the faerie way.
+                    if let Some(waiting) = waiting_for_debug_info.clone() {
+                        waiting_for_debug_info = None;
+                        sections.push((waiting, b.clone()));
+                    }
                 }
-            } else if let Instr::Globl(name) = i {
-                if data_section {
-                    eprintln!("data label {name}");
-                    data = name.clone();
-                    return Some((data.clone(), Decl::data().global().into()));
-                } else {
-                    return Some((name.to_string(), Decl::function().global().into()))
-                };
-            } else if let Instr::Bytes(b) = i {
-                // Define section in the faerie way.
-                if let Some(waiting) = waiting_for_debug_info.clone() {
-                    waiting_for_debug_info = None;
-                    sections.push((waiting, b.clone()));
-                }
-            }
 
-            None
-        }).collect();
+                None
+            })
+            .collect();
 
         // Declare .debug_aranges
-        decls.push((".debug_aranges".to_string(), Decl::section(SectionKind::Debug).into()));
+        decls.push((
+            ".debug_aranges".to_string(),
+            Decl::section(SectionKind::Debug).into(),
+        ));
 
-        obj.declarations(decls.into_iter()).map_err(|e| format!("{e:?}"))?;
+        obj.declarations(decls.into_iter())
+            .map_err(|e| format!("{e:?}"))?;
 
         let mut relocations = Vec::new();
         let mut function_body = Vec::new();
         let mut in_function = None;
 
         let mut produced_code = 0;
-        let mut handle_def_end = |target_addr: u32, function_body: &mut Vec<u8>, in_function: &mut Option<String>| -> Result<(), String> {
+        let mut handle_def_end = |target_addr: u32,
+                                  function_body: &mut Vec<u8>,
+                                  in_function: &mut Option<String>|
+         -> Result<(), String> {
             if let Some(defname) = in_function.as_ref() {
                 if !function_body.is_empty() {
                     eprintln!("obj define {defname}");
                     produced_code += function_body.len();
-                    obj.define(defname, function_body.clone()).map_err(|e| format!("{e:?}"))?;
+                    obj.define(defname, function_body.clone())
+                        .map_err(|e| format!("{e:?}"))?;
                     *function_body = Vec::new();
                 }
             }
@@ -1535,24 +1719,39 @@ impl Program {
         write_u32(&mut debug_aranges, 6, 0);
         debug_aranges[10] = 4;
         write_u32(&mut debug_aranges, 16, self.target_addr);
-        write_u32(&mut debug_aranges, 20, self.target_addr + produced_code as u32);
+        write_u32(
+            &mut debug_aranges,
+            20,
+            self.target_addr + produced_code as u32,
+        );
         sections.push((".debug_aranges".to_string(), debug_aranges));
 
         for (name, bytes) in sections.iter() {
-            obj.define(name, bytes.clone()).map_err(|e| format!("{e:?}"))?;
+            obj.define(name, bytes.clone())
+                .map_err(|e| format!("{e:?}"))?;
         }
 
         for r in relocations.iter() {
-            obj.link(Link { from: &r.function, to: &r.reloc_target, at: r.code_location as u64}).map_err(|e| format!("link {e:?}"))?;
+            obj.link(Link {
+                from: &r.function,
+                to: &r.reloc_target,
+                at: r.code_location as u64,
+            })
+            .map_err(|e| format!("link {e:?}"))?;
         }
 
         let mut file = NamedTempFile::new().map_err(|e| format!("named temp {e:?}"))?;
         let name = file.path().to_str().unwrap().to_string();
         let mut reread_file = File::open(&name).map_err(|e| format!("reopen {e:?}"))?;
-        obj.write(file.into_file()).map_err(|e| format!("obj write {e:?}"))?;
-        reread_file.seek(SeekFrom::Start(0)).map_err(|e| format!("seek {e:?}"))?;
+        obj.write(file.into_file())
+            .map_err(|e| format!("obj write {e:?}"))?;
+        reread_file
+            .seek(SeekFrom::Start(0))
+            .map_err(|e| format!("seek {e:?}"))?;
         let mut result_buf = Vec::new();
-        reread_file.read_to_end(&mut result_buf).map_err(|e| format!("capture {e:?}"))?;
+        reread_file
+            .read_to_end(&mut result_buf)
+            .map_err(|e| format!("capture {e:?}"))?;
 
         // Patch up
         let create_patches = |result_buf: &mut [u8]| {
@@ -1575,7 +1774,7 @@ impl Program {
         sexp: Rc<SExp>,
         env: Rc<SExp>,
         target_addr: u32,
-        symbol_table: Rc<HashMap<String, String>>
+        symbol_table: Rc<HashMap<String, String>>,
     ) -> Result<Self, String> {
         let dwarf_builder = DwarfBuilder::new(filename, target_addr, symbol_table.clone());
         let mut p: Program = Program {
@@ -1592,7 +1791,7 @@ impl Program {
             start_addr: 0,
             target_addr,
             current_symbol: None,
-            dwarf_builder
+            dwarf_builder,
         };
 
         p.symbol_table = symbol_table;

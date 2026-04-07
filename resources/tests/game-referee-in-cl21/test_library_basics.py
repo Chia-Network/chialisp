@@ -9,9 +9,9 @@ from typing import List
 from pathlib import Path
 from clvm_rs import Program
 from lib.steprun import diag_run_clvm, compile_module_with_symbols
-from clvm_tools_rs import get_version
+from chialisp import get_version
 
-print(f"clvm_tools_rs version is {get_version()}")
+print(f"chialisp version is {get_version()}")
 #include_dirs = os.getcwd()
 include_dirs = [Path(__file__).parent, Path(__file__).parent.parent / "lib"]
 Program.set_run_unsafe_max_cost(11000000000)

@@ -1,0 +1,15 @@
+(mod (Q)
+  (include *standard-cl-23*)
+
+  (defun F (X)
+    (assign
+      A1 (r (r X))
+      A2 (c A1 (r X))
+      A3 (c A2 (r (r X)))
+      A4 (assign B1 (c A1 (r (r X))) (list B1 (r (r X))))
+      (list A1 A2 A3 A4)
+      )
+    )
+
+  (F (list Q 99 100 101 102))
+  )

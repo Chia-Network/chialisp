@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.3.2,<1.4.0"]
+requires = ["maturin>=1.3.2"]
 build-backend = "maturin"
 
 [tool.maturin]
@@ -7,12 +7,13 @@ bindings = "pyo3"
 features = ["extension-module"]
 
 [project]
-name = "clvm_tools_rs"
+name = "chialisp"
+dynamic = ["version"]
 
 # - Reenable these when we switch over from clvm_tools.
 # [project.scripts]
-# brun = "clvm_tools_rs.cmds:brun"
-# run = "clvm_tools_rs.cmds:run"
-# opc = "clvm_tools_rs.cmds:opc"
-# opd = "clvm_tools_rs.cmds:opd"
-# cldb = "clvm_tools_rs.cmds:cldb"
+# brun = "chialisp.cmds:brun"
+# run = "chialisp.cmds:run"
+# opc = "chialisp.cmds:opc"
+# opd = "chialisp.cmds:opd"
+# cldb = "chialisp.cmds:cldb"

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
-use clvm_rs::reduction::EvalErr;
+use clvm_rs::error::EvalErr;
 
 use crate::classic::clvm::__type_compatibility__::{
     pybytes_repr, t, Bytes, Stream, UnvalidatedBytesFromType,
@@ -62,6 +62,15 @@ fn large_odd_sized_neg_opd() {
         .invoke(&mut allocator, &"ff8afde1e61f36454dc0000180".to_string())
         .unwrap();
     assert_eq!(result.rest(), "(0xfde1e61f36454dc00001)");
+}
+
+#[test]
+fn mid_negative_value_opd_00() {
+    let mut allocator = Allocator::new();
+    let result = opd_conversion()
+        .invoke(&mut allocator, &"00".to_string())
+        .unwrap();
+    assert_eq!(result.rest(), "0x00");
 }
 
 #[test]
@@ -151,7 +160,7 @@ fn mid_negative_value_bin() {
     .expect("should be able to make nodeptr");
     if let SExp::Atom = allocator.sexp(atom.1) {
         let res_bytes = allocator.atom(atom.1);
-        assert_eq!(res_bytes, &[0xff, 0xff]);
+        assert_eq!(res_bytes.as_ref(), &[0xff, 0xff]);
     } else {
         assert!(false);
     }
@@ -237,9 +246,8 @@ fn run_from_source<'a>(allocator: &'a mut Allocator, src: String) -> NodePtr {
     let ir = read_ir(&src).unwrap();
     let assembled = assemble_from_ir(allocator, Rc::new(ir)).unwrap();
     let runner = DefaultProgramRunner::new();
-    let null = allocator.null();
     let res = runner
-        .run_program(allocator, assembled, null, None)
+        .run_program(allocator, assembled, NodePtr::NIL, None)
         .unwrap();
     return res.1;
 }
@@ -253,7 +261,7 @@ fn compile_program<'a>(
     let runner = run_program_for_search_paths("*test*", &vec![include_path], false);
     let input_ir = read_ir(&src);
     let input_program = assemble_from_ir(allocator, Rc::new(input_ir.unwrap())).unwrap();
-    let input_sexp = allocator.new_pair(input_program, allocator.null()).unwrap();
+    let input_sexp = allocator.new_pair(input_program, NodePtr::NIL).unwrap();
     let res = runner.run_program(allocator, run_script, input_sexp, None);
 
     return res.map(|x| disassemble(allocator, x.1, Some(0)));
@@ -289,8 +297,8 @@ fn can_run_from_source_nil() {
     let res = run_from_source(&mut allocator, "()".to_string());
     match allocator.sexp(res) {
         SExp::Atom => {
-            let res_bytes = allocator.atom(res);
-            assert_eq!(res_bytes.len(), 0);
+            let res_bytes = allocator.atom_len(res);
+            assert_eq!(res_bytes, 0);
         }
         _ => {
             assert_eq!("expected atom", "");
@@ -304,8 +312,8 @@ fn can_echo_quoted_nil() {
     let res = run_from_source(&mut allocator, "(1)".to_string());
     match allocator.sexp(res) {
         SExp::Atom => {
-            let res_bytes = allocator.atom(res);
-            assert_eq!(res_bytes.len(), 0);
+            let res_bytes = allocator.atom_len(res);
+            assert_eq!(res_bytes, 0);
         }
         _ => {
             assert_eq!("expected atom", "");
@@ -316,12 +324,11 @@ fn can_echo_quoted_nil() {
 #[test]
 fn can_echo_quoted() {
     let mut allocator = Allocator::new();
-    let null = allocator.null();
     let res = run_from_source(&mut allocator, "(1 ())".to_string());
     match allocator.sexp(res) {
         SExp::Pair(l, r) => {
-            assert_eq!(l, null);
-            assert_eq!(r, null);
+            assert_eq!(l, NodePtr::NIL);
+            assert_eq!(r, NodePtr::NIL);
         }
         _ => {
             assert_eq!("expected pair", "");
@@ -336,8 +343,8 @@ fn can_echo_quoted_atom() {
     match allocator.sexp(res) {
         SExp::Atom => {
             let res_bytes = allocator.atom(res);
-            assert_eq!(res_bytes.len(), 1);
-            assert_eq!(res_bytes[0], 3);
+            assert_eq!(res_bytes.as_ref().len(), 1);
+            assert_eq!(res_bytes.as_ref()[0], 3);
         }
         _ => {
             assert_eq!("expected atom", "");
@@ -352,8 +359,8 @@ fn can_do_operations() {
     match allocator.sexp(res) {
         SExp::Atom => {
             let res_bytes = allocator.atom(res);
-            assert_eq!(res_bytes.len(), 1);
-            assert_eq!(res_bytes[0], 8);
+            assert_eq!(res_bytes.as_ref().len(), 1);
+            assert_eq!(res_bytes.as_ref()[0], 8);
         }
         _ => {
             assert_eq!("expected atom", "");
@@ -368,8 +375,8 @@ fn can_do_operations_kw() {
     match allocator.sexp(res) {
         SExp::Atom => {
             let res_bytes = allocator.atom(res);
-            assert_eq!(res_bytes.len(), 1);
-            assert_eq!(res_bytes[0], 8);
+            assert_eq!(res_bytes.as_ref().len(), 1);
+            assert_eq!(res_bytes.as_ref()[0], 8);
         }
         _ => {
             assert_eq!("expected atom", "");
@@ -705,8 +712,7 @@ fn test_fancy_destructuring_type_language() {
     let code = assemble(&mut allocator, "(defconst X (+ 3 1))").expect("should assemble");
 
     // Empty match should succeed.
-    let () = <() as SelectNode<(), EvalErr>>::select_nodes(&(), &mut allocator, code)
-        .expect("should be found");
+    let () = <()>::select_nodes(&(), &mut allocator, code).expect("should be found");
 
     // We should not be able to destructure the keyword.
     assert_node_find_error(
@@ -826,4 +832,36 @@ fn test_sub_args() {
         disassemble(&mut allocator, result, None),
         "(\"body\" (f (\"test1\" \"test2\")) (f (r (\"test1\" \"test2\"))))"
     );
+}
+
+#[test]
+fn test_smoke_cl23_program_with_zero_folding() {
+    let mut s = Stream::new(None);
+    launch_tool(
+        &mut s,
+        &vec![
+            "run".to_string(),
+            "(mod () (include *standard-cl-23*) (defconst X (concat 0x00 0x00)) X)".to_string(),
+        ],
+        &"run".to_string(),
+        2,
+    );
+    let result = s.get_value().decode().trim().to_string();
+    assert_eq!(result, "(2 (1 . 2) (4 (1 . 0) 1))");
+}
+
+#[test]
+fn test_smoke_cl23_program_without_zero_folding() {
+    let mut s = Stream::new(None);
+    launch_tool(
+        &mut s,
+        &vec![
+            "run".to_string(),
+            "(mod () (include *standard-cl-23.1*) (defconst X (concat 0x00 0x00)) X)".to_string(),
+        ],
+        &"run".to_string(),
+        2,
+    );
+    let result = s.get_value().decode().trim().to_string();
+    assert_eq!(result, "(2 (1 . 2) (4 (1 . 0x0000) 1))");
 }

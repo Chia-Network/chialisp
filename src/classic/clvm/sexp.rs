@@ -2,10 +2,9 @@ use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::rc::Rc;
 
+use chia_bls::PublicKey;
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
-use clvm_rs::reduction::EvalErr;
-
-use bls12_381::G1Affine;
+use clvm_rs::error::EvalErr;
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, Stream};
 use crate::classic::clvm::serialize::sexp_to_stream;
@@ -17,7 +16,7 @@ pub enum CastableType {
     Bytes(Bytes),
     String(String),
     Number(Number),
-    G1Affine(G1Affine),
+    G1Affine(PublicKey),
     ListOf(usize, Vec<Rc<CastableType>>),
     TupleOf(Rc<CastableType>, Rc<CastableType>),
 }
@@ -43,7 +42,10 @@ pub fn to_sexp_type(allocator: &mut Allocator, value: CastableType) -> Result<No
 
         let top = match stack.pop() {
             None => {
-                return Err(EvalErr(allocator.null(), "empty value stack".to_string()));
+                return Err(EvalErr::InternalError(
+                    NodePtr::NIL,
+                    "empty value stack".to_string(),
+                ));
             }
             Some(rc) => rc,
         };
@@ -57,7 +59,7 @@ pub fn to_sexp_type(allocator: &mut Allocator, value: CastableType) -> Result<No
                     }
                     CastableType::TupleOf(left, right) => {
                         let target_index = stack.len();
-                        match allocator.new_pair(allocator.null(), allocator.null()) {
+                        match allocator.new_pair(NodePtr::NIL, NodePtr::NIL) {
                             Ok(pair) => {
                                 stack.push(Rc::new(CastableType::CLVMObject(pair)));
                             }
@@ -75,7 +77,7 @@ pub fn to_sexp_type(allocator: &mut Allocator, value: CastableType) -> Result<No
                     }
                     CastableType::ListOf(_sel, v) => {
                         let target_index = stack.len();
-                        stack.push(Rc::new(CastableType::CLVMObject(allocator.null())));
+                        stack.push(Rc::new(CastableType::CLVMObject(NodePtr::NIL)));
                         for vi in v.iter().take(v.len() - 1) {
                             stack.push(vi.clone());
                             ops.push(SexpStackOp::OpPrepend(target_index));
@@ -150,22 +152,22 @@ pub fn to_sexp_type(allocator: &mut Allocator, value: CastableType) -> Result<No
                             }
                         }
                         SExp::Atom => {
-                            return Err(EvalErr(
+                            return Err(EvalErr::InternalError(
                                 *target_value,
                                 "attempt to set_pair in atom".to_string(),
                             ));
                         }
                     },
                     _ => {
-                        return Err(EvalErr(
-                            allocator.null(),
+                        return Err(EvalErr::InternalError(
+                            NodePtr::NIL,
                             format!("Setting wing of non pair {:?}", stack[target]),
                         ));
                     }
                 },
                 _ => {
-                    return Err(EvalErr(
-                        allocator.null(),
+                    return Err(EvalErr::InternalError(
+                        NodePtr::NIL,
                         format!("op_set_pair on atom item {target:?} in vec {stack:?} ops {ops:?}"),
                     ));
                 }
@@ -182,15 +184,15 @@ pub fn to_sexp_type(allocator: &mut Allocator, value: CastableType) -> Result<No
                         }
                     },
                     _ => {
-                        return Err(EvalErr(
-                            allocator.null(),
+                        return Err(EvalErr::InternalError(
+                            NodePtr::NIL,
                             format!("unrealized pair prepended {:?}", stack[target]),
                         ));
                     }
                 },
                 _ => {
-                    return Err(EvalErr(
-                        allocator.null(),
+                    return Err(EvalErr::InternalError(
+                        NodePtr::NIL,
                         format!("unrealized prepend {top:?}"),
                     ));
                 }
@@ -199,22 +201,25 @@ pub fn to_sexp_type(allocator: &mut Allocator, value: CastableType) -> Result<No
     }
 
     if stack.len() != 1 {
-        return Err(EvalErr(
-            allocator.null(),
+        return Err(EvalErr::InternalError(
+            NodePtr::NIL,
             format!("too many values left on op stack {stack:?}"),
         ));
     }
 
-    return match stack.pop() {
-        None => Err(EvalErr(allocator.null(), "stack empty".to_string())),
+    match stack.pop() {
+        None => Err(EvalErr::InternalError(
+            NodePtr::NIL,
+            "stack empty".to_string(),
+        )),
         Some(top) => match top.borrow() {
             CastableType::CLVMObject(o) => Ok(*o),
-            _ => Err(EvalErr(
-                allocator.null(),
+            _ => Err(EvalErr::InternalError(
+                NodePtr::NIL,
                 format!("unimplemented {:?}", stack[0]),
             )),
         },
-    };
+    }
 }
 
 pub fn sexp_as_bin(allocator: &mut Allocator, sexp: NodePtr) -> Bytes {
@@ -227,7 +232,7 @@ pub fn bool_sexp(allocator: &Allocator, b: bool) -> NodePtr {
     if b {
         allocator.one()
     } else {
-        allocator.null()
+        NodePtr::NIL
     }
 }
 
@@ -342,21 +347,28 @@ pub fn non_nil(allocator: &Allocator, sexp: NodePtr) -> bool {
 pub fn first(allocator: &Allocator, sexp: NodePtr) -> Result<NodePtr, EvalErr> {
     match allocator.sexp(sexp) {
         SExp::Pair(f, _) => Ok(f),
-        _ => Err(EvalErr(sexp, "first of non-cons".to_string())),
+        _ => Err(EvalErr::InternalError(
+            sexp,
+            "first of non-cons".to_string(),
+        )),
     }
 }
 
 pub fn rest(allocator: &Allocator, sexp: NodePtr) -> Result<NodePtr, EvalErr> {
     match allocator.sexp(sexp) {
         SExp::Pair(_, r) => Ok(r),
-        _ => Err(EvalErr(sexp, "rest of non-cons".to_string())),
+        _ => Err(EvalErr::InternalError(sexp, "rest of non-cons".to_string())),
     }
 }
 
 pub fn atom(allocator: &Allocator, sexp: NodePtr) -> Result<Vec<u8>, EvalErr> {
     match allocator.sexp(sexp) {
-        SExp::Atom => Ok(allocator.atom(sexp).to_vec()), // only sexp in scope
-        _ => Err(EvalErr(sexp, "not an atom".to_string())),
+        SExp::Atom => {
+            // only sexp in scope
+            let atom = allocator.atom(sexp);
+            Ok(atom.as_ref().to_vec())
+        }
+        _ => Err(EvalErr::InternalError(sexp, "not an atom".to_string())),
     }
 }
 
@@ -383,7 +395,7 @@ pub fn proper_list(allocator: &Allocator, sexp: NodePtr, store: bool) -> Option<
 }
 
 pub fn enlist(allocator: &mut Allocator, vec: &[NodePtr]) -> Result<NodePtr, EvalErr> {
-    let mut built = allocator.null();
+    let mut built = NodePtr::NIL;
 
     for i_reverse in 0..vec.len() {
         let i = vec.len() - i_reverse - 1;
@@ -498,7 +510,7 @@ where
 {
     lst.last()
         .copied()
-        .ok_or_else(|| EvalErr(nil, "alist is empty and shouldn't be".to_string()))
+        .ok_or_else(|| EvalErr::InternalError(nil, "alist is empty and shouldn't be".to_string()))
 }
 
 // This is a trait that generates a haskell-like ad-hoc type from the user's
@@ -526,53 +538,54 @@ pub enum ThisNode {
     Here,
 }
 
-pub trait SelectNode<T, E> {
-    fn select_nodes(&self, allocator: &mut Allocator, n: NodePtr) -> Result<T, E>;
+pub trait SelectNode<T> {
+    fn select_nodes(&self, allocator: &mut Allocator, n: NodePtr) -> Result<T, EvalErr>;
 }
 
-impl<E> SelectNode<NodePtr, E> for ThisNode {
-    fn select_nodes(&self, _allocator: &mut Allocator, n: NodePtr) -> Result<NodePtr, E> {
+impl SelectNode<NodePtr> for ThisNode {
+    fn select_nodes(&self, _allocator: &mut Allocator, n: NodePtr) -> Result<NodePtr, EvalErr> {
         Ok(n)
     }
 }
 
-impl<E> SelectNode<(), E> for () {
-    fn select_nodes(&self, _allocator: &mut Allocator, _n: NodePtr) -> Result<(), E> {
+impl SelectNode<()> for () {
+    fn select_nodes(&self, _allocator: &mut Allocator, _n: NodePtr) -> Result<(), EvalErr> {
         Ok(())
     }
 }
 
-impl<R, T, E> SelectNode<First<T>, E> for First<R>
+impl<R, T> SelectNode<First<T>> for First<R>
 where
-    R: SelectNode<T, E> + Clone,
-    E: From<EvalErr>,
+    R: SelectNode<T> + Clone,
 {
-    fn select_nodes(&self, allocator: &mut Allocator, n: NodePtr) -> Result<First<T>, E> {
+    fn select_nodes(&self, allocator: &mut Allocator, n: NodePtr) -> Result<First<T>, EvalErr> {
         let First::Here(f) = &self;
         let NodeSel::Cons(first, ()) = NodeSel::Cons(f.clone(), ()).select_nodes(allocator, n)?;
         Ok(First::Here(first))
     }
 }
 
-impl<R, T, E> SelectNode<Rest<T>, E> for Rest<R>
+impl<R, T> SelectNode<Rest<T>> for Rest<R>
 where
-    R: SelectNode<T, E> + Clone,
-    E: From<EvalErr>,
+    R: SelectNode<T> + Clone,
 {
-    fn select_nodes(&self, allocator: &mut Allocator, n: NodePtr) -> Result<Rest<T>, E> {
+    fn select_nodes(&self, allocator: &mut Allocator, n: NodePtr) -> Result<Rest<T>, EvalErr> {
         let Rest::Here(f) = &self;
         let NodeSel::Cons((), rest) = NodeSel::Cons((), f.clone()).select_nodes(allocator, n)?;
         Ok(Rest::Here(rest))
     }
 }
 
-impl<R, S, T, U, E> SelectNode<NodeSel<T, U>, E> for NodeSel<R, S>
+impl<R, S, T, U> SelectNode<NodeSel<T, U>> for NodeSel<R, S>
 where
-    R: SelectNode<T, E>,
-    S: SelectNode<U, E>,
-    E: From<EvalErr>,
+    R: SelectNode<T>,
+    S: SelectNode<U>,
 {
-    fn select_nodes(&self, allocator: &mut Allocator, n: NodePtr) -> Result<NodeSel<T, U>, E> {
+    fn select_nodes(
+        &self,
+        allocator: &mut Allocator,
+        n: NodePtr,
+    ) -> Result<NodeSel<T, U>, EvalErr> {
         let NodeSel::Cons(my_left, my_right) = &self;
         let l = first(allocator, n)?;
         let r = rest(allocator, n)?;

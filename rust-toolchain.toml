@@ -1,0 +1,4 @@
+
+[toolchain]
+channel = "stable"
+components = [ "rustfmt", "rustc", "rust-std", "rust-analyzer", "rustc-dev" ]

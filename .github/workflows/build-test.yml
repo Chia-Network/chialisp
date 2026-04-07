@@ -23,11 +23,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
-        python: [3.8, 3.9, '3.10', 3.11]
+        os: [macos-15-intel, ubuntu-latest, windows-latest]
+        python: ['3.10', 3.11, 3.12]
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v6
       with:
         fetch-depth: 0
 
@@ -36,7 +36,7 @@ jobs:
       with:
         toolchain: stable
 
-    - uses: actions/setup-python@v4
+    - uses: actions/setup-python@v6
       name: Install Python ${{ matrix.python }}
       with:
         python-version: ${{ matrix.python }}
@@ -51,19 +51,19 @@ jobs:
     - name: Install dependencies
       run: |
           python -m pip install --upgrade pip
-          python -m pip install maturin==1.1.0
+          python -m pip install maturin==1.10.2
 
     - name: Build MacOs with maturin on Python ${{ matrix.python }}
       if: startsWith(matrix.os, 'macos')
       env:
-        MACOSX_DEPLOYMENT_TARGET: '11.0'
+        MACOSX_DEPLOYMENT_TARGET: '15.0'
       run: |
         maturin build -i python --release --strip
 
-    - name: Build Linux in manylinux2010 with maturin on Python ${{ matrix.python }}
+    - name: Build Linux in manylinux_2_28 with maturin on Python ${{ matrix.python }}
       if: startsWith(matrix.os, 'ubuntu')
       run: |
-        docker run --rm -v $(pwd):/io ghcr.io/pyo3/maturin:v1.1.0 build --release --strip --manylinux 2014
+        docker run --rm -v $(pwd):/io ghcr.io/pyo3/maturin:v1.10.2 build --release --strip --manylinux 2_28 --sdist
         # Refresh in case any ownerships changed.
         mv target target.docker && cp -r target.docker target
         # Ensure an empty .cargo-lock file exists.
@@ -74,15 +74,15 @@ jobs:
       run: |
         maturin build -i python --release --strip
         # Find and install the newly built wheel
-        pip install --no-index --find-links target/wheels/ clvm_tools_rs
+        pip install --no-index --find-links target/wheels/ chialisp
 
-    - name: Install clvm_tools_rs wheel
+    - name: Install chialisp wheel
       if: ${{ !startsWith(matrix.os, 'windows') }}
       run: |
         ls target/wheels/
         # this mess puts the name of the `.whl` file into `$WHEEL_PATH`
         # remove the dot, use the `glob` lib to grab the file from the directory
-        export WHEEL_PATH=$(echo ${{ matrix.python }} | python -c 'DOTLESS=input().replace(".", ""); import glob; print(" ".join(filter(lambda x: "musl" not in x, glob.glob("target/wheels/clvm_tools_rs-*-cp*-*.whl"))))' )
+        export WHEEL_PATH=$(echo ${{ matrix.python }} | python -c 'DOTLESS=input().replace(".", ""); import glob; print(" ".join(filter(lambda x: "musl" not in x, glob.glob("target/wheels/chialisp-*-cp*-*.whl"))))' )
         echo ${WHEEL_PATH}
         pip install ${WHEEL_PATH}
 
@@ -99,19 +99,25 @@ jobs:
         echo "installing clvm_rs via pip"
         pip install clvm_rs
 
-        echo "installing clvm_tools for clvm tests"
-
         # Ensure clvm_tools is installed from its own repo.
+        echo "installing clvm_tools for clvm tests"
         git clone https://github.com/Chia-Network/clvm_tools.git --branch=main --single-branch
         python -m pip install ./clvm_tools
 
-    - name: Ensure clvm, clvm_rs, clvm_tools_rs are installed
+        # Install chialisp pkg as "clvm_tools_rs" for older test framework
+        pip uninstall -v -y clvm_tools_rs
+        pip install chialisp
+        pip install -e ./tmp
+
+
+    - name: Ensure clvm, clvm_rs, chialisp are installed
       run: |
-        python -c 'import clvm'
-        python -c 'import clvm; print(clvm.__file__)'
-        python -c 'import clvm_rs; print(clvm_rs.__file__)'
-        python -c 'import clvm_tools_rs; print(clvm_tools_rs.__file__)'
+        python -c 'import clvm; print("clvm:", clvm.__file__)'
+        python -c 'import clvm_rs; print("clvm_rs", clvm_rs.__file__)'
+        python -c 'import chialisp; print("chialisp:", chialisp.__file__)'
+        python -c 'import clvm_tools_rs; print("clvm_tools_rs:", clvm_tools_rs.__file__)'
         echo "CLVM_TOOLS_RS_VERSION=$(python -c 'import clvm_tools_rs; print(clvm_tools_rs.get_version())')" >> "$GITHUB_ENV"
+        echo "CHIALISP_VERSION=$(python -c 'import chialisp; print(chialisp.get_version())')" >> "$GITHUB_ENV"
 
     # Test cldb output both run from python and via its command line tool.
     - name: "Run step run tests"
@@ -120,8 +126,8 @@ jobs:
         # This finds and installs a compatible wheel from the target directory on linux.
         # We do it here as a hedge against changes in the python environment that might
         # have happened due to pulling in the trunk versions of other packages that
-        # depend on clvm_tools_rs.
-        pip install --no-index --find-links target/wheels/ clvm_tools_rs
+        # depend on chialisp.
+        pip install --no-index --find-links target/wheels/ chialisp
         pip install clvm_rs
         pip install clvm_tools
         cd resources/tests
@@ -141,51 +147,64 @@ jobs:
 
 
     - name: Verify recompilation of old sources match with new compiler
-      if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.8')
+      if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.12')
       run: |
-        set -x
         # Build cmd line tools
+        echo "START PWD:" $(pwd) && \
         PYO3_PYTHON=`which python` cargo build --release
 
-        # Grab chia-blockchain
-        rm -rf chia-blockchain
-        git clone https://github.com/Chia-Network/chia-blockchain
+        # Grab chia_puzzles
+        rm -rf chia_puzzles
+        git clone https://github.com/Chia-Network/chia_puzzles
 
         # Check that recompiling deployed puzzles match with their deployed hashes
-        cp support/install_deps.sh support/verify_compiler_version.sh chia-blockchain
-        (cd chia-blockchain && python -m venv venv && . venv/bin/activate && pip install --upgrade pip && \
-          python -m pip install maturin==1.1.0 && \
-          cd .. && pip install --no-index --find-links target/wheels/ clvm_tools_rs && \
-          cd chia-blockchain && \
-          # deps for manage_clvm.py
-          pip install click typing_extensions chia_rs clvm && \
-          export PYTHONPATH=${PYTHONPATH}:$(pwd) && \
-          ./verify_compiler_version.sh ${CLVM_TOOLS_RS_VERSION} && ./activated.py python tools/manage_clvm.py check)
+        # chia_puzzles is the directory the repo is cloned in.  It contains a subdir
+        # called chia_puzzles_py, which is a bit confusing, but that's where the
+        # manage_clvm.py script is.  That's why the code below runs
+        # chia_puzzles_py/manage_clvm.py while being in ./chia_puzzles.
+        cp support/install_deps.sh support/verify_compiler_version.sh chia_puzzles
+        (cd chia_puzzles && python -m venv .venv && . .venv/bin/activate && pip install --upgrade pip && \
+        python -m pip install maturin==1.10.2 && \
+        cd .. && \
+        pip install --no-index --find-links target/wheels/ chialisp && \
+        cd chia_puzzles && \
+        pip install click typing_extensions chia_rs clvm chia_puzzles_py) && \
+        pip uninstall -v -y clvm_tools_rs && \
+        pip uninstall -v -y chialisp && \
+        pip install -v --no-index --find-links target/wheels/ chialisp && \
+        pip uninstall -v -y clvm_tools_rs && \
+        echo "PWD:" $(pwd) && \
+        pip install -e ./tmp && \
+        (cd chia_puzzles && export PYTHONPATH=${PYTHONPATH}:$(pwd) && \
+        ./verify_compiler_version.sh ${CLVM_TOOLS_RS_VERSION} && . .venv/bin/activate && \
+        echo "Running check" && \
+        python chia_puzzles_py/manage_clvm.py check && \
+        echo "Check successful")
 
     - name: Test Classic command line tools with pytest
-      if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.8')
+      if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.12')
       run: |
         python -m pip install pytest
         # This script installs the wheel built during this workflow.
-        pip install --no-index --find-links wheel/target/wheels/ clvm_tools_rs
+        pip install --no-index --find-links wheel/target/wheels/ chialisp
         # TODO: bring in the other tests in resources/tests/cmdline/tests besides cmds_test.py
         (cd resources/tests/cmdline/tests && py.test cmds_test.py )
 
     - name: Verify recompilation of cl21 sources
-      if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.8')
+      if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.12')
       run: |
         # We need chia-rs for the following.
         pip install chia-rs
         # Ensure we're using the sources we have.  This is a hedge against
         # changes made by any other step doing operations on pip.
         # This script installs the wheel built during this workflow.
-        pip install --no-index --find-links wheel/target/wheels/ clvm_tools_rs
+        pip install --no-index --find-links wheel/target/wheels/ chialisp
         (cd resources/tests && python check-recompiles.py)
 
     - name: Verify recompilation follows date and modification rules
-      if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.8')
+      if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.12')
       run: |
-        pip install --no-index --find-links wheel/target/wheels/ clvm_tools_rs
+        pip install --no-index --find-links wheel/target/wheels/ chialisp
         python resources/tests/test-clvm-recompile-behavior.py
 
     - name: Install pytest
@@ -203,30 +222,30 @@ jobs:
         pytest tests
 
     - name: Run tests
-      if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.8')
+      if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.12')
       run: cargo test --features=fuzz
 
     - name: Exhaustive assign tests
-      if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.8')
+      if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.12')
       run: cargo test -- --include-ignored assign
 
     - name: Check coverage
-      if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.8')
+      if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.12')
       run: |
         cargo install grcov
         rustup component add llvm-tools-preview
         python ./resources/coverage/run_coverage.py --require-percent 60
 
     - name: Build alpine wheel via docker
-      if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.8')
+      if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.12')
       run: |
         cd resources/alpine && docker build -t clvm-tools-rs-alpine .
-        docker run -v ${GITHUB_WORKSPACE}:/root/clvm_tools_rs -t clvm-tools-rs-alpine sh /root/build-alpine.sh
+        docker run -v ${GITHUB_WORKSPACE}:/root/chialisp -t clvm-tools-rs-alpine sh /root/build-alpine.sh
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v7
       with:
-        name: wheels
+        name: wheels-${{ matrix.os }}-py-${{ matrix.python }}
         path: ./target/wheels/
 
   upload:
@@ -235,7 +254,7 @@ jobs:
     needs: build_wheels
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v6
       with:
         fetch-depth: 0
 
@@ -247,13 +266,19 @@ jobs:
     - name: Install python
       uses: Chia-Network/actions/setup-python@main
       with:
-        python-version: "3.10"
+        python-version: "3.12"
 
     - name: Download artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v8
       with:
-        name: wheels
+        merge-multiple: true
+        pattern: wheels-*-py-3.12
         path: ./target/wheels/
+
+    - name: List artifacts
+      run: |
+        ls -la target/wheels/
+        sha256sum target/wheels/*
 
     - name: Check for incompatible wheels and bail if found
       run: |
@@ -290,7 +315,7 @@ jobs:
 
     - name: Configure AWS credentials
       if: steps.check_secrets.outputs.HAS_AWS_SECRET
-      uses: aws-actions/configure-aws-credentials@v2
+      uses: aws-actions/configure-aws-credentials@v6
       with:
         role-to-assume: arn:aws:iam::${{ secrets.CHIA_AWS_ACCOUNT_ID }}:role/installer-upload
         aws-region: us-west-2
@@ -306,43 +331,45 @@ jobs:
           aws --no-progress s3 cp "$file" "s3://download.chia.net/simple-dev/clvm-tools-rs/$filename"
         done <<< "$FILES"
 
-  fmt:
-    runs-on: ubuntu-20.04
-    name: cargo fmt
+  clippy:
+    runs-on: ubuntu-22.04
+    name: clippy
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 1
       - name: Install rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-            toolchain: stable
-            override: true
-            components: rustfmt, clippy
-      - name: fmt
-        run: cargo fmt -- --files-with-diff --check
-
-  clippy:
-    runs-on: ubuntu-20.04
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: clippy
-          override: true
+          components: rustfmt, clippy
+          toolchain: stable-2025-08-07-x86_64-unknown-linux-gnu
       - name: clippy
-        run: cargo clippy --all -- -D warnings
-      - uses: giraffate/clippy-action@v1
+        run: |
+          # Add --all-targets as a separate step
+          cargo clippy --workspace -- -D warnings
+      - name: cargo fmt
+        run: cargo fmt --all -- --files-with-diff --check
+
+  cargo_fmt:
+    runs-on: ubuntu-22.04
+    name: cargo fmt
+    steps:
+      - uses: actions/checkout@v6
         with:
-          reporter: 'github-pr-review'
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          toolchain: stable-2025-08-07-x86_64-unknown-linux-gnu
+      - name: cargo fmt
+        run: cargo fmt --all -- --files-with-diff --check
 
   unit_tests:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     name: Unit tests
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 1
       - name: Install rust
@@ -356,32 +383,70 @@ jobs:
   coverage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
       - uses: actions-rs/toolchain@v1
         with:
             toolchain: stable
-      - name: Run for coverage
+      - name: Install coverage tools
         run: |
           sudo apt-get update
           sudo apt-get install lcov -y
           rustup component add llvm-tools-preview
           cargo install grcov
           export RUSTFLAGS="-Cinstrument-coverage"
-          export LLVM_PROFILE_FILE=$(pwd)/target/clvm_tools_rs-%p-%m.profraw
+          export LLVM_PROFILE_FILE=$(pwd)/target/chialisp-%p-%m.profraw
           export CARGO_TARGET_DIR=$(pwd)/target
           cargo test --release --workspace
+      - name: Configure pip
+        run: |
+          echo "PWD:" $(pwd)
+          python -m pip install --upgrade pip
           python -m venv venv
+          source venv/bin/activate
+          python -m pip install --upgrade pip
+      - name: clone clvm_tools so we have an exact match of the tests run in both repos
+        run: |
           source venv/bin/activate
           git clone https://github.com/Chia-Network/clvm_tools.git --branch=main --single-branch
           pip install ./clvm_tools
-          pip install maturin pytest
+      - name: install maturin & pytest
+        run: |
+          source venv/bin/activate
+          python -m pip install maturin==1.10.2
+          pip install pytest
+      - name: Build maturin interface
+        run: |
+          source venv/bin/activate
           maturin develop --release
+      - name: verify chialisp install
+        run: |
+          source venv/bin/activate
+          pip show chialisp
+          python -c 'import chialisp; print("chialisp:", chialisp.__file__)'
+      #- name: Install chialisp
+      #  run: |
+      #    source venv/bin/activate
+      #    pip uninstall -v -y chialisp
+      #    pip install -v --no-index --find-links target/wheels/ chialisp
+      - name: Install chialisp pkg as "clvm_tools_rs" for older test framework
+        run: |
+          source venv/bin/activate
+          pip uninstall -v -y clvm_tools_rs
+          pip install -e ./tmp
+      - name: Run pytest in resources/tests/cmdline/tests for coverage
+        run: |
+          source venv/bin/activate
           (cd resources/tests/cmdline/tests && pytest)
+      - name: Run grcov for coverage
+        run: |
+          source venv/bin/activate
           grcov . --binary-path target -s . --branch --ignore-not-existing --ignore='*/.cargo/*' --ignore='*/tests/*' -o rust_cov.info
+      - name: Process lcov.info
+        run: |
+          source venv/bin/activate
           python -c 'with open("rust_cov.info") as f: lines = [l for l in f if not (l.startswith("DA:") and int(l.split(",")[1].strip()) >= 2**63)]; open("lcov.info", "w").writelines(lines)'
       - name: Upload to Coveralls
         uses: coverallsapp/github-action@v2
-        if: always()
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
         with:

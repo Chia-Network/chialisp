@@ -1,24 +1,53 @@
 use std::borrow::Borrow;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::mem::swap;
 use std::rc::Rc;
 
 use clvm_rs::allocator;
 use clvm_rs::allocator::{Allocator, NodePtr};
 
+use clvm_rs::error::EvalErr;
 use num_bigint::ToBigInt;
 
 use sha2::Digest;
 use sha2::Sha256;
 
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
-use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
+use crate::classic::clvm::OPERATORS_LATEST_VERSION;
+use crate::classic::clvm_tools::stages::stage_0::{RunProgramOption, TRunProgram};
 
 use crate::compiler::prims;
 use crate::compiler::runtypes::RunFailure;
-use crate::compiler::sexp::{parse_sexp, SExp};
+use crate::compiler::sexp::{parse_sexp, printable, SExp};
 use crate::compiler::srcloc::Srcloc;
 
 use crate::util::{number_from_u8, u8_from_number, Number};
+
+thread_local! {
+    static NEW_COMPILATION_LEVEL_INT: RefCell<bool> = const { RefCell::new(true) };
+}
+
+pub struct NewStyleIntConversion(bool);
+
+impl NewStyleIntConversion {
+    pub fn new(mut new_val: bool) -> NewStyleIntConversion {
+        NewStyleIntConversion(NEW_COMPILATION_LEVEL_INT.with(|v| {
+            let mut val_ref = v.borrow_mut();
+            swap(&mut new_val, &mut val_ref);
+            new_val
+        }))
+    }
+    fn setting() -> bool {
+        NEW_COMPILATION_LEVEL_INT.with(|v| *v.borrow())
+    }
+}
+
+impl Drop for NewStyleIntConversion {
+    fn drop(&mut self) {
+        NEW_COMPILATION_LEVEL_INT.with(|v| *v.borrow_mut() = self.0)
+    }
+}
 
 /// Provide a way of intercepting and running new primitives.
 pub trait PrimOverride {
@@ -228,7 +257,7 @@ pub fn convert_to_clvm_rs(
     head: Rc<SExp>,
 ) -> Result<NodePtr, RunFailure> {
     match head.borrow() {
-        SExp::Nil(_) => Ok(allocator.null()),
+        SExp::Nil(_) => Ok(NodePtr::NIL),
         SExp::Atom(_l, x) => allocator
             .new_atom(x)
             .map_err(|_e| RunFailure::RunErr(head.loc(), format!("failed to alloc atom {head}"))),
@@ -236,8 +265,8 @@ pub fn convert_to_clvm_rs(
             .new_atom(x)
             .map_err(|_e| RunFailure::RunErr(head.loc(), format!("failed to alloc string {head}"))),
         SExp::Integer(_, i) => {
-            if *i == bi_zero() {
-                Ok(allocator.null())
+            if NewStyleIntConversion::setting() && *i == bi_zero() {
+                Ok(NodePtr::NIL)
             } else {
                 allocator
                     .new_atom(&u8_from_number(i.clone()))
@@ -264,7 +293,9 @@ pub fn convert_from_clvm_rs(
 ) -> Result<Rc<SExp>, RunFailure> {
     match allocator.sexp(head) {
         allocator::SExp::Atom => {
-            let atom_data = allocator.atom(head);
+            let int_conv = NewStyleIntConversion::setting();
+            let atom = allocator.atom(head);
+            let atom_data = atom.as_ref();
             if atom_data.is_empty() {
                 Ok(Rc::new(SExp::Nil(loc)))
             } else {
@@ -272,7 +303,13 @@ pub fn convert_from_clvm_rs(
                 // Ensure that atom values that don't evaluate equal to integers
                 // are represented faithfully as atoms.
                 if u8_from_number(integer.clone()) == atom_data {
-                    Ok(Rc::new(SExp::Integer(loc, integer)))
+                    if int_conv && atom_data == [0] {
+                        Ok(Rc::new(SExp::QuotedString(loc, b'x', atom_data.to_vec())))
+                    } else {
+                        Ok(Rc::new(SExp::Integer(loc, integer)))
+                    }
+                } else if int_conv && !printable(atom_data, true) {
+                    Ok(Rc::new(SExp::QuotedString(loc, b'x', atom_data.to_vec())))
                 } else {
                     Ok(Rc::new(SExp::Atom(loc, atom_data.to_vec())))
                 }
@@ -285,6 +322,47 @@ pub fn convert_from_clvm_rs(
             })
         }
     }
+}
+
+#[test]
+fn test_convert_from_clvm_rs_00_byte() {
+    let mut allocator = Allocator::new();
+    let allocator_atom = allocator.new_atom(&[0]).expect("should convert");
+    let srcloc = Srcloc::start("*test*");
+    let result = convert_from_clvm_rs(&mut allocator, srcloc.clone(), allocator_atom)
+        .expect("should convert to mod");
+    assert_eq!(result, Rc::new(SExp::Atom(srcloc, vec![0])));
+    assert_eq!(
+        sha256tree(result.clone()),
+        &[
+            0x47, 0xdc, 0x54, 0x0c, 0x94, 0xce, 0xb7, 0x04, 0xa2, 0x38, 0x75, 0xc1, 0x12, 0x73,
+            0xe1, 0x6b, 0xb0, 0xb8, 0xa8, 0x7a, 0xed, 0x84, 0xde, 0x91, 0x1f, 0x21, 0x33, 0x56,
+            0x81, 0x15, 0xf2, 0x54
+        ]
+    );
+
+    let node = convert_to_clvm_rs(&mut allocator, result).expect("should convert from mod");
+    let atom = allocator.atom(node);
+    assert_eq!(atom.as_ref(), &[0]);
+}
+
+#[test]
+fn test_convert_to_clvm_rs_m129() {
+    let mut allocator = Allocator::new();
+    let srcloc = Srcloc::start("*test*");
+    let result = Rc::new(SExp::Integer(srcloc, -129_i32.to_bigint().unwrap()));
+    assert_eq!(
+        sha256tree(result.clone()),
+        &[
+            0x5a, 0x0c, 0x1f, 0xec, 0x64, 0x75, 0x1e, 0x82, 0xc0, 0xd4, 0x86, 0x1d, 0x0b, 0xc1,
+            0x9c, 0x75, 0x80, 0x52, 0x5d, 0x2f, 0x47, 0x66, 0x79, 0x56, 0xbb, 0xd9, 0xd7, 0x9e,
+            0x26, 0x0a, 0xae, 0x00
+        ]
+    );
+
+    let node = convert_to_clvm_rs(&mut allocator, result).expect("should convert from mod");
+    let atom = allocator.atom(node);
+    assert_eq!(atom.as_ref(), &[255, 127]);
 }
 
 fn generate_argument_refs(start: Number, sexp: Rc<SExp>) -> Rc<SExp> {
@@ -323,11 +401,25 @@ pub fn apply_op(
     let converted_args = convert_to_clvm_rs(allocator, wrapped_args.clone())?;
 
     runner
-        .run_program(allocator, converted_app, converted_args, None)
+        .run_program(
+            allocator,
+            converted_app,
+            converted_args,
+            Some(RunProgramOption {
+                operators_version: OPERATORS_LATEST_VERSION,
+                ..RunProgramOption::default()
+            }),
+        )
         .map_err(|e| {
             RunFailure::RunErr(
                 head.loc(),
-                format!("{} in {application} {wrapped_args}", e.1),
+                format!(
+                    "{} in {application} {wrapped_args}",
+                    match e {
+                        EvalErr::InternalError(_, e) => e.to_string(),
+                        _ => e.to_string(),
+                    }
+                ),
             )
         })
         .and_then(|v| convert_from_clvm_rs(allocator, head.loc(), v.1))
@@ -358,6 +450,14 @@ pub fn get_history_len(step: Rc<RunStep>) -> usize {
 
 /// Generically determine whether a value is truthy.
 pub fn truthy(sexp: Rc<SExp>) -> bool {
+    if NewStyleIntConversion::setting() {
+        // The previous truthy would not have taken account of all zero bit
+        // values of lengths other than zero.
+        if let SExp::Atom(_, a) | SExp::QuotedString(_, _, a) = sexp.borrow() {
+            return !a.is_empty();
+        }
+    }
+
     // Fails for cons, but cons is truthy
     atom_value(sexp).unwrap_or_else(|_| bi_one()) != bi_zero()
 }
@@ -739,7 +839,13 @@ pub fn sha256tree(s: Rc<SExp>) -> Vec<u8> {
             hasher.finalize().to_vec()
         }
         SExp::Nil(_) => sha256tree_from_atom(&[]),
-        SExp::Integer(_, i) => sha256tree_from_atom(&u8_from_number(i.clone())),
+        SExp::Integer(_, i) => {
+            if NewStyleIntConversion::setting() && *i == bi_zero() {
+                sha256tree_from_atom(&[])
+            } else {
+                sha256tree_from_atom(&u8_from_number(i.clone()))
+            }
+        }
         SExp::QuotedString(_, _, v) => sha256tree_from_atom(v),
         SExp::Atom(_, v) => sha256tree_from_atom(v),
     }

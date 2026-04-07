@@ -4,6 +4,7 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use clvm_rs::error::EvalErr;
 use clvmr::allocator::Allocator;
 
 use crate::classic::clvm_tools::binutils::assemble;
@@ -164,7 +165,13 @@ impl Preprocessor {
             .opts
             .read_new_file(self.opts.filename(), fname.to_string())?;
         let content = match kind {
-            IncludeProcessType::Bin => Rc::new(SExp::Atom(loc.clone(), content)),
+            IncludeProcessType::Bin => {
+                if self.opts.dialect().int_fix {
+                    Rc::new(SExp::QuotedString(loc.clone(), b'x', content))
+                } else {
+                    Rc::new(SExp::Atom(loc.clone(), content))
+                }
+            }
             IncludeProcessType::Hex => hex_to_modern_sexp(
                 &mut allocator,
                 &HashMap::new(),
@@ -193,7 +200,8 @@ impl Preprocessor {
         desc: IncludeDesc,
     ) -> Result<(), CompileErr> {
         let name_string = decode_string(&desc.name);
-        if KNOWN_DIALECTS.contains_key(&name_string) {
+        // Terminate early checking anything with a processed include type.
+        if KNOWN_DIALECTS.contains_key(&name_string) || desc.kind.is_some() {
             return Ok(());
         }
 
@@ -578,8 +586,15 @@ pub fn gather_dependencies(
 ) -> Result<Vec<IncludeDesc>, CompileErr> {
     let mut allocator = Allocator::new();
 
-    let assembled_input = assemble(&mut allocator, file_content)
-        .map_err(|e| CompileErr(Srcloc::start(real_input_path), e.1))?;
+    let assembled_input = assemble(&mut allocator, file_content).map_err(|e| {
+        CompileErr(
+            Srcloc::start(real_input_path),
+            match e {
+                EvalErr::InternalError(_, e) => e.to_string(),
+                _ => e.to_string(),
+            },
+        )
+    })?;
     let dialect = detect_modern(&mut allocator, assembled_input);
     opts = opts.set_stdenv(dialect.strict).set_dialect(dialect.clone());
     if let Some(stepping) = dialect.stepping {

@@ -153,7 +153,7 @@ impl<FT: FuzzTypeParams> FuzzGenerator<FT> {
 
         while !waiting.is_empty() {
             let mut rules = self.rules.clone();
-            let waiting_choice: usize = rng.gen::<usize>() % waiting.len();
+            let waiting_choice: usize = (rng.random::<u64>() as usize) % waiting.len();
 
             let chosen = waiting[waiting_choice].clone();
             waiting.remove(waiting_choice);
@@ -165,7 +165,7 @@ impl<FT: FuzzTypeParams> FuzzGenerator<FT> {
             };
 
             while !rules.is_empty() {
-                let rule_choice: usize = rng.gen::<usize>() % rules.len();
+                let rule_choice: usize = (rng.random::<u64>() as usize) % rules.len();
                 let chosen_rule = rules[rule_choice].clone();
                 rules.remove(rule_choice);
 

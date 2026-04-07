@@ -20,7 +20,8 @@ use crate::classic::clvm::as_rust::{TToSexpF, TValStack};
 use crate::classic::clvm::casts::int_from_bytes;
 use crate::classic::clvm::sexp::{to_sexp_type, CastableType};
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
-use clvm_rs::reduction::{EvalErr, Reduction, Response};
+use clvm_rs::error::EvalErr;
+use clvm_rs::reduction::{Reduction, Response};
 
 const MAX_SINGLE_BYTE: u32 = 0x7F;
 const CONS_BOX_MARKER: u32 = 0xFF;
@@ -91,7 +92,7 @@ impl<'a> SExpToBytesIterator<'a> {
     }
 }
 
-impl<'a> Iterator for SExpToBytesIterator<'a> {
+impl Iterator for SExpToBytesIterator<'_> {
     type Item = Vec<u8>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -100,7 +101,8 @@ impl<'a> Iterator for SExpToBytesIterator<'a> {
                 SExp::Atom => {
                     // The only node we have in scope is x, so this atom
                     // capture is trivial.
-                    let buf = self.allocator.atom(x).to_vec();
+                    let atom = self.allocator.atom(x);
+                    let buf = atom.as_ref().to_vec();
                     let bytes = Bytes::new(Some(BytesFromType::Raw(buf.clone())));
                     match atom_size_blob(&bytes) {
                         Ok((original, b)) => {
@@ -184,7 +186,10 @@ impl OpStackEntry for OpReadSexp {
     ) -> Option<EvalErr> {
         let blob = f.read(1);
         if blob.length() == 0 {
-            return Some(EvalErr(allocator.null(), "bad encoding".to_string()));
+            return Some(EvalErr::InternalError(
+                NodePtr::NIL,
+                "bad encoding".to_string(),
+            ));
         }
 
         let b = blob.at(0);
@@ -235,8 +240,8 @@ pub fn sexp_from_stream<'a>(
         return to_sexp_f.invoke(allocator, v);
     }
 
-    Err(EvalErr(
-        allocator.null(),
+    Err(EvalErr::InternalError(
+        NodePtr::NIL,
         "No value left after conversion".to_string(),
     ))
 }
@@ -250,7 +255,7 @@ pub fn atom_from_stream<'a>(
     let mut b = b_;
 
     if b == 0x80 {
-        return Ok(allocator.null());
+        return Ok(NodePtr::NIL);
     } else if b <= MAX_SINGLE_BYTE as u8 {
         return allocator.new_atom(&[b]);
     }
@@ -268,18 +273,27 @@ pub fn atom_from_stream<'a>(
     if bit_count > 1 {
         let bin = f.read(bit_count - 1);
         if bin.length() != bit_count - 1 {
-            return Err(EvalErr(allocator.null(), "bad encoding".to_string()));
+            return Err(EvalErr::InternalError(
+                NodePtr::NIL,
+                "bad encoding".to_string(),
+            ));
         }
         size_blob = size_blob.concat(&bin);
     }
-    int_from_bytes(allocator, size_blob, None).and_then(|size| {
+    int_from_bytes(size_blob, None).and_then(|size| {
         if size >= 0x400000000 {
-            return Err(EvalErr(allocator.null(), "blob too large".to_string()));
+            return Err(EvalErr::InternalError(
+                NodePtr::NIL,
+                "blob too large".to_string(),
+            ));
         }
         let blob = f.read(size as usize);
         if blob.length() != size as usize {
-            return Err(EvalErr(allocator.null(), "bad encoding".to_string()));
+            return Err(EvalErr::InternalError(
+                NodePtr::NIL,
+                "bad encoding".to_string(),
+            ));
         }
-        return allocator.new_atom(blob.data());
+        allocator.new_atom(blob.data())
     })
 }

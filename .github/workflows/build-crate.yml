@@ -12,6 +12,10 @@ on:
     branches:
       - '**'
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   build_crate:
     name: Crate
@@ -20,7 +24,7 @@ jobs:
       fail-fast: false
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v6
       with:
         fetch-depth: 0
 
@@ -39,7 +43,7 @@ jobs:
     - name: fmt (stable)
       run: cargo +stable fmt -- --files-with-diff --check
     - name: clippy (stable)
-      run: cargo +stable clippy
+      run: cargo +stable clippy && cargo +stable clippy --manifest-path wasm/Cargo.toml
     - name: tests
       run: cargo test && cargo test --release
     # The design of 'run' causes it to drop main.sym unannounced when compiling.
@@ -53,14 +57,18 @@ jobs:
       run: cargo publish --dry-run
 
     - name: Upload crate artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v7
       with:
         name: crate
-        path: ./target/package/clvm_tools_rs-*.crate
+        path: ./target/package/chialisp-*.crate
+
+    - uses: rust-lang/crates-io-auth-action@v1
+      if: startsWith(github.event.ref, 'refs/tags')
+      id: auth
 
     # this has not been tested, so probably needs to be debugged next time a tag is created
     - name: publish to crates.io if tagged
       if: startsWith(github.event.ref, 'refs/tags')
       env:
-        CARGO_REGISTRY_TOKEN: ${{ secrets.cargo_registry_token }}
+        CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
       run: cargo publish

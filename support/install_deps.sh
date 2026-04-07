@@ -1,12 +1,12 @@
 #!/bin/bash -x
 
 # This script is called from $GIT_ROOT/.github/workflows/build-test.yml
-# This script is called while in $GIT_ROOT/chia-blockchain of clvm_tools_rs
+# This script is called while in $GIT_ROOT/chia-blockchain of chialisp
 
 . ./venv/bin/activate
 
 python -m pip install --upgrade pip
-python -m pip uninstall clvm clvm_rs clvm_tools clvm_tools_rs
+python -m pip uninstall clvm clvm_rs clvm_tools chialisp
 
 git clone https://github.com/Chia-Network/clvm.git --branch=main --single-branch
 python -m pip install ./clvm
@@ -20,5 +20,5 @@ echo "installing clvm_tools for clvm tests"
 git clone https://github.com/Chia-Network/clvm_tools.git --branch=main --single-branch
 python -m pip install ./clvm_tools
 
-# Install clvm_tools_rs from the directory above.
+# Install chialisp from the directory above.
 python -m pip install ..

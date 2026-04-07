@@ -6,15 +6,15 @@ if [[ $# -ne 1 ]]; then
     exit 2
 fi
 
-pip_installed_version=$(pip list | grep clvm_tools_rs | awk '{print $2}')
-python_import_version=$(python -c 'import clvm_tools_rs; print(clvm_tools_rs.get_version())')
+pip_installed_version=$(pip list | grep '^chialisp\s' | awk '{print $2}')
+python_import_version=$(python -c 'import chialisp; print(chialisp.get_version())')
 
 expected_version="$1"
 
 if [ "$expected_version" == "$pip_installed_version" ] && [ "$expected_version" == "$python_import_version" ]; then
     exit 0
 else
-    echo "clvm_tools_rs VERSIONS does not match expected version"
+    echo "chialisp VERSIONS does not match expected version"
     echo "PIP INSTALLED VERSION: $pip_installed_version"
     echo "PYTHON IMPORTED VERSION: $python_import_version"
     echo "EXPECTED VERSION: $expected_version"

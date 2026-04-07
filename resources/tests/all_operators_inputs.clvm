@@ -1,0 +1,45 @@
+(
+  ;; 3 argument operators
+  (0 () 99 101) ; returns 101
+  (0 1  99 101) ; returns 99
+  (1 "hi there" 3 6) ; returns "the"
+
+  ;; 2 argument operators
+  (0 (4 2 5) ("hi" "there")) ; returns ("hi" . "there")
+  (1 3 4) ; returns (3 . 4)
+  (2 5 5) ; returns 1
+  (2 5 6) ; returns ()
+  (3 "zest" "testing") ; returns 1
+  (3 "testing" "zest") ; returns 0
+  (4 "hi" " there") ; returns "hi there"
+  (5 5 6) ; returns 11
+  (6 100 97) ; returns 3
+  (7 50 3) ; returns 150
+  (8 51 3) ; returns 17
+  (9 52 3) ; returns (17 . 1)
+  (10 101 99) ; returns 1
+  (10 99 101) ; returns 0
+  (11 -1 1) ; returns -2
+  (12 15 2) ; returns 60
+  (13 7 12) ; returns 4
+  (14 7 12) ; returns 15
+  (15 7 12) ; returns 11
+  (16 0xc00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 0xc00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000) ; returns 0xc00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+  (17 19 21) ; returns 1
+  (18 0 33) ; returns ()
+  (18 32 33) ; returns 1
+  (19 279 (4 1 1)) ; returns ()
+
+  ;; 1 argument operators
+  (0 (3 . 4)) ; returns 3
+  (1 (3 . 4)) ; returns 4
+  (2 (3 . 4)) ; returns 1
+  (2 ()) ; returns 0
+  ;; Skip (x)
+  (4 ()) ; 0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  (5 "hi there") ; returns 8
+  (6 1) ; returns -2
+  (7 0xc00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000) ; returns 0x85445f2c524cb12149bad70666a51b538b07e87485e8b62df969181402f0e7770c1eaee00367a6670c97ffda63ceddd3
+  (8 1) ; returns 0
+  (8 ()) ; returns 1
+)

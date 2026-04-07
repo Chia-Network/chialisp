@@ -1,6 +1,7 @@
 pub mod binutils;
 pub mod clvmc;
 pub mod cmds;
+pub mod comp_input;
 pub mod curry;
 pub mod debug;
 pub mod ir;

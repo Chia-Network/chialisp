@@ -33,7 +33,7 @@ fn collect_used_names_binding(body: &Binding) -> Vec<Vec<u8>> {
     collect_used_names_bodyform(body.body.borrow())
 }
 
-fn collect_used_names_bodyform(body: &BodyForm) -> Vec<Vec<u8>> {
+pub fn collect_used_names_bodyform(body: &BodyForm) -> Vec<Vec<u8>> {
     match body {
         BodyForm::Let(_, letdata) => {
             let mut result = Vec::new();
@@ -307,7 +307,7 @@ fn handle_assign_form(
     v: &[SExp],
     inline_hint: Option<LetFormInlineHint>,
 ) -> Result<BodyForm, CompileErr> {
-    if v.len() % 2 == 0 {
+    if v.len().is_multiple_of(2) {
         return Err(CompileErr(
             l,
             "assign form should be in pairs of pattern value followed by an expression".to_string(),
@@ -468,7 +468,7 @@ pub fn compile_bodyform(
 
                                 qq_to_expression(opts, Rc::new(quote_body))
                             } else if *atom_name == b"mod" {
-                                let subparse = frontend(opts, &[body.clone()])?;
+                                let subparse = frontend(opts, std::slice::from_ref(&body))?;
                                 Ok(BodyForm::Mod(op.loc(), subparse))
                             } else if *atom_name == b"lambda" {
                                 handle_lambda(opts, body.loc(), Some(l.clone()), &v)

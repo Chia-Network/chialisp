@@ -313,7 +313,7 @@ These are the current BodyForm alternatives:
       Represents let forms and anything that's expressible through let forms,
       such as the 'assign' form here:
       
-  [https://github.com/Chia-Network/clvm_tools_rs/pull/103](assign form pr)
+  [https://github.com/Chia-Network/chialisp/pull/103](assign form pr)
         
     Quoted(SExp) --
       
@@ -599,7 +599,7 @@ One can think of CLVM as a calculator with 1 tricky operator, which is called 'a
   
 You can imagine the CLVM machine doing this on each evaluation step:
 
-    Find the rightmost index (described well here: [https://github.com/Chia-Network/clvm_tools_rs/blob/a660ce7ce07064a6a81bb361f169f6de195cba10/src/classic/clvm_tools/node_path.rs#L1](clvm paths) ) in the left part of the state that is not in the form of a quoted value
+    Find the rightmost index (described well here: [https://github.com/Chia-Network/chialisp/blob/a660ce7ce07064a6a81bb361f169f6de195cba10/src/classic/clvm_tools/node_path.rs#L1](clvm paths) ) in the left part of the state that is not in the form of a quoted value
     (q . <something>) and:
    
      - if it's a number, enquote the correspondingly indexed value from

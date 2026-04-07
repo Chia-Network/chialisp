@@ -14,6 +14,7 @@ fn get_depgraph_for_program(prog: &str) -> FunctionDependencyGraph {
     let opts = DefaultCompilerOpts::new(filename).set_dialect(AcceptedDialect {
         stepping: Some(21),
         strict: true,
+        int_fix: false,
     });
     let compileform = frontend(opts.clone(), &forms).expect("should frontend");
 

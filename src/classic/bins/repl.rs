@@ -6,10 +6,10 @@ use std::rc::Rc;
 
 use clvm_rs::allocator::Allocator;
 
-use clvm_tools_rs::compiler::compiler::DefaultCompilerOpts;
-use clvm_tools_rs::compiler::repl::Repl;
+use chialisp::compiler::compiler::DefaultCompilerOpts;
+use chialisp::compiler::repl::Repl;
 
-use clvm_tools_rs::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
+use chialisp::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 
 fn main() {
     let mut allocator = Allocator::new();

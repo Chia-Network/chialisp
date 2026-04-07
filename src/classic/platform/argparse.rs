@@ -69,11 +69,9 @@ impl IntConversion {
     }
 }
 
-#[derive(Derivative, Clone)]
-#[derivative(Debug)]
+#[derive(Clone)]
 pub struct Argument {
     action: TArgOptionAction,
-    #[derivative(Debug = "ignore")]
     typeofarg: Rc<dyn ArgumentValueConv>,
     default: Option<ArgumentValue>,
     help: String,
@@ -124,7 +122,7 @@ impl Default for Argument {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Arg {
     names: Vec<String>,
     options: Argument,
@@ -141,7 +139,7 @@ pub struct TArgumentParserProps {
     pub prog: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ArgumentParser {
     prog: String,
     // desc: String,
@@ -287,14 +285,13 @@ impl ArgumentParser {
                                 lcopy.push(v);
                                 params.insert(name, ArgumentValue::ArgArray(lcopy));
                             }
-                            _ => match &optional_arg.options.default {
-                                Some(v) => {
+                            _ => {
+                                if let Some(v) = &optional_arg.options.default {
                                     let mut lcopy = l.clone();
                                     lcopy.push(v.clone());
                                     params.insert(name, ArgumentValue::ArgArray(lcopy));
                                 }
-                                None => {}
-                            },
+                            }
                         },
                         _ => {
                             if let Ok(v) = converter.convert(value) {
@@ -491,10 +488,7 @@ impl ArgumentParser {
                 }
 
                 let name = &self.optional_args[k].names[index as usize];
-                let index2 = match arg.find(name) {
-                    Some(i) => i,
-                    _ => 0,
-                } + name.len();
+                let index2 = arg.find(name).unwrap_or_default() + name.len();
                 let value = &arg[index2..].to_string();
 
                 norm.push(name.to_string());

@@ -95,7 +95,7 @@ pub fn rename_in_cons(
 fn invent_new_names_sexp(body: Rc<SExp>) -> Vec<(Vec<u8>, Vec<u8>)> {
     match body.borrow() {
         SExp::Atom(_, name) => {
-            if name != &[b'@'] {
+            if name != b"@" {
                 vec![(name.to_vec(), gensym(name.to_vec()))]
             } else {
                 vec![]

@@ -1,0 +1,20 @@
+;;
+;; This program is used by the test_quote_string_generation test
+;; which checks the representation of these outputs and ensures
+;; that they're properly accepted by brun, which uses the classic
+;; chialisp tokenizer/parser.
+;;
+;; the qs macro appends the given string onto "test"
+;; the atom macro gives a quoted atom starting with test and
+;; ending with the text given in the string.
+;;
+;; modern's macro system makes these different objects.
+;;
+(mod ()
+  (include *standard-cl-23*)
+  
+  (defmac qs (X) (string-append "test" X))
+  (defmac atom (X) (c 1 (string->symbol (string-append "test" X))))
+  
+  (list (qs '"') (qs "'") (qs " hi") (atom '"') (atom "'") (atom "_hi"))
+  )

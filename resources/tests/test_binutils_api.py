@@ -1,4 +1,4 @@
-from clvm_tools_rs import binutils
+from chialisp import binutils
 from clvm_tools.binutils import assemble, disassemble
 from clvm_rs.program import Program
 from random import randint

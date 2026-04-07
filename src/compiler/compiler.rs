@@ -1,6 +1,6 @@
 use num_bigint::ToBigInt;
 use std::borrow::Borrow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -10,7 +10,7 @@ use clvm_rs::allocator::Allocator;
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 
-use crate::compiler::clvm::sha256tree;
+use crate::compiler::clvm::{sha256tree, NewStyleIntConversion};
 use crate::compiler::codegen::{codegen, hoist_body_let_binding, process_helper_let_bindings};
 use crate::compiler::comptypes::{CompileErr, CompileForm, CompilerOpts, PrimaryCodegen};
 use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
@@ -21,6 +21,8 @@ use crate::compiler::sexp::{parse_sexp, SExp};
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::{BasicCompileContext, CompileContextWrapper};
 use crate::util::Number;
+
+pub const FUZZ_TEST_PRE_CSE_MERGE_FIX_FLAG: usize = 1;
 
 lazy_static! {
     pub static ref STANDARD_MACROS: String = {
@@ -84,6 +86,7 @@ pub struct DefaultCompilerOpts {
     pub start_env: Option<Rc<SExp>>,
     pub disassembly_ver: Option<usize>,
     pub prim_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>,
+    pub diag_flags: Rc<HashSet<usize>>,
     pub dialect: AcceptedDialect,
 }
 
@@ -160,6 +163,7 @@ pub fn compile_file(
     content: &str,
     symbol_table: &mut HashMap<String, String>,
 ) -> Result<SExp, CompileErr> {
+    let _int_conversion_bug = NewStyleIntConversion::new(opts.dialect().int_fix);
     let srcloc = Srcloc::start(&opts.filename());
     let pre_forms = parse_sexp(srcloc.clone(), content.bytes())?;
     let mut context_wrapper = CompileContextWrapper::new(
@@ -208,6 +212,9 @@ impl CompilerOpts for DefaultCompilerOpts {
     fn get_search_paths(&self) -> Vec<String> {
         self.include_dirs.clone()
     }
+    fn diag_flags(&self) -> Rc<HashSet<usize>> {
+        self.diag_flags.clone()
+    }
 
     fn set_dialect(&self, dialect: AcceptedDialect) -> Rc<dyn CompilerOpts> {
         let mut copy = self.clone();
@@ -216,7 +223,7 @@ impl CompilerOpts for DefaultCompilerOpts {
     }
     fn set_search_paths(&self, dirs: &[String]) -> Rc<dyn CompilerOpts> {
         let mut copy = self.clone();
-        copy.include_dirs = dirs.to_owned();
+        dirs.clone_into(&mut copy.include_dirs);
         Rc::new(copy)
     }
     fn set_disassembly_ver(&self, ver: Option<usize>) -> Rc<dyn CompilerOpts> {
@@ -264,6 +271,11 @@ impl CompilerOpts for DefaultCompilerOpts {
         copy.prim_map = prims;
         Rc::new(copy)
     }
+    fn set_diag_flags(&self, flags: Rc<HashSet<usize>>) -> Rc<dyn CompilerOpts> {
+        let mut copy = self.clone();
+        copy.diag_flags = flags;
+        Rc::new(copy)
+    }
 
     fn read_new_file(
         &self,
@@ -307,6 +319,7 @@ impl CompilerOpts for DefaultCompilerOpts {
         sexp: Rc<SExp>,
         symbol_table: &mut HashMap<String, String>,
     ) -> Result<SExp, CompileErr> {
+        let _int_conversion_bug = NewStyleIntConversion::new(self.dialect.int_fix);
         let me = Rc::new(self.clone());
         let optimizer = get_optimizer(&sexp.loc(), me.clone())?;
         let mut context_wrapper =
@@ -330,6 +343,7 @@ impl DefaultCompilerOpts {
             dialect: AcceptedDialect::default(),
             prim_map: create_prim_map(),
             disassembly_ver: None,
+            diag_flags: Rc::new(HashSet::default()),
         }
     }
 }

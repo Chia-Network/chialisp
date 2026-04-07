@@ -526,6 +526,7 @@ fn test_preprocess_basic_list() {
         Rc::new(DefaultCompilerOpts::new(file)).set_dialect(AcceptedDialect {
             stepping: Some(21),
             strict: true,
+            int_fix: false,
         });
     let mut includes = Vec::new();
     let pp = preprocess(opts.clone(), &mut includes, parsed_forms[0].clone())
@@ -564,6 +565,7 @@ fn test_preprocessor_tours_includes_properly() {
         .set_dialect(AcceptedDialect {
             stepping: Some(21),
             strict: true,
+            int_fix: false,
         });
     let parsed = parse_sexp(Srcloc::start(pname), prog.bytes()).expect("should parse");
     let mut includes = Vec::new();

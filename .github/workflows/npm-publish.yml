@@ -15,13 +15,18 @@ concurrency:
   group: ${{ github.ref }}-${{ github.workflow }}-${{ github.event_name }}-${{ (github.ref == 'refs/heads/main') && github.sha || '' }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  actions: write
+  id-token: write
+
 jobs:
   build_npm:
     name: Npm
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -37,15 +42,15 @@ jobs:
           components: rustfmt, clippy
 
       - name: install wasm-pack
-        run: cargo install --version 0.11.1 wasm-pack
+        run: cargo install --version 0.13.1 wasm-pack
 
       - name: wasm-pack build and pack
         run: wasm-pack build --release --target=nodejs wasm && wasm-pack pack wasm
 
-      - name: Setup Node 16.x
-        uses: actions/setup-node@v3
+      - name: Setup Node 18.x
+        uses: actions/setup-node@v5
         with:
-          node-version: '16.x'
+          node-version: '18.x'
 
       # Cargo.toml won't allow an "@" in the name, so we just update the package name this way for NPM
       - name: Update package name for npm
@@ -62,7 +67,7 @@ jobs:
           cd wasm/tests/clvm-tools-interface && npm install && yarn test
 
       - name: Upload npm pkg artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v7
         with:
           name: npm-pkg
           path: ./wasm/pkg/clvm_tools_wasm-*.tgz
@@ -77,12 +82,16 @@ jobs:
         env:
           SECRET: "${{ secrets.NPM_TOKEN }}"
 
+      - name: Ensure we have a new enough npm version for trusted publishing
+        if: env.FULL_RELEASE == 'true'
+        run: |
+          npm install -g npm
+          npm --version
+
       - name: Publish wasm
-        if: env.FULL_RELEASE == 'true' && steps.check_secrets.outputs.HAS_SECRET
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        if: env.FULL_RELEASE == 'true'
         working-directory: ${{ github.workspace }}/wasm/pkg
         run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
           rm -f clvm_tools_wasm-*.tgz
+          npm config set provenance true
           npm publish --access public

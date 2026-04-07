@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
-use clvm_rs::reduction::EvalErr;
+use clvm_rs::error::EvalErr;
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, Stream};
 use crate::classic::clvm::serialize::sexp_to_stream;
@@ -102,7 +102,7 @@ pub fn build_symbol_dump(
     let mut map_result: Vec<NodePtr> = Vec::new();
 
     for (k, v) in constants_lookup.iter() {
-        let run_result = run_program.run_program(allocator, *v, allocator.null(), None)?;
+        let run_result = run_program.run_program(allocator, *v, NodePtr::NIL, None)?;
 
         let sha256 = sha256tree(allocator, run_result.1).hex();
         let sha_atom = allocator.new_atom(sha256.as_bytes())?;
@@ -152,7 +152,7 @@ fn text_trace(
     let mut env = env_;
     match symbol {
         Some(sym) => {
-            env = rest(allocator, env).unwrap_or_else(|_| allocator.null());
+            env = rest(allocator, env).unwrap_or(NodePtr::NIL);
             let symbol_atom = allocator.new_atom(sym.as_bytes()).unwrap();
             let symbol_list = allocator.new_pair(symbol_atom, env).unwrap();
             symbol_val = disassemble_f(allocator, symbol_list);
@@ -180,7 +180,7 @@ fn table_trace(
 ) {
     let (sexp, args) = match allocator.sexp(form) {
         SExp::Pair(sexp, args) => (sexp, args),
-        SExp::Atom => (form, allocator.null()),
+        SExp::Atom => (form, NodePtr::NIL),
     };
 
     stdout.write_str(&format!("exp: {}\n", disassemble_f(allocator, sexp)));

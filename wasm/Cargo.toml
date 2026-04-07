@@ -1,12 +1,12 @@
 [package]
 name = "clvm_tools_wasm"
-version = "0.1.41"
+version = "0.4.1"
 edition = "2018"
 authors = ["Art Yerkes <art.yerkes@gmail.com>"]
 description = "tools for working with chialisp language; compiler, repl, python and wasm bindings"
-homepage = "https://prozacchiwawa.github.io/clvm_tools_rs/"
+homepage = "https://prozacchiwawa.github.io/chialisp/"
 readme = "README.md"
-repository = "https://github.com/Chia-Network/clvm_tools_rs"
+repository = "https://github.com/Chia-Network/chialisp"
 license = "MIT"
 keywords = ["chia", "chialisp", "clvm"]
 categories = ["command-line-utilities"]
@@ -17,10 +17,10 @@ crate-type = ["cdylib"]
 path = "src/mod.rs"
 
 [dependencies]
-clvm_tools_rs = { path= "..", features = [] }
-clvmr = { version = "0.3.0", features = ["pre-eval"] }
-wasm-bindgen = "=0.2.83"
-wasm-bindgen-test = "=0.3.25"
+chialisp = { path= "..", features = [] }
+clvmr = { version = "0.16.0", features = ["pre-eval"] }
+wasm-bindgen = "=0.2.100"
 js-sys = "0.3.60"
 num-bigint = "0.4.0"
 num-traits = "0.2.15"
+lol_alloc = "0.4.1"
