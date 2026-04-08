@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use armv4t_emu::Memory;
 
-pub const NEG : i32 = (-1 * 0x7fffffff) - 1;
+pub const NEG: i32 = (-1 * 0x7fffffff) - 1;
 
 pub trait TargetMemory {
     fn write_data(&mut self, content: &[u8], target_addr: u32);
@@ -18,7 +18,7 @@ pub trait TargetMemory {
 
 pub struct PagedMemory {
     zeroed: Vec<u32>,
-    pages: HashMap<u32, Vec<u32>>
+    pages: HashMap<u32, Vec<u32>>,
 }
 
 impl Default for PagedMemory {
@@ -29,7 +29,7 @@ impl Default for PagedMemory {
         }
         PagedMemory {
             zeroed,
-            pages: HashMap::default()
+            pages: HashMap::default(),
         }
     }
 }
@@ -63,12 +63,11 @@ impl PagedMemory {
 
 impl Memory for PagedMemory {
     fn r8(&mut self, mut addr: u32) -> u8 {
-        let (selection, slice) =
-            if let (sel, Some(s)) = self.get_slice(addr) {
-                (sel, s)
-            } else {
-                return 0;
-            };
+        let (selection, slice) = if let (sel, Some(s)) = self.get_slice(addr) {
+            (sel, s)
+        } else {
+            return 0;
+        };
 
         let offset = addr & 3;
         let selected = slice[selection];
@@ -76,12 +75,11 @@ impl Memory for PagedMemory {
     }
 
     fn r16(&mut self, mut addr: u32) -> u16 {
-        let (selection, slice) =
-            if let (sel, Some(s)) = self.get_slice(addr) {
-                (sel, s)
-            } else {
-                return 0;
-            };
+        let (selection, slice) = if let (sel, Some(s)) = self.get_slice(addr) {
+            (sel, s)
+        } else {
+            return 0;
+        };
 
         let offset = addr & 3;
         let selected = slice[selection];
@@ -89,23 +87,21 @@ impl Memory for PagedMemory {
     }
 
     fn r32(&mut self, mut addr: u32) -> u32 {
-        let (selection, slice) =
-            if let (sel, Some(s)) = self.get_slice(addr) {
-                (sel, s)
-            } else {
-                return 0;
-            };
+        let (selection, slice) = if let (sel, Some(s)) = self.get_slice(addr) {
+            (sel, s)
+        } else {
+            return 0;
+        };
 
         slice[selection]
     }
 
     fn w8(&mut self, addr: u32, val: u8) {
-        let (selection, slice) =
-            if let (sel, Some(s)) = self.get_mut_slice(addr, true) {
-                (sel, s)
-            } else {
-                todo!();
-            };
+        let (selection, slice) = if let (sel, Some(s)) = self.get_mut_slice(addr, true) {
+            (sel, s)
+        } else {
+            todo!();
+        };
 
         let offset = (addr & 3) * 8;
         let mask = 0xff << offset;
@@ -113,12 +109,11 @@ impl Memory for PagedMemory {
     }
 
     fn w16(&mut self, addr: u32, val: u16) {
-        let (selection, slice) =
-            if let (sel, Some(s)) = self.get_mut_slice(addr, true) {
-                (sel, s)
-            } else {
-                todo!();
-            };
+        let (selection, slice) = if let (sel, Some(s)) = self.get_mut_slice(addr, true) {
+            (sel, s)
+        } else {
+            todo!();
+        };
 
         let offset = (addr & 3) * 8;
         let mask = 0xffff << offset;
@@ -126,12 +121,11 @@ impl Memory for PagedMemory {
     }
 
     fn w32(&mut self, addr: u32, val: u32) {
-        let (selection, slice) =
-            if let (sel, Some(s)) = self.get_mut_slice(addr, true) {
-                (sel, s)
-            } else {
-                todo!();
-            };
+        let (selection, slice) = if let (sel, Some(s)) = self.get_mut_slice(addr, true) {
+            (sel, s)
+        } else {
+            todo!();
+        };
 
         slice[selection] = val;
     }
@@ -166,23 +160,21 @@ impl TargetMemory for PagedMemory {
     }
 
     fn read_u32(&self, target_addr: u32) -> u32 {
-        let (selection, slice) =
-            if let (sel, Some(s)) = self.get_slice(target_addr) {
-                (sel, s)
-            } else {
-                return 0;
-            };
+        let (selection, slice) = if let (sel, Some(s)) = self.get_slice(target_addr) {
+            (sel, s)
+        } else {
+            return 0;
+        };
 
         slice[selection]
     }
 
     fn read_u8(&self, target_addr: u32) -> u8 {
-        let (selection, slice) =
-            if let (sel, Some(s)) = self.get_slice(target_addr) {
-                (sel, s)
-            } else {
-                return 0;
-            };
+        let (selection, slice) = if let (sel, Some(s)) = self.get_slice(target_addr) {
+            (sel, s)
+        } else {
+            return 0;
+        };
 
         let word = slice[selection];
         (word >> (8 * (target_addr & 3))) as u8

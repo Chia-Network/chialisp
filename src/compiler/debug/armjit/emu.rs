@@ -14,25 +14,32 @@ use armv4t_emu::Memory;
 use armv4t_emu::Mode;
 use gdbstub::arch::Arch;
 use gdbstub::common::Pid;
+use gdbstub::target::ext::base::singlethread::{
+    SingleThreadBase, SingleThreadResume, SingleThreadResumeOps,
+};
+use gdbstub::target::ext::base::{single_register_access, BaseOps};
+use gdbstub::target::ext::breakpoints::{
+    Breakpoints, BreakpointsOps, HwBreakpointOps, HwWatchpointOps, SwBreakpoint, SwBreakpointOps,
+};
 use gdbstub::target::{Target, TargetResult};
-use gdbstub::target::ext::base::{BaseOps, single_register_access};
-use gdbstub::target::ext::breakpoints::{Breakpoints, BreakpointsOps, HwBreakpointOps, HwWatchpointOps, SwBreakpoint, SwBreakpointOps};
-use gdbstub::target::ext::base::singlethread::{SingleThreadBase, SingleThreadResume, SingleThreadResumeOps};
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 
-use crate::compiler::TRunProgram;
 use crate::compiler::clvm::{apply_op, sha256tree};
 use crate::compiler::compiler::{compile_file, DefaultCompilerOpts};
 use crate::compiler::comptypes::CompilerOpts;
-use crate::compiler::debug::armjit::code::{Program, SWI_DONE, SWI_THROW, SWI_DISPATCH_NEW_CODE, SWI_DISPATCH_INSTRUCTION, SWI_PRINT_EXPR, TARGET_ADDR};
+use crate::compiler::debug::armjit::code::{
+    Program, SWI_DISPATCH_INSTRUCTION, SWI_DISPATCH_NEW_CODE, SWI_DONE, SWI_PRINT_EXPR, SWI_THROW,
+    TARGET_ADDR,
+};
 use crate::compiler::debug::armjit::load::{ElfLoader, EmuSymbolInfo};
 use crate::compiler::debug::armjit::memory::{PagedMemory, TargetMemory};
 use crate::compiler::debug::build_symbol_table_mut;
 use crate::compiler::dialect::AcceptedDialect;
-use crate::compiler::srcloc::Srcloc;
 use crate::compiler::sexp::{decode_string, parse_sexp, SExp};
+use crate::compiler::srcloc::Srcloc;
+use crate::compiler::TRunProgram;
 
 pub type DynResult<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -93,8 +100,10 @@ impl SingleThreadBase for Emu {
     }
 
     /// Write the target's registers.
-    fn write_registers(&mut self, regs: &<Self::Arch as Arch>::Registers)
-        -> TargetResult<(), Self> {
+    fn write_registers(
+        &mut self,
+        regs: &<Self::Arch as Arch>::Registers,
+    ) -> TargetResult<(), Self> {
         todo!();
     }
 
@@ -132,7 +141,7 @@ impl SingleThreadBase for Emu {
         start_addr: <Self::Arch as Arch>::Usize,
         data: &mut [u8],
     ) -> TargetResult<usize, Self> {
-        for (i,d) in data.iter_mut().enumerate() {
+        for (i, d) in data.iter_mut().enumerate() {
             *d = self.mem.r8(start_addr as u32 + i as u32);
         }
         Ok(data.len())
@@ -195,7 +204,11 @@ impl SwBreakpoint for Emu {
         addr: <Self::Arch as Arch>::Usize,
         kind: <Self::Arch as Arch>::BreakpointKind,
     ) -> TargetResult<bool, Self> {
-        let found = self.breakpoints.iter().position(|u| *u == (addr as u32)).clone();
+        let found = self
+            .breakpoints
+            .iter()
+            .position(|u| *u == (addr as u32))
+            .clone();
         eprintln!("have breakpoint (to delete) {found:?}");
         if let Some(found) = found {
             self.breakpoints.remove(found);
@@ -227,13 +240,20 @@ impl Breakpoints for Emu {
 }
 
 impl SingleThreadResume for Emu {
-    fn resume(&mut self, sig: std::option::Option<gdbstub::common::Signal>) -> Result<(), <Self as gdbstub::target::Target>::Error> {
+    fn resume(
+        &mut self,
+        sig: std::option::Option<gdbstub::common::Signal>,
+    ) -> Result<(), <Self as gdbstub::target::Target>::Error> {
         return Ok(());
     }
 }
 
 impl Emu {
-    pub fn new(program_elf: &[u8], start_addr: u32, clvm_symbols: Rc<HashMap<String, String>>) -> DynResult<Emu> {
+    pub fn new(
+        program_elf: &[u8],
+        start_addr: u32,
+        clvm_symbols: Rc<HashMap<String, String>>,
+    ) -> DynResult<Emu> {
         // set up emulated system
         let mut cpu = Cpu::new();
         let mut mem = PagedMemory::default();
@@ -268,7 +288,7 @@ impl Emu {
             jit_symbols,
             clvm_symbols,
 
-            prim_map: DefaultCompilerOpts::new("*emu*").prim_map()
+            prim_map: DefaultCompilerOpts::new("*emu*").prim_map(),
         })
     }
 
@@ -294,12 +314,15 @@ impl Emu {
                 let length_to_write = ((v.len() + 3) & !3) as u32;
                 eprintln!("atom length {length_to_write}");
                 eprintln!("current_addr {current_addr:x}");
-                self.mem.write_u32(alloc_ptr, current_addr + length_to_write + 4);
+                self.mem
+                    .write_u32(alloc_ptr, current_addr + length_to_write + 4);
                 self.mem.write_u32(current_addr, v.len() as u32 * 2 + 1);
                 self.mem.write_data(v, current_addr + 4);
                 current_addr
             }
-            _ => { todo!(); }
+            _ => {
+                todo!();
+            }
         }
     }
 
@@ -383,7 +406,7 @@ impl Emu {
                 runner,
                 srcloc,
                 operator.clone(),
-                args.clone()
+                args.clone(),
             ) {
                 Ok(res) => {
                     // Allocate and write back result.
@@ -429,12 +452,11 @@ impl Emu {
             let cpsr = self.cpu.reg_get(Mode::User, reg::CPSR);
             let match_expression = snoop_instruction >> 28;
             eprintln!("cpsr {cpsr:x} match {match_expression:x}");
-            let perform_action =
-                match match_expression {
-                    0 => ((cpsr >> 29) & 1) != 0,
-                    14 => true,
-                    _ => todo!()
-                };
+            let perform_action = match match_expression {
+                0 => ((cpsr >> 29) & 1) != 0,
+                14 => true,
+                _ => todo!(),
+            };
             if perform_action {
                 let trap_result = self.do_trap(pc, (snoop_instruction & 0xffffff) as usize);
                 if trap_result.is_some() {
@@ -443,7 +465,6 @@ impl Emu {
             } else {
                 self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
             }
-
         } else {
             self.cpu.step(&mut self.mem);
         }
@@ -523,9 +544,7 @@ impl Emu {
         if first == 0 || (first & 1) != 0 {
             // Atom
             let size = first >> 1;
-            let result: Vec<u8> = (0..size).map(|i| {
-                self.mem.read_u8(addr + 4 + i)
-            }).collect();
+            let result: Vec<u8> = (0..size).map(|i| self.mem.read_u8(addr + 4 + i)).collect();
             Rc::new(SExp::Atom(srcloc.clone(), result))
         } else {
             // Cons
@@ -538,7 +557,11 @@ impl Emu {
 
     /// Run to completion and return a value by address for tests.
     #[cfg(test)]
-    fn run_to_exit(program: &[u8], start_addr: u32, clvm_symbols: Rc<HashMap<String, String>>) -> DynResult<Option<Rc<SExp>>> {
+    fn run_to_exit(
+        program: &[u8],
+        start_addr: u32,
+        clvm_symbols: Rc<HashMap<String, String>>,
+    ) -> DynResult<Option<Rc<SExp>>> {
         let srcloc = Srcloc::start("*emu*");
         let mut emu = Emu::new(program, start_addr, clvm_symbols)?;
         let mut elf_loader = ElfLoader::new(program, start_addr).expect("should load");
@@ -555,7 +578,7 @@ impl Emu {
                 Some(Event::Trap) => {
                     return Ok(None);
                 }
-                _ => { }
+                _ => {}
             }
         }
     }
@@ -576,14 +599,8 @@ impl Emu {
             .set_optimize(true)
             .set_search_paths(&search_paths)
             .set_frontend_opt(false);
-        let compiled =
-            compile_file(
-                &mut allocator,
-                runner,
-                opts,
-                program,
-                &mut symbol_table,
-            ).expect("should compile");
+        let compiled = compile_file(&mut allocator, runner, opts, program, &mut symbol_table)
+            .expect("should compile");
         build_symbol_table_mut(&mut symbol_table, &compiled);
         let symbols = Rc::new(symbol_table);
         let generator = Program::new(
@@ -591,8 +608,9 @@ impl Emu {
             Rc::new(compiled),
             env_parsed[0].clone(),
             TARGET_ADDR,
-            symbols.clone()
-        ).expect("should be generatable");
+            symbols.clone(),
+        )
+        .expect("should be generatable");
         let tmpfile = NamedTempFile::new().expect("should be able to make a temp file");
         let tmpname = tmpfile.path().to_str().unwrap().to_string();
         let elf_data = generator.to_elf(&tmpname).expect("should generate");
@@ -603,25 +621,30 @@ impl Emu {
 #[test]
 fn test_run_to_exit_and_return_nil() {
     let elf = fs::read("resources/tests/armjit/return_nil.elf").expect("should exist");
-    let result = Emu::run_to_exit(&elf, TARGET_ADDR, Rc::new(HashMap::default())).expect("should load").unwrap();
+    let result = Emu::run_to_exit(&elf, TARGET_ADDR, Rc::new(HashMap::default()))
+        .expect("should load")
+        .unwrap();
     assert_eq!(result.to_string(), "()");
 }
 
 #[test]
 fn test_run_to_exit_and_return_pair() {
     let elf = fs::read("resources/tests/armjit/return_cons.elf").expect("should exist");
-    let result = Emu::run_to_exit(&elf, TARGET_ADDR, Rc::new(HashMap::default())).expect("should load").unwrap();
+    let result = Emu::run_to_exit(&elf, TARGET_ADDR, Rc::new(HashMap::default()))
+        .expect("should load")
+        .unwrap();
     assert_eq!(result.to_string(), "(hi . there)");
 }
 
 #[test]
 fn test_compile_and_run_simple_quoted_atom() {
-    let result = Emu::compile_and_run(
-        "test.clsp",
-        "(mod () \"hi there\")",
-        "()"
-    ).expect("should run").unwrap();
-    assert_eq!(result, Rc::new(SExp::Atom(Srcloc::start("*test*"), b"hi there".to_vec())));
+    let result = Emu::compile_and_run("test.clsp", "(mod () \"hi there\")", "()")
+        .expect("should run")
+        .unwrap();
+    assert_eq!(
+        result,
+        Rc::new(SExp::Atom(Srcloc::start("*test*"), b"hi there".to_vec()))
+    );
 }
 
 #[test]
@@ -629,8 +652,10 @@ fn test_compile_and_run_cons() {
     let result = Emu::compile_and_run(
         "test.clsp",
         "(mod () (include *standard-cl-23*) (c \"hi\" \"there\"))",
-        "()"
-    ).expect("should run").unwrap();
+        "()",
+    )
+    .expect("should run")
+    .unwrap();
     assert_eq!(result.to_string(), "(hi . there)");
 }
 
@@ -639,8 +664,10 @@ fn test_compile_and_run_apply_simple_1() {
     let result = Emu::compile_and_run(
         "test.clsp",
         "(mod () (include *standard-cl-23*) (a 1 (q . \"toot\")))",
-        "()"
-    ).expect("should run").unwrap();
+        "()",
+    )
+    .expect("should run")
+    .unwrap();
     assert_eq!(result.to_string(), "toot");
 }
 
@@ -649,8 +676,10 @@ fn test_compile_and_run_apply_simple_2() {
     let result = Emu::compile_and_run(
         "test.clsp",
         "(mod () (include *standard-cl-23*) (a 1 @))",
-        "37777"
-    ).expect("should run").unwrap();
+        "37777",
+    )
+    .expect("should run")
+    .unwrap();
     assert_eq!(result.to_string(), "37777");
 }
 
@@ -659,8 +688,10 @@ fn test_compile_and_run_apply_simple_3() {
     let result = Emu::compile_and_run(
         "test.clsp",
         "(mod () (include *standard-cl-23*) (a (q 4 (1 . 1) (1 . 2)) @))",
-        "()"
-    ).expect("should run").unwrap();
+        "()",
+    )
+    .expect("should run")
+    .unwrap();
     assert_eq!(result.to_string(), "(1 . 2)");
 }
 
@@ -669,8 +700,10 @@ fn test_compile_and_run_apply_simple_4() {
     let result = Emu::compile_and_run(
         "test.clsp",
         "(mod () (include *standard-cl-23*) (f (q 1 2)))",
-        "()"
-    ).expect("should run").unwrap();
+        "()",
+    )
+    .expect("should run")
+    .unwrap();
     assert_eq!(result.to_string(), "1");
 }
 
@@ -679,8 +712,9 @@ fn test_compile_and_run_apply_simple_4_fail() {
     let result = Emu::compile_and_run(
         "test.clsp",
         "(mod () (include *standard-cl-23*) (f 99))",
-        "()"
-    ).expect("should run");
+        "()",
+    )
+    .expect("should run");
     assert!(result.is_none());
 }
 
@@ -689,8 +723,10 @@ fn test_compile_and_run_apply_simple_5() {
     let result = Emu::compile_and_run(
         "test.clsp",
         "(mod () (include *standard-cl-23*) (r (q 1 2)))",
-        "()"
-    ).expect("should run").unwrap();
+        "()",
+    )
+    .expect("should run")
+    .unwrap();
     assert_eq!(result.to_string(), "(2)");
 }
 
@@ -699,8 +735,9 @@ fn test_compile_and_run_apply_simple_6() {
     let result = Emu::compile_and_run(
         "test.clsp",
         "(mod () (include *standard-cl-23*) (r 99))",
-        "()"
-    ).expect("should run");
+        "()",
+    )
+    .expect("should run");
     assert!(result.is_none());
 }
 
@@ -709,8 +746,10 @@ fn test_compile_and_run_apply_at() {
     let result = Emu::compile_and_run(
         "test.clsp",
         "(mod (A) (include *standard-cl-23*) @)",
-        "(19)"
-    ).expect("should run").unwrap();
+        "(19)",
+    )
+    .expect("should run")
+    .unwrap();
     assert_eq!(result.to_string(), "(19)");
 }
 
@@ -719,8 +758,10 @@ fn test_compile_and_run_apply_path() {
     let result = Emu::compile_and_run(
         "test.clsp",
         "(mod (A) (include *standard-cl-23*) A)",
-        "(19)"
-    ).expect("should run").unwrap();
+        "(19)",
+    )
+    .expect("should run")
+    .unwrap();
     assert_eq!(result.to_string(), "19");
 }
 
@@ -729,8 +770,10 @@ fn test_compile_and_run_apply_simple_op() {
     let result = Emu::compile_and_run(
         "test.clsp",
         "(mod (A B) (include *standard-cl-23*) (+ A B))",
-        "(99 103)"
-    ).expect("should run").unwrap();
+        "(99 103)",
+    )
+    .expect("should run")
+    .unwrap();
     assert_eq!(result.to_string(), "202");
 }
 
@@ -739,8 +782,10 @@ fn test_compile_and_run_apply_simple_op1() {
     let result = Emu::compile_and_run(
         "test.clsp",
         "(mod (A B) (include *standard-cl-23*) (+ 1 A B))",
-        "(99 103)"
-    ).expect("should run").unwrap();
+        "(99 103)",
+    )
+    .expect("should run")
+    .unwrap();
     assert_eq!(result.to_string(), "203");
 }
 
@@ -749,8 +794,10 @@ fn test_compile_and_run_apply_simple_function_0() {
     let result = Emu::compile_and_run(
         "test.clsp",
         "(mod (A B) (include *standard-cl-23*) (defun F (A B) (+ 1 A B)) (F A B))",
-        "(99 103)"
-    ).expect("should run").unwrap();
+        "(99 103)",
+    )
+    .expect("should run")
+    .unwrap();
     assert_eq!(result.to_string(), "203");
 }
 
@@ -759,8 +806,10 @@ fn test_compile_and_run_apply_function_1() {
     let result = Emu::compile_and_run(
         "test.clsp",
         "(mod (A) (include *standard-cl-23*) (defun F (A) (+ 1 A)) (F A))",
-        "(17)"
-    ).expect("should run").unwrap();
+        "(17)",
+    )
+    .expect("should run")
+    .unwrap();
     assert_eq!(result.to_string(), "18");
 }
 
@@ -768,4 +817,3 @@ pub enum RunEvent {
     IncomingData,
     Event(Event),
 }
-

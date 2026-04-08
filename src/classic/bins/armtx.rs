@@ -7,48 +7,52 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::mem::swap;
 use std::path::PathBuf;
-use std::str::FromStr;
-use std::sync::mpsc::{Sender, Receiver};
-use std::sync::mpsc;
-use std::thread;
 use std::rc::Rc;
+use std::str::FromStr;
+use std::sync::mpsc;
+use std::sync::mpsc::{Receiver, Sender};
+use std::thread;
 
 use argh::FromArgs;
-use armv4t_emu::{reg, Cpu, Mode, Memory};
+use armv4t_emu::{reg, Cpu, Memory, Mode};
 use clvmr::Allocator;
 use elf_rs::{Elf, ElfFile, ProgramHeaderFlags, ProgramType, SectionHeaderFlags, SectionType};
 use faerie::{ArtifactBuilder, Decl, Link, SectionKind};
+use gimli::write::{
+    Address, DirectoryId, Dwarf, FileId, LineProgram, LineString, Section, Sections, Unit, UnitId,
+};
 use gimli::{Encoding, Format, LineEncoding, LittleEndian};
-use gimli::write::{Address, DirectoryId, Dwarf, FileId, LineProgram, LineString, Section, Sections, UnitId, Unit};
 use subprocess::{Popen, PopenConfig};
 use target_lexicon::triple;
 use tempfile::NamedTempFile;
 
-use chialisp::classic::clvm::casts::bigint_to_bytes_clvm;
 use chialisp::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
+use chialisp::classic::clvm::casts::bigint_to_bytes_clvm;
 use chialisp::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
 
 use chialisp::compiler::clvm::{sha256tree, truthy};
+use chialisp::compiler::compiler::{compile_file, DefaultCompilerOpts};
 use chialisp::compiler::comptypes::CompilerOpts;
-use chialisp::compiler::compiler::{DefaultCompilerOpts, compile_file};
-use chialisp::compiler::debug::build_symbol_table_mut;
 use chialisp::compiler::debug::armjit::code::{Program, TARGET_ADDR};
 use chialisp::compiler::debug::armjit::emu::Emu;
 use chialisp::compiler::debug::armjit::emu_stub::{run_stub, start_stub};
 use chialisp::compiler::debug::armjit::load::ElfLoader;
 use chialisp::compiler::debug::armjit::memory::PagedMemory;
+use chialisp::compiler::debug::build_symbol_table_mut;
 use chialisp::compiler::dialect::AcceptedDialect;
-use chialisp::compiler::sexp::{Atom, decode_string, NodeSel, SelectNode, SExp, ThisNode, parse_sexp};
+use chialisp::compiler::sexp::{
+    decode_string, parse_sexp, Atom, NodeSel, SExp, SelectNode, ThisNode,
+};
 use chialisp::compiler::srcloc::Srcloc;
 
 /// Translate a chialisp program to debug as an arm elf executable.
 #[derive(FromArgs)]
 struct Args {
     /// include paths
-    #[argh(option, short='i')]
+    #[argh(option, short = 'i')]
     pub include: Vec<String>,
 
-    #[argh(option, short='o', description="output file")]
+    #[argh(option, short = 'o', description = "output file")]
     pub output: String,
 
     /// file name
@@ -60,7 +64,11 @@ struct Args {
     pub env: String,
 }
 
-fn spin_up_emulation(signal_emu_startup_complete: Sender<()>, elf_bin: &[u8], symbols: Rc<HashMap<String, String>>) {
+fn spin_up_emulation(
+    signal_emu_startup_complete: Sender<()>,
+    elf_bin: &[u8],
+    symbols: Rc<HashMap<String, String>>,
+) {
     // Tiny start.
     let mut emu = Emu::new(elf_bin, TARGET_ADDR, symbols).expect("should have elf");
     let mut connection = start_stub().expect("should start service");
@@ -73,12 +81,11 @@ fn main() {
 
     let mut search_paths = args.include.clone();
 
-    let argfile =
-        if let Ok(res) = fs::read(&args.filename) {
-            res
-        } else {
-            panic!("error reading {}", args.filename);
-        };
+    let argfile = if let Ok(res) = fs::read(&args.filename) {
+        res
+    } else {
+        panic!("error reading {}", args.filename);
+    };
 
     let srcloc = Srcloc::start(&args.filename);
     let mut allocator = Allocator::new();
@@ -88,29 +95,27 @@ fn main() {
         .set_dialect(AcceptedDialect {
             stepping: Some(23),
             strict: true,
-            int_fix: true
+            int_fix: true,
         })
         .set_optimize(true)
         .set_search_paths(&search_paths)
         .set_frontend_opt(false);
-    let compiled =
-        match compile_file(
-            &mut allocator,
-            runner,
-            opts,
-            &decode_string(&argfile),
-            &mut symbol_table,
-        ) {
-            Ok(res) => res,
-            Err(e) => panic!("{:?}", e)
-        };
+    let compiled = match compile_file(
+        &mut allocator,
+        runner,
+        opts,
+        &decode_string(&argfile),
+        &mut symbol_table,
+    ) {
+        Ok(res) => res,
+        Err(e) => panic!("{:?}", e),
+    };
     build_symbol_table_mut(&mut symbol_table, &compiled);
     eprintln!("symbols {symbol_table:?}");
-    let mut env =
-        match parse_sexp(srcloc.clone(), args.env.bytes()) {
-            Ok(res) => res,
-            Err(e) => panic!("{:?}", e)
-        };
+    let mut env = match parse_sexp(srcloc.clone(), args.env.bytes()) {
+        Ok(res) => res,
+        Err(e) => panic!("{:?}", e),
+    };
 
     if env.is_empty() {
         env.push(Rc::new(SExp::Nil(srcloc.clone())));
@@ -123,7 +128,8 @@ fn main() {
         env[0].clone(),
         TARGET_ADDR,
         symbols.clone(),
-    ).expect("should generate");
+    )
+    .expect("should generate");
 
     let mut elf_out = program.to_elf(&args.output).expect("should be writable");
     // copy all in-memory sections from the ELF file into system RAM
@@ -134,13 +140,20 @@ fn main() {
     // Spin up our emulation.
     let t = thread::spawn(move || {
         let elf_out = elf_out;
-        spin_up_emulation(signal_emu_startup_complete, &elf_out, Rc::new(symbol_table)) // Thread boundary.
+        spin_up_emulation(signal_emu_startup_complete, &elf_out, Rc::new(symbol_table))
+        // Thread boundary.
     });
 
-    let _ = emu_startup_complete.recv().expect("should be able to start emu");
+    let _ = emu_startup_complete
+        .recv()
+        .expect("should be able to start emu");
     // Startup done, so we can spawn gdb.
-    let mut p = Popen::create(&["sleep", "5000"], PopenConfig {
-        .. Default::default()
-    }).expect("should be able to start gdb");
+    let mut p = Popen::create(
+        &["sleep", "5000"],
+        PopenConfig {
+            ..Default::default()
+        },
+    )
+    .expect("should be able to start gdb");
     t.join().expect("thread should join successfully");
 }
