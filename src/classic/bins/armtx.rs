@@ -1,3 +1,5 @@
+#![allow(warnings)]
+
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::fmt;

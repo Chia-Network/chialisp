@@ -1,3 +1,5 @@
+#![allow(warnings)]
+
 pub mod code;
 pub mod emu;
 pub mod emu_stub;
