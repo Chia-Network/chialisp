@@ -784,6 +784,7 @@ impl Emu {
             .set_dialect(AcceptedDialect {
                 stepping: Some(23),
                 strict: true,
+                int_fix: false,
             })
             .set_optimize(true)
             .set_search_paths(&search_paths)
