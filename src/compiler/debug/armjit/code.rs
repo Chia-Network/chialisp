@@ -839,8 +839,7 @@ impl DwarfBuilder {
     // Intentionally left as a no-op: function-level DIEs and fbreg/variable
     // metadata emitted here can make gdb-multiarch crash when setting
     // breakpoints in generated ARM ET_REL files.
-    fn decorate_function(&mut self, _label: &str, _addr: usize, _size: usize) {
-    }
+    fn decorate_function(&mut self, _label: &str, _addr: usize, _size: usize) {}
 
     fn write_section(
         &self,
@@ -1613,11 +1612,7 @@ impl Program {
         write_u32(&mut debug_aranges, 6, 0);
         debug_aranges[10] = 4;
         write_u32(&mut debug_aranges, 16, self.target_addr);
-        write_u32(
-            &mut debug_aranges,
-            20,
-            self.current_addr as u32,
-        );
+        write_u32(&mut debug_aranges, 20, self.current_addr as u32);
         sections.push((".debug_aranges".to_string(), debug_aranges));
 
         for (name, bytes) in sections.iter() {
