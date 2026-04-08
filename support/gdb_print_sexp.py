@@ -48,7 +48,7 @@ class SExp:
 
 def value(val):
     wval = val[0]
-    if wval & 1:
+    if wval == 0 or wval & 1:
         wval = val[0]
         the_len = wval >> 1
         num_words = (the_len + 3) >> 2
