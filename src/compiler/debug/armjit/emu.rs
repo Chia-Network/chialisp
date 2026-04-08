@@ -30,7 +30,7 @@ use crate::compiler::clvm::{apply_op, sha256tree};
 use crate::compiler::compiler::{compile_file, DefaultCompilerOpts, is_apply};
 use crate::compiler::comptypes::CompilerOpts;
 use crate::compiler::debug::armjit::code::{
-    Instr, NEXT_ALLOC_OFFSET, Program, Register, SWI_DISPATCH_INSTRUCTION, SWI_DISPATCH_NEW_CODE, SWI_DONE, SWI_PRINT_EXPR, SWI_THROW,
+    ENV_PTR, Instr, NEXT_ALLOC_OFFSET, Program, Register, SWI_DISPATCH_INSTRUCTION, SWI_DISPATCH_NEW_CODE, SWI_DONE, SWI_PRINT_EXPR, SWI_THROW,
     TARGET_ADDR,
 };
 use crate::compiler::debug::armjit::load::{ElfLoader, EmuSymbolInfo};
@@ -451,8 +451,7 @@ impl Emu {
                 address_list.push(value_addr);
                 value_addr = self.mem.r32(value_addr + 4);
             }
-            let apply_operator = is_apply_operator(to_run);
-            let base_instructions = 100 + 100 * address_list.len();
+            let apply_operator = is_apply_operator(to_run.clone());
 
             if value_addr > 1 && !self.mem.r32(value_addr).is_multiple_of(2) {
                 // Not a proper list.
@@ -473,6 +472,13 @@ impl Emu {
             let mut instruction_list = vec![];
             // Push the stack for this.
             instruction_list.push(Instr::Push(vec![Register::FP, Register::LR]));
+            instruction_list.push(Instr::Addi(Register::FP, Register::SP, 4));
+            instruction_list.push(Instr::Subi(Register::SP, Register::SP, 0x18));
+            instruction_list.push(Instr::Str(Register::R(4), Register::SP, 0));
+            instruction_list.push(Instr::Str(Register::R(5), Register::SP, 4));
+            instruction_list.push(Instr::Str(Register::R(6), Register::SP, 8));
+            instruction_list.push(Instr::Str(Register::R(7), Register::SP, 12));
+
             // Arguments in env are in a proper list.  Emit code to iterate it from end to start,
             for (i, arg) in address_list.iter().skip(1).enumerate().rev() {
                 instruction_list.push(Instr::Ldr(
@@ -508,18 +514,45 @@ impl Emu {
                 instruction_list.push(Instr::Str(Register::R(2), Register::R(5), NEXT_ALLOC_OFFSET));
             }
 
-            // Load the operator address into R0
-            instruction_list.push(Instr::Ldr(
-                Register::R(0),
-                Register::PC,
-                (instruction_list.len() as i32) * -4 - 4,
-            ));
-
             // Handle an apply instruction inline.
             if apply_operator {
-                // Setup a stack frame for the new code and run it as in code.rs.
-                todo!();
+                // It acts as throw when it doesn't have the right arguments.
+                if !matches!(to_run.proper_list().map(|l| l.len()), Some(2)) {
+                    instruction_list.push(Instr::Swi(SWI_THROW));
+                    return None;
+                }
+
+                // Old env ptr in r4.
+                instruction_list.push(Instr::Ldr(Register::R(4), Register::R(5), ENV_PTR));
+                // Load new env ptr.
+                // It's the second head of this cons chain.
+                instruction_list.push(Instr::Ldr(
+                    Register::R(0),
+                    Register::PC,
+                    (instruction_list.len() as i32) * 4 - 8,
+                ));
+                // Navigate to the first child.
+                instruction_list.push(Instr::Ldr(Register::R(1), Register::R(0), 4));
+                // R1 = head(first(computed))
+                instruction_list.push(Instr::Ldr(Register::R(1), Register::R(1), 0));
+                // R0 = first(computed)
+                instruction_list.push(Instr::Ldr(Register::R(0), Register::R(0), 0));
+                // R5[ENV_PTR] = R1.
+                instruction_list.push(Instr::Str(Register::R(1), Register::R(5), ENV_PTR));
+                // Call with env argument.
+                instruction_list.push(Instr::Addi(Register::R(0), Register::R(5), 0));
+                // Perform the apply
+                instruction_list.push(Instr::Swi(SWI_DISPATCH_NEW_CODE));
+                // Reset the env from r4.
+                instruction_list.push(Instr::Str(Register::R(4), Register::R(5), ENV_PTR));
             } else {
+                // Load the operator address into R0
+                instruction_list.push(Instr::Ldr(
+                    Register::R(0),
+                    Register::PC,
+                    (instruction_list.len() as i32) * -4 - 4,
+                ));
+
                 // Load the args address into R1
                 instruction_list.push(Instr::Str(
                     Register::R(1),
@@ -529,12 +562,15 @@ impl Emu {
 
                 // Emit dispatch instruction.
                 instruction_list.push(Instr::Swi(SWI_DISPATCH_INSTRUCTION));
-                // Return
-                instruction_list.push(Instr::Pop(vec![Register::FP, Register::LR]));
-                instruction_list.push(Instr::Bx(Register::LR));
-
             }
-            assert_eq!(base_instructions, instruction_list.len());
+
+            instruction_list.push(Instr::Ldr(Register::R(4), Register::SP, 0));
+            instruction_list.push(Instr::Ldr(Register::R(5), Register::SP, 4));
+            instruction_list.push(Instr::Ldr(Register::R(6), Register::SP, 8));
+            instruction_list.push(Instr::Ldr(Register::R(7), Register::SP, 12));
+            instruction_list.push(Instr::Subi(Register::SP, Register::FP, 4));
+            instruction_list.push(Instr::Pop(vec![Register::FP, Register::LR]));
+            instruction_list.push(Instr::Bx(Register::LR));
 
             // Values on the stack:
             // Pointer to first argument pointer.
