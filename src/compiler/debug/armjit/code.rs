@@ -12,16 +12,14 @@ use std::str::FromStr;
 use faerie::{ArtifactBuilder, Decl, Link, SectionKind};
 use gimli;
 use gimli::constants::{
-    DW_AT_byte_size, DW_AT_encoding, DW_AT_frame_base, DW_AT_high_pc, DW_AT_language,
-    DW_AT_location, DW_AT_low_pc, DW_AT_name, DW_AT_type, DW_TAG_base_type,
-    DW_TAG_formal_parameter, DW_TAG_pointer_type, DW_TAG_subprogram, DW_TAG_variable, DW_LANG_C99,
+    DW_AT_byte_size, DW_AT_encoding, DW_AT_high_pc, DW_AT_language, DW_AT_low_pc, DW_AT_name,
+    DW_AT_type, DW_TAG_base_type, DW_TAG_pointer_type, DW_LANG_C99,
 };
 use gimli::write::{
-    Address, Attribute, AttributeValue, DirectoryId, Dwarf, DwarfUnit, Expression, FileId,
-    LineProgram, LineString, Location, LocationList, Range, RangeList, Section, Sections, Unit,
-    UnitEntryId, UnitId,
+    Address, AttributeValue, DirectoryId, Dwarf, FileId, LineProgram, LineString, Location,
+    LocationList, Range, RangeList, Section, Sections, Unit, UnitEntryId, UnitId,
 };
-use gimli::{DW_ATE_unsigned, DwAte, Encoding, Format, LineEncoding};
+use gimli::{DW_ATE_unsigned, Encoding, Format, LineEncoding};
 use target_lexicon::triple;
 use tempfile::NamedTempFile;
 
@@ -29,7 +27,7 @@ use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
 use crate::classic::clvm::casts::bigint_to_bytes_clvm;
 use crate::compiler::clvm::{sha256tree, truthy};
 use crate::compiler::debug::armjit::load::{write_u32, ElfLoader};
-use crate::compiler::sexp::{decode_string, parse_sexp, Atom, NodeSel, SExp, SelectNode, ThisNode};
+use crate::compiler::sexp::{decode_string, Atom, NodeSel, SExp, SelectNode, ThisNode};
 use crate::compiler::srcloc::Srcloc;
 
 pub const ENV_PTR: i32 = 0;
@@ -668,9 +666,10 @@ impl DwarfBuilder {
         let line_encoding = LineEncoding {
             minimum_instruction_length: 4,
             maximum_operations_per_instruction: 1,
-            default_is_stmt: false,
-            line_base: 0,
-            line_range: 1,
+            // Use conventional line-program parameters which GDB handles reliably.
+            default_is_stmt: true,
+            line_base: -5,
+            line_range: 14,
         };
 
         let mut dwarf = Dwarf::default();
@@ -837,102 +836,10 @@ impl DwarfBuilder {
         None
     }
 
-    fn add_arguments(&mut self, subprogram_id: UnitEntryId, here: u64, path: u64, args: Rc<SExp>) {
-        eprintln!("add_arguments {here} {path} {args}");
-        if let SExp::Cons(_, a, b) = args.borrow() {
-            self.add_arguments(subprogram_id, here << 1, path, a.clone());
-            self.add_arguments(subprogram_id, here << 1, path | here, b.clone());
-        } else if let SExp::Atom(_, a) = args.borrow() {
-            let argname = decode_string(a);
-            let unit = self.dwarf.units.get_mut(self.unit_id);
-            let mut expr = Expression::new();
-
-            // Deref the environment.
-            expr.op_fbreg(-0x18);
-            expr.op_deref();
-
-            let mut i = 1;
-            while i < here {
-                expr.op_deref();
-                if (path & i) != 0 {
-                    expr.op_plus_uconst(4);
-                }
-                i <<= 1;
-            }
-
-            let at_id = unit.add(subprogram_id, DW_TAG_formal_parameter);
-            let at_ent = unit.get_mut(at_id);
-            at_ent.set(
-                DW_AT_name,
-                AttributeValue::String(argname.as_bytes().to_vec()),
-            );
-            at_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
-            at_ent.set(DW_AT_location, AttributeValue::Exprloc(expr.clone()));
-            let at_id2 = unit.add(subprogram_id, DW_TAG_variable);
-            let at_ent = unit.get_mut(at_id2);
-            at_ent.set(
-                DW_AT_name,
-                AttributeValue::String(argname.as_bytes().to_vec()),
-            );
-            at_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
-            at_ent.set(DW_AT_location, AttributeValue::Exprloc(expr));
-        }
-    }
-
-    // Create dwarf traffic needed to ensure that gdb can find the locals.
-    fn decorate_function(&mut self, label: &str, addr: usize, size: usize) {
-        let (name, args) = self
-            .match_function(&label)
-            .map(|c| c.clone())
-            .unwrap_or_else(|| (label.to_string(), "(() . ENV)".to_string()));
-        let subprogram_id = {
-            let unit = self.dwarf.units.get_mut(self.unit_id);
-            let subprogram_id = unit.add(unit.root(), DW_TAG_subprogram);
-            let mut fbexpr_mid = Expression::new();
-            fbexpr_mid.op_breg(gimli::Register(11), 0);
-            let mut loclist = Vec::new();
-            loclist.push(Location::StartEnd {
-                begin: Address::Constant(addr as u64),
-                end: Address::Constant((addr + size) as u64),
-                data: fbexpr_mid,
-            });
-            let loc_list_id = unit.locations.add(LocationList(loclist));
-            let mut sub_ent = unit.get_mut(subprogram_id);
-            sub_ent.set(DW_AT_name, AttributeValue::String(name.as_bytes().to_vec()));
-            sub_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
-            sub_ent.set(
-                DW_AT_low_pc,
-                AttributeValue::Address(Address::Constant(
-                    (self.target_addr as usize + addr) as u64,
-                )),
-            );
-            sub_ent.set(
-                DW_AT_high_pc,
-                AttributeValue::Address(Address::Constant(
-                    (self.target_addr as usize + addr + size) as u64,
-                )),
-            );
-            sub_ent.set(
-                DW_AT_frame_base,
-                AttributeValue::LocationListRef(loc_list_id),
-            );
-            subprogram_id
-        };
-        let srcloc = Srcloc::start("*args*");
-        if let Ok(parsed) = parse_sexp(srcloc.clone(), args.bytes()) {
-            if !parsed.is_empty() {
-                self.add_arguments(
-                    subprogram_id,
-                    1,
-                    0,
-                    Rc::new(SExp::Cons(
-                        srcloc.clone(),
-                        Rc::new(SExp::Nil(srcloc.clone())),
-                        parsed[0].clone(),
-                    )),
-                );
-            }
-        }
+    // Intentionally left as a no-op: function-level DIEs and fbreg/variable
+    // metadata emitted here can make gdb-multiarch crash when setting
+    // breakpoints in generated ARM ET_REL files.
+    fn decorate_function(&mut self, _label: &str, _addr: usize, _size: usize) {
     }
 
     fn write_section(
