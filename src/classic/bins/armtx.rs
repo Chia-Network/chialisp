@@ -125,6 +125,11 @@ fn main() {
         symbols.clone(),
     ).expect("should generate");
 
+    let elf_out_result = program.to_elf(&args.output);
+    if let Err(e) = &elf_out_result {
+        eprintln!("Error compiling: {e:?}");
+        std::process::exit(1);
+    }
     let mut elf_out = program.to_elf(&args.output).expect("should be writable");
     // copy all in-memory sections from the ELF file into system RAM
 

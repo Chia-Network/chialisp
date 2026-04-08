@@ -27,10 +27,10 @@ use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 
 use crate::compiler::clvm::{apply_op, sha256tree};
-use crate::compiler::compiler::{compile_file, DefaultCompilerOpts};
+use crate::compiler::compiler::{compile_file, DefaultCompilerOpts, is_apply};
 use crate::compiler::comptypes::CompilerOpts;
 use crate::compiler::debug::armjit::code::{
-    Program, SWI_DISPATCH_INSTRUCTION, SWI_DISPATCH_NEW_CODE, SWI_DONE, SWI_PRINT_EXPR, SWI_THROW,
+    Instr, NEXT_ALLOC_OFFSET, Program, Register, SWI_DISPATCH_INSTRUCTION, SWI_DISPATCH_NEW_CODE, SWI_DONE, SWI_PRINT_EXPR, SWI_THROW,
     TARGET_ADDR,
 };
 use crate::compiler::debug::armjit::load::{ElfLoader, EmuSymbolInfo};
@@ -249,6 +249,33 @@ impl SingleThreadResume for Emu {
     }
 }
 
+fn is_apply_operator(sexp: Rc<SExp>) -> bool {
+    if let SExp::Cons(_, h, t) = &*sexp {
+        if is_apply(&h) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn is_quote(sexp: &SExp) -> bool {
+    if let SExp::Atom(_, a) = sexp {
+        return a == &[1];
+    }
+    false
+}
+
+fn is_quote_operator(sexp: Rc<SExp>) -> bool {
+    if let SExp::Cons(_, h, t) = &*sexp {
+        if is_quote(&h.atomize()) {
+            return true;
+        }
+    }
+
+    false
+}
+
 impl Emu {
     pub fn new(
         program_elf: &[u8],
@@ -328,9 +355,45 @@ impl Emu {
         }
     }
 
+    fn do_apply_op(
+        &mut self,
+        runner: Rc<dyn TRunProgram>,
+        srcloc: &Srcloc,
+        operator: Rc<SExp>,
+        args: Rc<SExp>
+    ) -> Option<Event> {
+        let mut allocator = Allocator::new();
+        let alloc_ptr = self.cpu.reg_get(Mode::User, 5) + 4;
+        match apply_op(
+            &mut allocator,
+            runner.clone(),
+            srcloc.clone(),
+            operator.clone(),
+            args.clone(),
+        ) {
+            Ok(res) => {
+                // Allocate and write back result.
+                let write_result = self.allocate_and_write(alloc_ptr, res.clone());
+                eprintln!("run operator {operator} args {args} => {res}");
+                self.cpu.reg_set(Mode::User, 0, write_result);
+                // Increment pc, we handled the operation.
+                let pc = self.cpu.reg_get(Mode::User, reg::PC);
+                self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
+                None
+            }
+            Err(e) => {
+                eprintln!("error simulating instruction: {e:?}");
+                Some(Event::Trap)
+            }
+        }
+    }
+
     fn do_trap(&mut self, pc: u32, value: usize) -> Option<Event> {
         let srcloc = Srcloc::start("*emu*");
         eprintln!("trap {value:x}");
+
+        let runner = Rc::new(DefaultProgramRunner::new());
+
         if value == SWI_DONE {
             Some(Event::Halted)
         } else if value == SWI_THROW {
@@ -364,146 +427,143 @@ impl Emu {
 
             // Setup stack frame in code buffer.
 
+            let current_pc = self.cpu.reg_get(Mode::User, reg::PC);
             if let Some(lookup) = self.jit_symbols.get(&string_of_hash) {
                 // We found it, transfer control.
                 eprintln!("found code, dispatch to {lookup:?}");
                 eprintln!("running code {to_run} with env {env}");
-                let current_pc = self.cpu.reg_get(Mode::User, reg::PC);
                 self.cpu.reg_set(Mode::User, 2, lookup.address);
                 self.cpu.reg_set(Mode::User, reg::PC, current_pc + 4);
                 return None;
             };
 
             eprintln!("not found: running code {to_run} with env {env}");
-            let generated_filename = "*jit-generated-apply*";
-            let apply_program =
-                format!("(mod () (include *standard-cl-23.1*) (a (q . {to_run}) (q . {env})))");
-
-            let mut allocator = Allocator::new();
-            let mut symbol_table = HashMap::new();
-            let runner: Rc<dyn TRunProgram> = Rc::new(DefaultProgramRunner::new());
-            let opts = Rc::new(DefaultCompilerOpts::new(generated_filename))
-                .set_dialect(AcceptedDialect {
-                    stepping: Some(23),
-                    strict: true,
-                    int_fix: true,
-                })
-                .set_optimize(true)
-                .set_search_paths(&[])
-                .set_frontend_opt(false);
-            let compiled_apply = match compile_file(
-                &mut allocator,
-                runner,
-                opts,
-                &apply_program,
-                &mut symbol_table,
-            ) {
-                Ok(compiled) => compiled,
-                Err(e) => {
-                    eprintln!("error compiling generated apply program: {e:?}");
-                    return Some(Event::Trap);
-                }
-            };
-            build_symbol_table_mut(&mut symbol_table, &compiled_apply);
-            let env_nil = Rc::new(SExp::Nil(Srcloc::start(generated_filename)));
-            let symbol_table_rc = Rc::new(symbol_table.clone());
-            let generated_program = match Program::new(
-                generated_filename,
-                Rc::new(compiled_apply),
-                env_nil,
-                self.next_module_addr,
-                symbol_table_rc,
-            ) {
-                Ok(program) => program,
-                Err(e) => {
-                    eprintln!("error creating generated apply program: {e:?}");
-                    return Some(Event::Trap);
-                }
-            };
-            let tmpfile = match NamedTempFile::new() {
-                Ok(tf) => tf,
-                Err(e) => {
-                    eprintln!("error creating temp file for generated elf: {e:?}");
-                    return Some(Event::Trap);
-                }
-            };
-            let tmpname = match tmpfile.path().to_str() {
-                Some(path) => path.to_string(),
-                None => {
-                    eprintln!("error converting temp path for generated elf");
-                    return Some(Event::Trap);
-                }
-            };
-            let generated_elf = match generated_program.to_elf(&tmpname) {
-                Ok(elf) => elf,
-                Err(e) => {
-                    eprintln!("error creating generated apply elf: {e:?}");
-                    return Some(Event::Trap);
-                }
-            };
-
-            let elf_loader = match ElfLoader::new(&generated_elf, self.next_module_addr) {
-                Ok(loader) => loader,
-                Err(e) => {
-                    eprintln!("error loading generated apply elf: {e:?}");
-                    return Some(Event::Trap);
-                }
-            };
-            elf_loader.load(&mut self.mem);
-            self.next_module_addr = elf_loader.next_free_addr();
-
-            let mut merged_jit = self.jit_symbols.as_ref().clone();
-            for (name, info) in elf_loader.get_symbols().into_iter() {
-                merged_jit.insert(name, info);
-            }
-            self.jit_symbols = Rc::new(merged_jit);
-
-            let mut merged_clvm = self.clvm_symbols.as_ref().clone();
-            for (name, value) in symbol_table.into_iter() {
-                merged_clvm.insert(name, value);
-            }
-            self.clvm_symbols = Rc::new(merged_clvm);
-
-            if let Some(lookup) = self.jit_symbols.get(&string_of_hash) {
-                let current_pc = self.cpu.reg_get(Mode::User, reg::PC);
-                self.cpu.reg_set(Mode::User, 2, lookup.address);
+            // Quoted is easy.
+            if is_quote_operator(to_run.clone()) {
+                self.cpu.reg_set(Mode::User, 0, self.mem.r32(r0_value + 4));
                 self.cpu.reg_set(Mode::User, reg::PC, current_pc + 4);
                 return None;
             }
 
-            eprintln!("still unable to resolve jit symbol for hash {string_of_hash}");
-            return Some(Event::Trap);
+            let mut address_list = vec![];
+            let mut value_addr = r0_value;
+            while value_addr > 1 && self.mem.r32(value_addr).is_multiple_of(2) {
+                address_list.push(value_addr);
+                value_addr = self.mem.r32(value_addr + 4);
+            }
+            let apply_operator = is_apply_operator(to_run);
+            let base_instructions = 100 + 100 * address_list.len();
+
+            if value_addr > 1 && !self.mem.r32(value_addr).is_multiple_of(2) {
+                // Not a proper list.
+                return Some(Event::Trap);
+            }
+
+            let alloc_address = self.cpu.reg_get(Mode::User, 5) + 4;
+            // Structure of data area:
+            //                                                offset
+            // pointer to next argument                       0
+            // pointer to cons                                4
+            // operator address                               8
+            // reverse order argument addresses               12
+            // code                                           12 + (4 * address_list.len())
+            let new_code_address = self.mem.r32(alloc_address);
+
+            // Emit code for each argument in reverse order, accumulating into r0.
+            let mut instruction_list = vec![];
+            // Push the stack for this.
+            instruction_list.push(Instr::Push(vec![Register::FP, Register::LR]));
+            // Arguments in env are in a proper list.  Emit code to iterate it from end to start,
+            for (i, arg) in address_list.iter().skip(1).enumerate().rev() {
+                instruction_list.push(Instr::Ldr(
+                    Register::R(1),
+                    Register::PC,
+                    (instruction_list.len() as i32) * -4 - 12
+                ));
+                instruction_list.push(Instr::Ldr(Register::R(0), Register::R(1), 0));
+                // Now we have the operator argument in R0.  Emit a dispatch instruction.
+                instruction_list.push(Instr::Swi(SWI_DISPATCH_NEW_CODE));
+                // Result is in R0.
+                // Allocate a cons and compose it.
+                instruction_list.push(Instr::Str(Register::R(2), Register::R(5), NEXT_ALLOC_OFFSET));
+                // Set the head of the cons to the newly evaluated argument.
+                instruction_list.push(Instr::Str(Register::R(0), Register::R(2), 0));
+                // Load the cons ptr.
+                instruction_list.push(Instr::Ldr(
+                    Register::R(0),
+                    Register::PC,
+                    (instruction_list.len() as i32) * -4 - 8
+                ));
+                // Set the tail
+                instruction_list.push(Instr::Str(Register::R(2), Register::R(0), 4));
+                // Set the new cons ptr
+                instruction_list.push(Instr::Str(
+                    Register::R(2),
+                    Register::PC,
+                    (instruction_list.len() as i32) * -4 - 8
+                ));
+                // Bump r2 to point to the next unallocated space.
+                instruction_list.push(Instr::Addi(Register::R(2), Register::R(0), 8));
+                // Update the allocation ptr.
+                instruction_list.push(Instr::Str(Register::R(2), Register::R(5), NEXT_ALLOC_OFFSET));
+            }
+
+            // Load the operator address into R0
+            instruction_list.push(Instr::Ldr(
+                Register::R(0),
+                Register::PC,
+                (instruction_list.len() as i32) * -4 - 4,
+            ));
+
+            // Handle an apply instruction inline.
+            if apply_operator {
+                // Setup a stack frame for the new code and run it as in code.rs.
+                todo!();
+            } else {
+                // Load the args address into R1
+                instruction_list.push(Instr::Str(
+                    Register::R(1),
+                    Register::PC,
+                    (instruction_list.len() as i32) * -4 - 8
+                ));
+
+                // Emit dispatch instruction.
+                instruction_list.push(Instr::Swi(SWI_DISPATCH_INSTRUCTION));
+                // Return
+                instruction_list.push(Instr::Pop(vec![Register::FP, Register::LR]));
+                instruction_list.push(Instr::Bx(Register::LR));
+
+            }
+            assert_eq!(base_instructions, instruction_list.len());
+
+            // Values on the stack:
+            // Pointer to first argument pointer.
+            instruction_list.push(Instr::Long((new_code_address + 12) as usize));
+            // Constructed value for operator evaluation.
+            instruction_list.push(Instr::Long(1));
+            // Operator sexp.
+            instruction_list.push(Instr::Long(self.mem.r32(r0_value) as usize));
+
+            for arg in address_list.iter() {
+                instruction_list.push(Instr::Long(*arg as usize));
+            }
+
+            // Allocate space for this thunk.
+            self.mem.write_u32(alloc_address, (new_code_address + instruction_list.len() as u32 * 4) as u32);
+
+            let return_addr = self.cpu.reg_get(Mode::User, reg::PC) + 4;
+            self.cpu.reg_set(Mode::User, reg::LR, return_addr);
+            self.cpu.reg_set(Mode::User, reg::PC, new_code_address);
+            None
         } else if value == SWI_DISPATCH_INSTRUCTION {
             // Grab the sexp for this operation.
             let r0_value = self.cpu.reg_get(Mode::User, 0);
             let operator = self.get_sexp(&srcloc, r0_value);
             let r1_value = self.cpu.reg_get(Mode::User, 1);
             let args = self.get_sexp(&srcloc, r1_value);
-            let alloc_ptr = self.cpu.reg_get(Mode::User, 5) + 4;
             let mut allocator = Allocator::new();
-            let runner = Rc::new(DefaultProgramRunner::new());
             eprintln!("run operator {operator} args {args}");
-            match apply_op(
-                &mut allocator,
-                runner,
-                srcloc,
-                operator.clone(),
-                args.clone(),
-            ) {
-                Ok(res) => {
-                    // Allocate and write back result.
-                    let write_result = self.allocate_and_write(alloc_ptr, res.clone());
-                    eprintln!("run operator {operator} args {args} => {res}");
-                    self.cpu.reg_set(Mode::User, 0, write_result);
-                    // Increment pc, we handled the operation.
-                    self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
-                    None
-                }
-                Err(e) => {
-                    eprintln!("error simulating instruction: {e:?}");
-                    Some(Event::Trap)
-                }
-            }
+            self.do_apply_op(runner, &srcloc, operator, args)
         } else if value == SWI_PRINT_EXPR {
             let r5_value = self.cpu.reg_get(Mode::User, 5) + 8;
             let to_print = self.mem.r32(r5_value);

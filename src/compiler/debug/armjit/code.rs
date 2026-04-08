@@ -32,9 +32,9 @@ use crate::compiler::debug::armjit::load::{write_u32, ElfLoader};
 use crate::compiler::sexp::{decode_string, parse_sexp, Atom, NodeSel, SExp, SelectNode, ThisNode};
 use crate::compiler::srcloc::Srcloc;
 
-const ENV_PTR: i32 = 0;
-const NEXT_ALLOC_OFFSET: i32 = 4;
-const PRINTME: i32 = 8;
+pub const ENV_PTR: i32 = 0;
+pub const NEXT_ALLOC_OFFSET: i32 = 4;
+pub const PRINTME: i32 = 8;
 
 pub const SWI_DONE: usize = 0;
 pub const SWI_THROW: usize = 1;
@@ -121,7 +121,7 @@ pub const TARGET_ADDR: u32 = 0x1000;
 // n-uint Length
 
 #[derive(Clone, Debug)]
-enum Register {
+pub enum Register {
     SP,
     PC,
     FP,
@@ -158,7 +158,7 @@ impl ToU32 for Register {
 }
 
 #[derive(Clone, Debug)]
-enum Instr {
+pub enum Instr {
     Align4,
     Section(String),
     Globl(String),
