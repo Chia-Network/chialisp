@@ -1420,8 +1420,14 @@ impl Program {
             self.start_addr = self.current_addr;
         }
 
+        if size != 0 {
+            let next_addr = self.current_addr + size;
+            self.dwarf_builder
+                .add_instr(self.current_addr, srcloc, insert_instr, begin_end_block);
+            self.current_addr = next_addr;
+        }
+
         if end_block {
-            self.current_addr = (self.current_addr + 15) & !15;
             if let Some(label) = self.current_symbol.as_ref() {
                 eprintln!(
                     "end block for label {label} {:x}-{:x}",
@@ -1435,13 +1441,6 @@ impl Program {
                 self.current_symbol = None;
             }
         }
-
-        if size != 0 {
-            let next_addr = self.current_addr + size;
-            self.dwarf_builder
-                .add_instr(self.current_addr, srcloc, insert_instr, begin_end_block);
-            self.current_addr = next_addr;
-        }
     }
 
     fn push(&mut self, srcloc: &Srcloc, instr: Instr) {
@@ -1454,7 +1453,7 @@ impl Program {
             let hash = sha256tree(sexp.clone());
 
             self.labels_by_hash.insert(hash.clone(), label.clone());
-            self.dwarf_builder.start(self.current_addr);
+            self.dwarf_builder.start((self.current_addr + 15) & !15);
 
             self.push(&sexp.loc(), Instr::Globl(label.clone()));
             self.push(&sexp.loc(), Instr::Label(label.clone()));
@@ -1671,7 +1670,6 @@ impl Program {
         let mut function_body = Vec::new();
         let mut in_function = None;
 
-        let mut produced_code = 0;
         let mut handle_def_end = |target_addr: u32,
                                   function_body: &mut Vec<u8>,
                                   in_function: &mut Option<String>|
@@ -1679,7 +1677,6 @@ impl Program {
             if let Some(defname) = in_function.as_ref() {
                 if !function_body.is_empty() {
                     eprintln!("obj define {defname}");
-                    produced_code += function_body.len();
                     obj.define(defname, function_body.clone())
                         .map_err(|e| format!("{e:?}"))?;
                     *function_body = Vec::new();
@@ -1712,7 +1709,7 @@ impl Program {
         write_u32(
             &mut debug_aranges,
             20,
-            self.target_addr + produced_code as u32,
+            self.current_addr as u32,
         );
         sections.push((".debug_aranges".to_string(), debug_aranges));
 
