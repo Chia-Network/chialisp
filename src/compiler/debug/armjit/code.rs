@@ -823,16 +823,12 @@ impl DwarfBuilder {
     }
 
     fn match_function(&self, label: &str) -> Option<(String, String)> {
-        let hash = if let Some(hash) = label.strip_prefix('_').and_then(|s| s.split('_').next()) {
-            hash
-        } else {
-            return None;
-        };
-
-        if let Some(name) = self.symbol_table.get(hash).cloned() {
+        let mut stripped: Vec<u8> = label.bytes().skip(1).take_while(|b| *b != b'_').collect();
+        if let Some(name) = self.symbol_table.get(&decode_string(&stripped)).cloned() {
+            stripped.append(&mut b"_arguments".to_vec());
             let args = self
                 .symbol_table
-                .get(&format!("{hash}_arguments"))
+                .get(&decode_string(&stripped))
                 .cloned()
                 .unwrap_or_else(|| "ENV".to_string());
             return Some((name, args));
@@ -1456,15 +1452,9 @@ impl Program {
         while let Some((label, sexp)) = self.waiting_programs.pop() {
             eprintln!("{} sexp {:?} {}", label, sexp.loc(), sexp);
             let hash = sha256tree(sexp.clone());
-            let hash_hex = hexify(&hash);
 
             self.labels_by_hash.insert(hash.clone(), label.clone());
             self.dwarf_builder.start(self.current_addr);
-
-            if let Some(function_name) = self.symbol_table.get(&hash_hex).cloned() {
-                self.push(&sexp.loc(), Instr::Globl(function_name.clone()));
-                self.push(&sexp.loc(), Instr::Label(function_name));
-            }
 
             self.push(&sexp.loc(), Instr::Globl(label.clone()));
             self.push(&sexp.loc(), Instr::Label(label.clone()));
