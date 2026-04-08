@@ -27,11 +27,11 @@ use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 
 use crate::compiler::clvm::{apply_op, sha256tree};
-use crate::compiler::compiler::{compile_file, DefaultCompilerOpts, is_apply};
+use crate::compiler::compiler::{compile_file, is_apply, DefaultCompilerOpts};
 use crate::compiler::comptypes::CompilerOpts;
 use crate::compiler::debug::armjit::code::{
-    ENV_PTR, Instr, NEXT_ALLOC_OFFSET, Program, Register, SWI_DISPATCH_INSTRUCTION, SWI_DISPATCH_NEW_CODE, SWI_DONE, SWI_PRINT_EXPR, SWI_THROW,
-    TARGET_ADDR,
+    Instr, Program, Register, ENV_PTR, NEXT_ALLOC_OFFSET, SWI_DISPATCH_INSTRUCTION,
+    SWI_DISPATCH_NEW_CODE, SWI_DONE, SWI_PRINT_EXPR, SWI_THROW, TARGET_ADDR,
 };
 use crate::compiler::debug::armjit::load::{ElfLoader, EmuSymbolInfo};
 use crate::compiler::debug::armjit::memory::{PagedMemory, TargetMemory};
@@ -360,7 +360,7 @@ impl Emu {
         runner: Rc<dyn TRunProgram>,
         srcloc: &Srcloc,
         operator: Rc<SExp>,
-        args: Rc<SExp>
+        args: Rc<SExp>,
     ) -> Option<Event> {
         let mut allocator = Allocator::new();
         let alloc_ptr = self.cpu.reg_get(Mode::User, 5) + 4;
@@ -484,21 +484,25 @@ impl Emu {
                 instruction_list.push(Instr::Ldr(
                     Register::R(1),
                     Register::PC,
-                    (instruction_list.len() as i32) * -4 - 12
+                    (instruction_list.len() as i32) * -4 - 12,
                 ));
                 instruction_list.push(Instr::Ldr(Register::R(0), Register::R(1), 0));
                 // Now we have the operator argument in R0.  Emit a dispatch instruction.
                 instruction_list.push(Instr::Swi(SWI_DISPATCH_NEW_CODE));
                 // Result is in R0.
                 // Allocate a cons and compose it.
-                instruction_list.push(Instr::Str(Register::R(2), Register::R(5), NEXT_ALLOC_OFFSET));
+                instruction_list.push(Instr::Str(
+                    Register::R(2),
+                    Register::R(5),
+                    NEXT_ALLOC_OFFSET,
+                ));
                 // Set the head of the cons to the newly evaluated argument.
                 instruction_list.push(Instr::Str(Register::R(0), Register::R(2), 0));
                 // Load the cons ptr.
                 instruction_list.push(Instr::Ldr(
                     Register::R(0),
                     Register::PC,
-                    (instruction_list.len() as i32) * -4 - 8
+                    (instruction_list.len() as i32) * -4 - 8,
                 ));
                 // Set the tail
                 instruction_list.push(Instr::Str(Register::R(2), Register::R(0), 4));
@@ -506,12 +510,16 @@ impl Emu {
                 instruction_list.push(Instr::Str(
                     Register::R(2),
                     Register::PC,
-                    (instruction_list.len() as i32) * -4 - 8
+                    (instruction_list.len() as i32) * -4 - 8,
                 ));
                 // Bump r2 to point to the next unallocated space.
                 instruction_list.push(Instr::Addi(Register::R(2), Register::R(0), 8));
                 // Update the allocation ptr.
-                instruction_list.push(Instr::Str(Register::R(2), Register::R(5), NEXT_ALLOC_OFFSET));
+                instruction_list.push(Instr::Str(
+                    Register::R(2),
+                    Register::R(5),
+                    NEXT_ALLOC_OFFSET,
+                ));
             }
 
             // Handle an apply instruction inline.
@@ -557,7 +565,7 @@ impl Emu {
                 instruction_list.push(Instr::Str(
                     Register::R(1),
                     Register::PC,
-                    (instruction_list.len() as i32) * -4 - 8
+                    (instruction_list.len() as i32) * -4 - 8,
                 ));
 
                 // Emit dispatch instruction.
@@ -585,7 +593,10 @@ impl Emu {
             }
 
             // Allocate space for this thunk.
-            self.mem.write_u32(alloc_address, (new_code_address + instruction_list.len() as u32 * 4) as u32);
+            self.mem.write_u32(
+                alloc_address,
+                (new_code_address + instruction_list.len() as u32 * 4) as u32,
+            );
 
             let return_addr = self.cpu.reg_get(Mode::User, reg::PC) + 4;
             self.cpu.reg_set(Mode::User, reg::LR, return_addr);

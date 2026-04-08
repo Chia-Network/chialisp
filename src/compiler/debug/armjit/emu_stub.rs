@@ -29,7 +29,7 @@ enum EmuGdbEventLoop {}
 fn print_run_event(event: &RunEvent) -> String {
     match event {
         RunEvent::IncomingData => "IncomingData".to_string(),
-        RunEvent::Event(event) => format!("Event({event:?})")
+        RunEvent::Event(event) => format!("Event({event:?})"),
     }
 }
 
@@ -128,8 +128,10 @@ pub fn start_stub() -> Result<Box<dyn ConnectionExt<Error = std::io::Error>>, ()
     Ok(Box::new(wait_for_tcp(9001).map_err(|_| ())?))
 }
 
-pub fn run_stub(connection: Box<dyn ConnectionExt<Error = std::io::Error>>, emu: &mut Emu) -> DynResult<()> {
-
+pub fn run_stub(
+    connection: Box<dyn ConnectionExt<Error = std::io::Error>>,
+    emu: &mut Emu,
+) -> DynResult<()> {
     let gdb = GdbStub::new(connection);
 
     match gdb.run_blocking::<EmuGdbEventLoop>(emu) {
