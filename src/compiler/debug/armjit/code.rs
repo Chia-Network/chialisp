@@ -12,14 +12,16 @@ use std::str::FromStr;
 use faerie::{ArtifactBuilder, Decl, Link, SectionKind};
 use gimli;
 use gimli::constants::{
-    DW_AT_byte_size, DW_AT_encoding, DW_AT_high_pc, DW_AT_language, DW_AT_low_pc, DW_AT_name,
-    DW_AT_type, DW_TAG_base_type, DW_TAG_pointer_type, DW_LANG_C99,
+    DW_AT_byte_size, DW_AT_encoding, DW_AT_frame_base, DW_AT_high_pc, DW_AT_language,
+    DW_AT_location, DW_AT_low_pc, DW_AT_name, DW_AT_type, DW_TAG_base_type,
+    DW_TAG_formal_parameter, DW_TAG_pointer_type, DW_TAG_subprogram, DW_TAG_variable, DW_LANG_C99,
 };
 use gimli::write::{
-    Address, AttributeValue, DirectoryId, Dwarf, FileId, LineProgram, LineString, Location,
-    LocationList, Range, RangeList, Section, Sections, Unit, UnitEntryId, UnitId,
+    Address, Attribute, AttributeValue, DirectoryId, Dwarf, DwarfUnit, Expression, FileId,
+    LineProgram, LineString, Location, LocationList, Range, RangeList, Section, Sections, Unit,
+    UnitEntryId, UnitId,
 };
-use gimli::{DW_ATE_unsigned, Encoding, Format, LineEncoding};
+use gimli::{DW_ATE_unsigned, DwAte, Encoding, Format, LineEncoding};
 use target_lexicon::triple;
 use tempfile::NamedTempFile;
 
@@ -27,7 +29,7 @@ use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
 use crate::classic::clvm::casts::bigint_to_bytes_clvm;
 use crate::compiler::clvm::{sha256tree, truthy};
 use crate::compiler::debug::armjit::load::{write_u32, ElfLoader};
-use crate::compiler::sexp::{decode_string, Atom, NodeSel, SExp, SelectNode, ThisNode};
+use crate::compiler::sexp::{decode_string, parse_sexp, Atom, NodeSel, SExp, SelectNode, ThisNode};
 use crate::compiler::srcloc::Srcloc;
 
 pub const ENV_PTR: i32 = 0;
@@ -666,10 +668,9 @@ impl DwarfBuilder {
         let line_encoding = LineEncoding {
             minimum_instruction_length: 4,
             maximum_operations_per_instruction: 1,
-            // Use conventional line-program parameters which GDB handles reliably.
-            default_is_stmt: true,
-            line_base: -5,
-            line_range: 14,
+            default_is_stmt: false,
+            line_base: 0,
+            line_range: 1,
         };
 
         let mut dwarf = Dwarf::default();
@@ -836,10 +837,109 @@ impl DwarfBuilder {
         None
     }
 
-    // Intentionally left as a no-op: function-level DIEs and fbreg/variable
-    // metadata emitted here can make gdb-multiarch crash when setting
-    // breakpoints in generated ARM ET_REL files.
-    fn decorate_function(&mut self, _label: &str, _addr: usize, _size: usize) {}
+    fn add_arguments(&mut self, subprogram_id: UnitEntryId, here: u64, path: u64, args: Rc<SExp>) {
+        eprintln!("add_arguments {here} {path} {args}");
+        if let SExp::Cons(_, a, b) = args.borrow() {
+            self.add_arguments(subprogram_id, here << 1, path, a.clone());
+            self.add_arguments(subprogram_id, here << 1, path | here, b.clone());
+        } else if let SExp::Atom(_, a) = args.borrow() {
+            let argname = decode_string(a);
+            let unit = self.dwarf.units.get_mut(self.unit_id);
+            let mut expr = Expression::new();
+
+            // Deref the environment.
+            expr.op_fbreg(-0x18);
+            expr.op_deref();
+
+            let mut i = 1;
+            while i < here {
+                expr.op_deref();
+                if (path & i) != 0 {
+                    expr.op_plus_uconst(4);
+                }
+                i <<= 1;
+            }
+
+            let at_id = unit.add(subprogram_id, DW_TAG_formal_parameter);
+            let at_ent = unit.get_mut(at_id);
+            at_ent.set(
+                DW_AT_name,
+                AttributeValue::String(argname.as_bytes().to_vec()),
+            );
+            at_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
+            at_ent.set(DW_AT_location, AttributeValue::Exprloc(expr.clone()));
+            let at_id2 = unit.add(subprogram_id, DW_TAG_variable);
+            let at_ent = unit.get_mut(at_id2);
+            at_ent.set(
+                DW_AT_name,
+                AttributeValue::String(argname.as_bytes().to_vec()),
+            );
+            at_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
+            at_ent.set(DW_AT_location, AttributeValue::Exprloc(expr));
+        }
+    }
+
+    // Create dwarf traffic needed to ensure that gdb can find the locals.
+    fn decorate_function(&mut self, label: &str, addr: usize, size: usize) -> Option<String> {
+        let (name, args) = self
+            .match_function(&label)
+            .map(|c| c.clone())
+            .unwrap_or_else(|| (label.to_string(), "(() . ENV)".to_string()));
+        let subprogram_id = {
+            let unit = self.dwarf.units.get_mut(self.unit_id);
+            let subprogram_id = unit.add(unit.root(), DW_TAG_subprogram);
+            let mut fbexpr_mid = Expression::new();
+            fbexpr_mid.op_breg(gimli::Register(11), 0);
+            let mut loclist = Vec::new();
+            loclist.push(Location::StartEnd {
+                begin: Address::Constant(addr as u64),
+                end: Address::Constant((addr + size) as u64),
+                data: fbexpr_mid,
+            });
+            let loc_list_id = unit.locations.add(LocationList(loclist));
+            let mut sub_ent = unit.get_mut(subprogram_id);
+            sub_ent.set(DW_AT_name, AttributeValue::String(name.as_bytes().to_vec()));
+            sub_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
+            sub_ent.set(
+                DW_AT_low_pc,
+                AttributeValue::Address(Address::Constant(
+                    (self.target_addr as usize + addr) as u64,
+                )),
+            );
+            sub_ent.set(
+                DW_AT_high_pc,
+                AttributeValue::Address(Address::Constant(
+                    (self.target_addr as usize + addr + size) as u64,
+                )),
+            );
+            sub_ent.set(
+                DW_AT_frame_base,
+                AttributeValue::LocationListRef(loc_list_id),
+            );
+            subprogram_id
+        };
+        /*
+        let srcloc = Srcloc::start("*args*");
+        if let Ok(parsed) = parse_sexp(srcloc.clone(), args.bytes()) {
+            if !parsed.is_empty() {
+                /*
+                self.add_arguments(
+                    subprogram_id,
+                    1,
+                    0,
+                    Rc::new(SExp::Cons(
+                        srcloc.clone(),
+                        Rc::new(SExp::Nil(srcloc.clone())),
+                        parsed[0].clone(),
+                    )),
+                );
+                */
+            }
+        }
+        */
+
+        Some(name)
+    }
 
     fn write_section(
         &self,
@@ -907,6 +1007,7 @@ pub struct Program {
     constants: HashMap<Vec<u8>, Constant>,
     symbol_table: Rc<HashMap<String, String>>,
     current_symbol: Option<String>,
+    function_symbols: HashMap<String, String>,
     start_addr: usize,
     current_addr: usize,
     dwarf_builder: DwarfBuilder,
@@ -1326,26 +1427,30 @@ impl Program {
             self.start_addr = self.current_addr;
         }
 
-        if size != 0 {
-            let next_addr = self.current_addr + size;
-            self.dwarf_builder
-                .add_instr(self.current_addr, srcloc, insert_instr, begin_end_block);
-            self.current_addr = next_addr;
-        }
-
         if end_block {
+            self.current_addr = (self.current_addr + 15) & !15;
             if let Some(label) = self.current_symbol.as_ref() {
                 eprintln!(
                     "end block for label {label} {:x}-{:x}",
                     self.start_addr, self.current_addr
                 );
-                self.dwarf_builder.decorate_function(
+                if let Some(function_name) = self.dwarf_builder.decorate_function(
                     label,
                     self.start_addr,
                     self.current_addr - self.start_addr,
-                );
+                ) {
+                    eprintln!("end block with function {function_name}");
+                    self.function_symbols.insert(label.clone(), function_name);
+                }
                 self.current_symbol = None;
             }
+        }
+
+        if size != 0 {
+            let next_addr = self.current_addr + size;
+            self.dwarf_builder
+                .add_instr(self.current_addr, srcloc, insert_instr, begin_end_block);
+            self.current_addr = next_addr;
         }
     }
 
@@ -1359,7 +1464,7 @@ impl Program {
             let hash = sha256tree(sexp.clone());
 
             self.labels_by_hash.insert(hash.clone(), label.clone());
-            self.dwarf_builder.start((self.current_addr + 15) & !15);
+            self.dwarf_builder.start(self.current_addr);
 
             self.push(&sexp.loc(), Instr::Globl(label.clone()));
             self.push(&sexp.loc(), Instr::Label(label.clone()));
@@ -1563,6 +1668,11 @@ impl Program {
             })
             .collect();
 
+        // Declare functions as imports and later link the labels they belong to.
+        for (label, funname) in self.function_symbols.iter() {
+            decls.push((funname.clone(), Decl::function().into()));
+        }
+
         // Declare .debug_aranges
         decls.push((
             ".debug_aranges".to_string(),
@@ -1576,13 +1686,23 @@ impl Program {
         let mut function_body = Vec::new();
         let mut in_function = None;
 
+        let mut produced_code = 0;
+        let mut defined_colloquial_names = HashSet::new();
         let mut handle_def_end = |target_addr: u32,
+                                  defined_colloquial_names: &mut HashSet<String>,
                                   function_body: &mut Vec<u8>,
                                   in_function: &mut Option<String>|
          -> Result<(), String> {
             if let Some(defname) = in_function.as_ref() {
                 if !function_body.is_empty() {
+                    if let Some(funname) = self.function_symbols.get(defname) {
+                        if !defined_colloquial_names.contains(funname) {
+                            obj.define(funname, vec![]).map_err(|e| format!("{e:?}"))?;
+                            defined_colloquial_names.insert(funname.clone());
+                        }
+                    }
                     eprintln!("obj define {defname}");
+                    produced_code += function_body.len();
                     obj.define(defname, function_body.clone())
                         .map_err(|e| format!("{e:?}"))?;
                     *function_body = Vec::new();
@@ -1594,7 +1714,12 @@ impl Program {
 
         for i in self.finished_insns.iter() {
             if let Instr::Globl(name) = i {
-                handle_def_end(self.target_addr, &mut function_body, &mut in_function)?;
+                handle_def_end(
+                    self.target_addr,
+                    &mut defined_colloquial_names,
+                    &mut function_body,
+                    &mut in_function,
+                )?;
                 in_function = Some(name.to_string());
             }
 
@@ -1603,8 +1728,12 @@ impl Program {
             }
         }
 
-        handle_def_end(self.target_addr, &mut function_body, &mut in_function)?;
-
+        handle_def_end(
+            self.target_addr,
+            &mut defined_colloquial_names,
+            &mut function_body,
+            &mut in_function,
+        )?;
         // Create .debug_aranges
         let mut debug_aranges: Vec<u8> = (0..0x20).map(|_| 0).collect();
         write_u32(&mut debug_aranges, 0, 0x1c);
@@ -1612,7 +1741,11 @@ impl Program {
         write_u32(&mut debug_aranges, 6, 0);
         debug_aranges[10] = 4;
         write_u32(&mut debug_aranges, 16, self.target_addr);
-        write_u32(&mut debug_aranges, 20, self.current_addr as u32);
+        write_u32(
+            &mut debug_aranges,
+            20,
+            (produced_code as u32) - self.target_addr,
+        );
         sections.push((".debug_aranges".to_string(), debug_aranges));
 
         for (name, bytes) in sections.iter() {
@@ -1676,6 +1809,7 @@ impl Program {
             waiting_programs: Default::default(),
             constants: Default::default(),
             symbol_table: Default::default(),
+            function_symbols: Default::default(),
             current_addr: 0,
             start_addr: 0,
             target_addr,
