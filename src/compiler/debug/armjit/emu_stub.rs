@@ -43,16 +43,20 @@ fn send_gdb_console_packet<C: Connection<Error = std::io::Error>>(
     conn.write(b'$')?;
     conn.write(b'O')?;
     for byte in payload {
-        checksum = checksum.wrapping_add(*byte >> 4);
-        checksum = checksum.wrapping_add(*byte & 0x0f);
-        conn.write(hex_ascii(*byte >> 4))?;
-        conn.write(hex_ascii(*byte & 0x0f))?;
+        let hi = hex_ascii(*byte >> 4);
+        let lo = hex_ascii(*byte & 0x0f);
+        checksum = checksum.wrapping_add(hi);
+        checksum = checksum.wrapping_add(lo);
+        conn.write(hi)?;
+        conn.write(lo)?;
     }
     let newline = b'\n';
-    checksum = checksum.wrapping_add(newline >> 4);
-    checksum = checksum.wrapping_add(newline & 0x0f);
-    conn.write(hex_ascii(newline >> 4))?;
-    conn.write(hex_ascii(newline & 0x0f))?;
+    let newline_hi = hex_ascii(newline >> 4);
+    let newline_lo = hex_ascii(newline & 0x0f);
+    checksum = checksum.wrapping_add(newline_hi);
+    checksum = checksum.wrapping_add(newline_lo);
+    conn.write(newline_hi)?;
+    conn.write(newline_lo)?;
     conn.write(b'#')?;
     conn.write(hex_ascii(checksum >> 4))?;
     conn.write(hex_ascii(checksum & 0x0f))?;
