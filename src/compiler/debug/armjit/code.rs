@@ -1233,10 +1233,10 @@ impl Program {
             // r0 = env ptr
             // Swap r0 (env) with r5[ENV_PTR]
             for i in &[
+                Instr::Addi(Register::R(0), Register::R(5), 0),
                 Instr::Bl(env_comp),
                 Instr::Ldr(Register::R(4), Register::R(5), ENV_PTR),
                 Instr::Str(Register::R(0), Register::R(5), ENV_PTR),
-                Instr::Addi(Register::R(0), Register::R(5), 0),
             ] {
                 self.push(source_sexp.clone(), loc, i.clone());
             }
@@ -1252,15 +1252,11 @@ impl Program {
                 let code_comp = self.add(Rc::new(lst[0].clone()));
 
                 for i in &[
+                    Instr::Addi(Register::R(0), Register::R(5), 0),
                     Instr::Bl(code_comp),
                     Instr::Addi(Register::R(1), Register::R(0), 0),
                     Instr::Addi(Register::R(0), Register::R(5), 0),
                     Instr::Swi(SWI_DISPATCH_NEW_CODE),
-                    Instr::Addi(Register::R(0), Register::R(5), 0),
-                    Instr::Addi(Register::R(7), Register::LR, 0),
-                    Instr::Addi(Register::LR, Register::PC, 0),
-                    Instr::Addi(Register::PC, Register::R(2), 0),
-                    Instr::Addi(Register::LR, Register::R(7), 0),
                 ] {
                     self.push(source_sexp.clone(), loc, i.clone());
                 }

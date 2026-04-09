@@ -438,8 +438,8 @@ impl Emu {
                 // We found it, transfer control.
                 eprintln!("found code, dispatch to {lookup:?}");
                 eprintln!("running code {to_run} with env {env}");
-                self.cpu.reg_set(Mode::User, 2, lookup.address);
-                self.cpu.reg_set(Mode::User, reg::PC, current_pc + 4);
+                self.cpu.reg_set(Mode::User, reg::LR, current_pc + 4);
+                self.cpu.reg_set(Mode::User, reg::PC, lookup.address);
                 return None;
             };
 
