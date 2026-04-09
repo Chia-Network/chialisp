@@ -476,6 +476,14 @@ impl Emu {
 
             // Emit code for each argument in reverse order, accumulating into r0.
             let mut instruction_list = vec![];
+            // Values on the stack:
+            // Pointer to first argument pointer.
+            instruction_list.push(Instr::Long((new_code_address + 12) as usize));
+            // Constructed value for operator evaluation.
+            instruction_list.push(Instr::Long(1));
+            // Operator sexp.
+            instruction_list.push(Instr::Long(self.mem.r32(r0_value) as usize));
+
             // Push the stack for this.
             instruction_list.push(Instr::Push(vec![Register::FP, Register::LR]));
             instruction_list.push(Instr::Addi(Register::FP, Register::SP, 4));
@@ -585,14 +593,6 @@ impl Emu {
             instruction_list.push(Instr::Subi(Register::SP, Register::FP, 4));
             instruction_list.push(Instr::Pop(vec![Register::FP, Register::LR]));
             instruction_list.push(Instr::Bx(Register::LR));
-
-            // Values on the stack:
-            // Pointer to first argument pointer.
-            instruction_list.push(Instr::Long((new_code_address + 12) as usize));
-            // Constructed value for operator evaluation.
-            instruction_list.push(Instr::Long(1));
-            // Operator sexp.
-            instruction_list.push(Instr::Long(self.mem.r32(r0_value) as usize));
 
             for arg in address_list.iter() {
                 instruction_list.push(Instr::Long(*arg as usize));
