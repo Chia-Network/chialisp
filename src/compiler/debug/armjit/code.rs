@@ -1306,7 +1306,6 @@ impl Program {
                     // Call the arg code
                     Instr::Bl(clause_label),
                     Instr::Str(Register::R(0), Register::R(5), PRINTME),
-                    Instr::Swi(SWI_PRINT_EXPR),
                     // Store R0 into the cons.
                     Instr::Str(Register::R(0), Register::R(6), 0),
                     // Store R4 into the cons.
