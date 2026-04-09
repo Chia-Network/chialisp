@@ -1,6 +1,6 @@
 [package]
 name = "chialisp"
-version = "0.4.1"
+version = "0.4.3"
 edition = "2021"
 authors = ["Art Yerkes <art.yerkes@gmail.com>"]
 description = "tools for working with chialisp language; compiler, repl, python and wasm bindings"

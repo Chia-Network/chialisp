@@ -853,12 +853,14 @@ fn test_generated_cse(n: u32) {
         stepping: Some(21),
         strict: true,
         int_fix: false,
+        extra_numeric_constants: false,
     });
     let opts23 = opts
         .set_dialect(AcceptedDialect {
             stepping: Some(23),
             strict: true,
             int_fix: false,
+            extra_numeric_constants: false,
         })
         .set_optimize(true);
     let mut allocator = Allocator::new();

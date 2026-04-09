@@ -242,7 +242,7 @@ dependencies = [
 
 [[package]]
 name = "chialisp"
-version = "0.4.1"
+version = "0.4.3"
 dependencies = [
  "argh",
  "armv4t_emu",

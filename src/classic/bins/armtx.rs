@@ -1,7 +1,7 @@
 use std::fs;
 use std::rc::Rc;
 
-use chialisp::compiler::debug::armjit::cmd::{Args, compile_to_arm_elf, spin_up_emulation};
+use chialisp::compiler::debug::armjit::cmd::{compile_to_arm_elf, spin_up_emulation, Args};
 
 fn run_arm_conversion() -> Result<(), String> {
     let args: Args = argh::from_env();

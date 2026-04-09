@@ -12,7 +12,9 @@ use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 use crate::compiler::clvm::sha256tree;
 use crate::compiler::comptypes::{BodyForm, CompileErr, CompileForm, CompilerOpts};
 use crate::compiler::evaluate::{Evaluator, EVAL_STACK_LIMIT};
+use crate::compiler::optimize::get_optimizer;
 use crate::compiler::sexp::SExp;
+use crate::compiler::BasicCompileContext;
 use crate::util::u8_from_number;
 
 // We consider lower case atoms as uncurried by convention.
@@ -79,7 +81,6 @@ pub fn check_parameters_used_compileform(
     opts: Rc<dyn CompilerOpts>,
     program: Rc<CompileForm>,
 ) -> Result<HashSet<Vec<u8>>, CompileErr> {
-    let mut allocator = Allocator::new();
     let mut env = HashMap::new();
     let runner = Rc::new(DefaultProgramRunner::new());
     let mut replacement_to_original = HashMap::new();
@@ -87,7 +88,7 @@ pub fn check_parameters_used_compileform(
         .hex()
         .as_bytes()
         .to_vec();
-    let e = Evaluator::new(opts.clone(), runner, program.helpers.clone()).mash_conditions();
+    let e = Evaluator::new(opts.clone(), runner.clone(), program.helpers.clone()).mash_conditions();
 
     produce_env_captures(
         &mut env,
@@ -96,8 +97,14 @@ pub fn check_parameters_used_compileform(
         program.args.clone(),
     );
 
+    let mut context = BasicCompileContext::new(
+        Allocator::new(),
+        runner.clone(),
+        HashMap::new(),
+        get_optimizer(&program.loc(), opts.clone())?,
+    );
     let result = e.shrink_bodyform(
-        &mut allocator,
+        &mut context,
         program.args.clone(),
         &env,
         program.exp.clone(),

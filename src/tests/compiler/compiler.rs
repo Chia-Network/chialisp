@@ -11,10 +11,12 @@ use crate::compiler::compiler::{compile_file, DefaultCompilerOpts};
 use crate::compiler::comptypes::{CompileErr, CompilerOpts};
 use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
 use crate::compiler::frontend::{collect_used_names_sexp, frontend};
+use crate::compiler::optimize::get_optimizer;
 use crate::compiler::rename::rename_in_cons;
 use crate::compiler::runtypes::RunFailure;
 use crate::compiler::sexp::{decode_string, enlist, parse_sexp, SExp};
 use crate::compiler::srcloc::Srcloc;
+use crate::compiler::BasicCompileContext;
 
 use crate::tests::classic::run::do_basic_brun;
 
@@ -47,6 +49,7 @@ fn run_string_maybe_opt(
             stepping: Some(21),
             strict: true,
             int_fix: false,
+            extra_numeric_constants: false,
         });
     }
 
@@ -2401,6 +2404,7 @@ fn test_handle_explicit_empty_atom() {
         stepping: Some(21),
         strict: true,
         int_fix: false,
+        extra_numeric_constants: false,
     });
 
     let atom = |s: &str| Rc::new(SExp::Atom(srcloc.clone(), s.as_bytes().to_vec()));
@@ -2419,15 +2423,19 @@ fn test_handle_explicit_empty_atom() {
             Rc::new(SExp::Integer(srcloc.clone(), bi_one())),
         ]),
     ]);
-    let mut allocator = Allocator::new();
-    let mut symbols = HashMap::new();
     let runner = Rc::new(DefaultProgramRunner::new());
 
+    let mut context = BasicCompileContext::new(
+        Allocator::new(),
+        runner.clone(),
+        HashMap::new(),
+        get_optimizer(&program.loc(), opts.clone()).unwrap(),
+    );
     let compiled = opts
-        .compile_program(&mut allocator, runner.clone(), program, &mut symbols)
+        .compile_program(&mut context, program)
         .expect("should compile");
     let outcome = run(
-        &mut allocator,
+        &mut context.allocator,
         runner,
         opts.prim_map(),
         Rc::new(compiled),
@@ -2505,13 +2513,14 @@ fn test_exhaustive_chars() {
             let dialect = KNOWN_DIALECTS["*standard-cl-23.1*"].accepted.clone();
             opts = opts.set_dialect(dialect);
 
+            let mut context = BasicCompileContext::new(
+                Allocator::new(),
+                runner.clone(),
+                HashMap::new(),
+                get_optimizer(&sub_qe.loc(), opts.clone()).unwrap(),
+            );
             let compiled = opts
-                .compile_program(
-                    &mut allocator,
-                    runner.clone(),
-                    make_test_program(sub_qe),
-                    &mut HashMap::new(),
-                )
+                .compile_program(&mut context, make_test_program(sub_qe))
                 .expect("should compile");
 
             let compiled_output = compiled.to_string();

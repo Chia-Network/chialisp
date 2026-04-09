@@ -8,6 +8,7 @@ use std::rc::Rc;
 use clvm_rs::allocator::Allocator;
 
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
+use crate::classic::clvm_tools::ir::r#type::NEW_BIT_CONSTANTS;
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 
 use crate::compiler::clvm::{sha256tree, NewStyleIntConversion};
@@ -17,7 +18,7 @@ use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
 use crate::compiler::frontend::frontend;
 use crate::compiler::optimize::get_optimizer;
 use crate::compiler::prims;
-use crate::compiler::sexp::{parse_sexp, SExp};
+use crate::compiler::sexp::{parse_sexp_flags, SExp};
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::{BasicCompileContext, CompileContextWrapper};
 use crate::util::Number;
@@ -165,7 +166,12 @@ pub fn compile_file(
 ) -> Result<SExp, CompileErr> {
     let _int_conversion_bug = NewStyleIntConversion::new(opts.dialect().int_fix);
     let srcloc = Srcloc::start(&opts.filename());
-    let pre_forms = parse_sexp(srcloc.clone(), content.bytes())?;
+    let flags = if opts.dialect().extra_numeric_constants {
+        NEW_BIT_CONSTANTS
+    } else {
+        0
+    };
+    let pre_forms = parse_sexp_flags(srcloc.clone(), content.bytes(), flags)?;
     let mut context_wrapper = CompileContextWrapper::new(
         allocator,
         runner,
@@ -314,16 +320,18 @@ impl CompilerOpts for DefaultCompilerOpts {
     }
     fn compile_program(
         &self,
-        allocator: &mut Allocator,
-        runner: Rc<dyn TRunProgram>,
+        context: &mut BasicCompileContext,
         sexp: Rc<SExp>,
-        symbol_table: &mut HashMap<String, String>,
     ) -> Result<SExp, CompileErr> {
         let _int_conversion_bug = NewStyleIntConversion::new(self.dialect.int_fix);
         let me = Rc::new(self.clone());
-        let optimizer = get_optimizer(&sexp.loc(), me.clone())?;
-        let mut context_wrapper =
-            CompileContextWrapper::new(allocator, runner, symbol_table, optimizer);
+        let runner = context.runner.clone();
+        let mut context_wrapper = CompileContextWrapper::new(
+            &mut context.allocator,
+            runner,
+            &mut context.symbols,
+            get_optimizer(&sexp.loc(), me.clone())?,
+        );
         compile_pre_forms(&mut context_wrapper.context, me, &[sexp])
     }
 }

@@ -5,14 +5,13 @@ use std::env;
 use std::mem::swap;
 use std::rc::Rc;
 
-use clvm_rs::allocator::Allocator;
-
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 use crate::compiler::comptypes::{BodyForm, CompileErr, CompilerOpts};
 use crate::compiler::evaluate::{first_of_alist, second_of_alist, Evaluator, EVAL_STACK_LIMIT};
 use crate::compiler::frontend::frontend;
 use crate::compiler::sexp::{parse_sexp, SExp};
 use crate::compiler::srcloc::Srcloc;
+use crate::compiler::BasicCompileContext;
 use crate::util::ErrInto;
 
 /// An object implementing a full repl for the language of chialisp toplevel forms
@@ -149,7 +148,7 @@ impl Repl {
     /// as an expression.
     pub fn process_line(
         &mut self,
-        allocator: &mut Allocator,
+        context: &mut BasicCompileContext,
         line: String,
     ) -> Result<Option<Rc<BodyForm>>, CompileErr> {
         self.depth += count_depth(&line);
@@ -200,7 +199,7 @@ impl Repl {
                     frontend(self.opts.clone(), &parsed_program)
                         .and_then(|program| {
                             self.evaluator.shrink_bodyform(
-                                allocator,
+                                context,
                                 program.args.clone(),
                                 &HashMap::new(),
                                 program.exp,

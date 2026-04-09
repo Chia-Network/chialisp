@@ -16,7 +16,8 @@ use std::rc::Rc;
 use clvmr::allocator::Allocator;
 
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero, Stream};
-use crate::classic::clvm_tools::binutils::disassemble;
+use crate::classic::clvm::serialize::sexp_to_stream;
+use crate::classic::clvm_tools::binutils::{assemble, disassemble};
 use crate::classic::clvm_tools::cmds::launch_tool;
 use crate::classic::clvm_tools::node_path::NodePath;
 
@@ -2629,7 +2630,7 @@ fn test_reproduce_variable_repr_bug_deinline() {
 
     let compile = |p: &str| do_basic_run(&vec!["run".to_string(), p.to_string()]);
 
-    let mut output = compile(&source_program);
+    let output = compile(&source_program);
     // Produce the same program 30 times.  Demonstrates that this program didn't
     // produce a stable output (otherwise we wouldn't know the bug was fixed).
     let mut different = false;
@@ -2642,9 +2643,115 @@ fn test_reproduce_variable_repr_bug_deinline() {
     // Bump sigil
     let new_program = &source_program.replace("cl-24", "cl-25");
 
-    let mut output = compile(&new_program);
+    let output = compile(&new_program);
     // Produce the same program 30 times.  The output should not be unstable.
     for _ in 0..30 {
         assert_eq!(output, compile(&new_program));
     }
+}
+
+#[test]
+fn test_ensure_dereferenceable_1() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (A B) (include *standard-cl-24*) (@ B 1))".to_string(),
+    ]);
+    assert_eq!(program.trim(), "3");
+}
+
+#[test]
+fn test_ensure_dereferenceable_2() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (A B) (include *standard-cl-24*) (defun F (A B) (if (@ B 1) (+ A B) 99)) (F &rest (@ 3)))".to_string(),
+    ]);
+    assert_eq!(
+        program.trim(),
+        "(2 (1 2 2 (4 2 3)) (4 (1 2 (3 7 (1 16 5 11) (1 1 . 99)) 1) 1))"
+    );
+}
+
+#[test]
+fn test_ensure_dereferenceable_3() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (A B) (include *standard-cl-24*) (defun-inline F (A B) (if (@ B 1) (+ A B) 99)) (F &rest (@ 3)))".to_string(),
+    ]);
+    assert_eq!(
+        program.trim(),
+        "(2 (3 5 (1 16 (2 (1 . 2) 3) (2 (1 . 4) 3)) (1 1 . 99)) 1)"
+    );
+}
+
+#[test]
+fn test_ensure_dereferenceable_4() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (A B) (include *standard-cl-24*) (defun F (A B) (assign X (if (@ B 1) (+ A B) (* A 3)) (* X 2))) (F A B))".to_string(),
+    ]);
+    assert_eq!(program.trim(), "(2 (1 2 2 (4 2 (4 5 (4 11 ())))) (4 (1 18 (2 (3 7 (1 16 5 11) (1 18 5 (1 . 3))) 1) (1 . 2)) 1))");
+}
+
+#[test]
+fn test_ensure_dereferenceable_5() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (A B) (include *standard-cl-24*) (defun-inline F (A B) (assign X (if (@ B 1) (+ A B) (* A 3)) (* X 2))) (F A B))".to_string(),
+    ]);
+    assert_eq!(
+        program.trim(),
+        "(18 (2 (3 3 (1 16 2 5) (1 18 2 (1 . 3))) 1) (1 . 2))"
+    );
+}
+
+#[test]
+fn test_ensure_dereferenceable_6() {
+    let program = do_basic_run(&vec![
+        "run".to_string(),
+        "(mod (A B) (include *standard-cl-24*) (defun-inline F (A B) (assign X (if (@ B 1) (+ A B) (* A 3)) (* X 2))) (F A (+ A 13)))".to_string(),
+    ]);
+    assert!(program.trim().contains("resembles an environment parent"));
+}
+
+// A program constructed with a fairly large environment led to an overflow in the oldest part of
+// codegen, where an i64 had been used for env path finding.  It is easy to fix, and this ensures
+// both that the program does what's desired and that the old form of the output is preserved.
+#[test]
+fn test_big_env_program_overflow_and_fix() {
+    let big_env_overflow_program =
+        fs::read_to_string("./resources/tests/test-env-overflow.clsp").unwrap();
+    let compile_and_run = |program| {
+        let clvm_output = do_basic_run(&vec!["run".to_string(), program]);
+        let result = do_basic_brun(&vec!["brun".to_string(), clvm_output.clone()]);
+        (clvm_output, result)
+    };
+    let big_env_as_cl24 = big_env_overflow_program
+        .replace("standard-cl-26", "standard-cl-24")
+        .to_string();
+    let (compiled_24, result_24) = compile_and_run(big_env_as_cl24);
+    let (_compiled_26, result_26) = compile_and_run(big_env_overflow_program);
+
+    // Correct output:
+    // (list X1=1 B59=(list R37=(f (f (r (f (r (T = a tree of 0..63))))))=(c 40 41) A6=X3=3 B20=...(list A13=...X3=3 A14=...X3=3))
+    assert_eq!(result_26.trim(), "(q ((40 . 41) 3 (i 3)))");
+
+    // Wrong output:
+    // Note that the program selects with a too-short path, selecting too much for R37.
+    assert_eq!(
+        result_24.trim(),
+        "(q (((all . 35) (softfork . 37) (38 . 39) (40 . 41)) 3 (i 3)))"
+    );
+
+    // Check that we got the old representation from cl24 based on a captured compile.
+    let mut allocator = Allocator::new();
+    let generated_program = assemble(&mut allocator, &compiled_24).unwrap();
+    let mut stream_out = Stream::new(None);
+    sexp_to_stream(&mut allocator, generated_program, &mut stream_out);
+    let generated_program_hex = hex::encode(&stream_out.get_value().data());
+    let program_from_earlier_chialisp_hex =
+        fs::read_to_string("./resources/tests/test-env-overflow-cl24.hex").unwrap();
+    assert_eq!(
+        generated_program_hex.trim(),
+        program_from_earlier_chialisp_hex.trim()
+    );
 }

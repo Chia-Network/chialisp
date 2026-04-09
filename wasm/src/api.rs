@@ -20,7 +20,8 @@ use crate::objects::Program;
 use chialisp::classic::clvm::__type_compatibility__::{Bytes, Stream, UnvalidatedBytesFromType};
 use chialisp::classic::clvm::serialize::sexp_to_stream;
 use chialisp::classic::clvm_tools::clvmc::compile_clvm_inner;
-use chialisp::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
+use chialisp::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
+use chialisp::compiler::CompileContextWrapper;
 use chialisp::compiler::cldb::{
     hex_to_modern_sexp, CldbOverrideBespokeCode, CldbRun, CldbRunEnv, CldbRunnable,
     CldbSingleBespokeOverride,
@@ -30,6 +31,7 @@ use chialisp::compiler::compiler::{
     extract_program_and_env, path_to_function, rewrite_in_program, DefaultCompilerOpts,
 };
 use chialisp::compiler::comptypes::{CompileErr, CompilerOpts};
+use chialisp::compiler::optimize::get_optimizer;
 use chialisp::compiler::prims;
 use chialisp::compiler::repl::Repl;
 use chialisp::compiler::runtypes::RunFailure;
@@ -52,6 +54,8 @@ struct JsRunStep {
 
 struct JsRepl {
     allocator: RefCell<Allocator>,
+    runner: Rc<dyn TRunProgram>,
+    opts: Rc<dyn CompilerOpts>,
     repl: RefCell<Repl>,
 }
 
@@ -408,7 +412,7 @@ pub fn create_repl() -> i32 {
     let allocator = Allocator::new();
     let opts = Rc::new(DefaultCompilerOpts::new("*repl*"));
     let runner = Rc::new(DefaultProgramRunner::new());
-    let repl = Repl::new(opts, runner.clone());
+    let repl = Repl::new(opts.clone(), runner.clone());
     let new_id = get_next_id();
     let mut prim_map = HashMap::new();
 
@@ -424,6 +428,8 @@ pub fn create_repl() -> i32 {
                 new_id,
                 JsRepl {
                     allocator: RefCell::new(allocator),
+                    runner: runner.clone(),
+                    opts: opts.clone(),
                     repl: RefCell::new(repl),
                 },
             );
@@ -451,15 +457,23 @@ pub fn repl_run_string(repl_id: i32, input: String) -> JsValue {
     REPLS
         .with(|repls| {
             let repls = repls.borrow();
+            let loc = Srcloc::start("*repl*");
             if let Some(repl_container) = repls.get(&repl_id) {
                 let mut a_borrowed = repl_container.allocator.borrow_mut();
                 let a = a_borrowed.deref_mut();
                 let mut r_borrowed = repl_container.repl.borrow_mut();
                 let r = r_borrowed.deref_mut();
-                r.process_line(a, input)
+                let mut symbols = HashMap::new();
+                let mut wrapper = CompileContextWrapper::new(
+                    a,
+                    repl_container.runner.clone(),
+                    &mut symbols,
+                    get_optimizer(&loc, repl_container.opts.clone())?
+                );
+                r.process_line(&mut wrapper.context, input)
             } else {
                 Err(CompileErr(
-                    Srcloc::start("*repl*"),
+                    loc,
                     "no such repl".to_string(),
                 ))
             }

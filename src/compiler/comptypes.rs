@@ -4,15 +4,13 @@ use std::rc::Rc;
 
 use serde::Serialize;
 
-use clvm_rs::allocator::Allocator;
-
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
-use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 
 use crate::compiler::clvm::{sha256tree, truthy};
 use crate::compiler::dialect::AcceptedDialect;
 use crate::compiler::sexp::{decode_string, enlist, SExp};
 use crate::compiler::srcloc::Srcloc;
+use crate::compiler::BasicCompileContext;
 
 // Note: only used in tests, not normally dependencies.
 #[cfg(test)]
@@ -462,10 +460,8 @@ pub trait CompilerOpts {
     /// settings given here.  The result is bare generated code.
     fn compile_program(
         &self,
-        allocator: &mut Allocator,
-        runner: Rc<dyn TRunProgram>,
+        context: &mut BasicCompileContext,
         sexp: Rc<SExp>,
-        symbol_table: &mut HashMap<String, String>,
     ) -> Result<SExp, CompileErr>;
 }
 
@@ -573,13 +569,10 @@ pub trait HasCompilerOptsDelegation {
     }
     fn override_compile_program(
         &self,
-        allocator: &mut Allocator,
-        runner: Rc<dyn TRunProgram>,
+        context: &mut BasicCompileContext,
         sexp: Rc<SExp>,
-        symbol_table: &mut HashMap<String, String>,
     ) -> Result<SExp, CompileErr> {
-        self.compiler_opts()
-            .compile_program(allocator, runner, sexp, symbol_table)
+        self.compiler_opts().compile_program(context, sexp)
     }
 }
 
@@ -670,12 +663,10 @@ impl<T: HasCompilerOptsDelegation> CompilerOpts for T {
     }
     fn compile_program(
         &self,
-        allocator: &mut Allocator,
-        runner: Rc<dyn TRunProgram>,
+        context: &mut BasicCompileContext,
         sexp: Rc<SExp>,
-        symbol_table: &mut HashMap<String, String>,
     ) -> Result<SExp, CompileErr> {
-        self.override_compile_program(allocator, runner, sexp, symbol_table)
+        self.override_compile_program(context, sexp)
     }
 }
 

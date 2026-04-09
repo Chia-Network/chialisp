@@ -1736,12 +1736,11 @@ impl Program {
         write_u32(&mut debug_aranges, 6, 0);
         debug_aranges[10] = 4;
         write_u32(&mut debug_aranges, 16, self.target_addr);
-        eprintln!("produced_code {produced_code} target_addr {}", self.target_addr);
-        write_u32(
-            &mut debug_aranges,
-            20,
-            (produced_code as u32),
+        eprintln!(
+            "produced_code {produced_code} target_addr {}",
+            self.target_addr
         );
+        write_u32(&mut debug_aranges, 20, (produced_code as u32));
         sections.push((".debug_aranges".to_string(), debug_aranges));
 
         for (name, bytes) in sections.iter() {

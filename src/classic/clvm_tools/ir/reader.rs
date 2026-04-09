@@ -6,11 +6,14 @@ use crate::classic::clvm::__type_compatibility__::{
 };
 use crate::classic::clvm::casts::bigint_to_bytes_clvm;
 use crate::classic::clvm::syntax_error::SyntaxErr;
-use crate::classic::clvm_tools::ir::r#type::IRRepr;
+use crate::classic::clvm_tools::ir::r#type::{IRRepr, NEW_BIT_CONSTANTS};
 use crate::util::Number;
+
+const BIT_CHAR_LIST: [u8; 16] = *b"0123456789abcdef";
 
 pub struct IRReader {
     stream: Stream,
+    language_flags: u32,
 }
 
 // XXX Allows us to track line and column later if desired.
@@ -29,11 +32,14 @@ impl IRReader {
     }
 
     pub fn read_expr(&mut self) -> Result<IRRepr, SyntaxErr> {
-        consume_object(self)
+        consume_object(self, self.language_flags)
     }
 
-    pub fn new(s: Stream) -> Self {
-        IRReader { stream: s }
+    pub fn new(s: Stream, flags: u32) -> Self {
+        IRReader {
+            stream: s,
+            language_flags: flags,
+        }
     }
 }
 
@@ -134,10 +140,87 @@ pub fn is_dec(chars: &[u8]) -> bool {
     true
 }
 
-pub fn interpret_atom_value(chars: &[u8]) -> Result<IRRepr, SyntaxErr> {
+fn new_bit_constants(language_flags: u32) -> bool {
+    (language_flags & NEW_BIT_CONSTANTS) != 0
+}
+
+pub fn bitwise_constant(bits: u32, chars: &[u8], force_byte: bool) -> Result<Vec<u8>, SyntaxErr> {
+    let radix = 1 << bits;
+    let mut current_bit: u32 = 0;
+    let mut bit_buffer: u16 = 0;
+    let mut out_data = Vec::new();
+    for ch in chars.iter().map(|c| c | 0x20).rev() {
+        if let Some(found) = BIT_CHAR_LIST
+            .iter()
+            .enumerate()
+            .take(radix)
+            .filter(|(_, the_char)| **the_char == ch)
+            .map(|(i, _)| i)
+            .next()
+        {
+            bit_buffer |= (found << current_bit) as u16;
+            current_bit += bits;
+            if current_bit > 8 {
+                current_bit -= 8;
+                out_data.push((bit_buffer & 0xff) as u8);
+                bit_buffer >>= 8;
+            }
+        } else {
+            return Err(SyntaxErr::new(format!(
+                "bitwise constant with {bits} bits, have char {}",
+                ch as char
+            )));
+        }
+    }
+
+    if (chars.len() > 1 || chars[0] != b'0' || force_byte)
+        && (current_bit >= bits || (current_bit > 0 && (bit_buffer & 0xff) != 0))
+    {
+        out_data.push((bit_buffer & 0xff) as u8);
+    }
+
+    Ok(out_data.iter().rev().copied().collect())
+}
+
+pub fn interpret_atom_value(chars: &[u8], language_flags: u32) -> Result<IRRepr, SyntaxErr> {
     // The Decimal and Hex representation of atoms in the program
+    let all_int_digits = || {
+        String::from_utf8(chars.to_vec())
+            .ok()
+            .and_then(|s| s.parse::<Number>().ok())
+            .map(|n| bigint_to_bytes_clvm(&n))
+    };
+
     if chars.is_empty() {
         Ok(IRRepr::Null)
+    } else if new_bit_constants(language_flags) && !chars.is_empty() && chars[0] == b'0' {
+        if chars.len() == 1 {
+            // A '0' decimal constant.
+            return Ok(IRRepr::Int(bigint_to_bytes_clvm(&Number::default()), true));
+        }
+
+        if chars.len() < 3 {
+            // Not allowed.
+            return Err(SyntaxErr::new(
+                "too short numeric constant starting with '0'".to_string(),
+            ));
+        }
+        match (chars[1], all_int_digits()) {
+            (b'b', _) | (b'B', _) => Ok(IRRepr::Binary(Bytes::new(Some(BytesFromType::Raw(
+                bitwise_constant(1, &chars[2..], false)?,
+            ))))),
+            (b'o', _) | (b'O', _) => Ok(IRRepr::Octal(Bytes::new(Some(BytesFromType::Raw(
+                bitwise_constant(3, &chars[2..], false)?,
+            ))))),
+            (b'x', _) | (b'X', _) => Ok(IRRepr::Hex(Bytes::new(Some(BytesFromType::Raw(
+                bitwise_constant(4, &chars[2..], true)?,
+            ))))),
+            (b'0', Some(decimal)) => Ok(IRRepr::Int(decimal, true)),
+            _ => Err(SyntaxErr::new(format!(
+                "malformed int or bit constant '{}'",
+                String::from_utf8_lossy(chars)
+            ))),
+        }
     } else if is_hex(chars) {
         let mut string_bytes = if !chars.len().is_multiple_of(2) {
             // Pad an odd-length hex constant from the program text
@@ -152,11 +235,7 @@ pub fn interpret_atom_value(chars: &[u8]) -> Result<IRRepr, SyntaxErr> {
 
         Bytes::new_validated(Some(UnvalidatedBytesFromType::Hex(string_bytes.decode())))
             .map(IRRepr::Hex)
-    } else if let Some(n) = String::from_utf8(chars.to_vec())
-        .ok()
-        .and_then(|s| s.parse::<Number>().ok())
-        .map(|n| bigint_to_bytes_clvm(&n))
-    {
+    } else if let Some(n) = all_int_digits() {
         Ok(IRRepr::Int(n, true))
     } else {
         let string_bytes = Bytes::new(Some(BytesFromType::Raw(chars.to_vec())));
@@ -164,7 +243,11 @@ pub fn interpret_atom_value(chars: &[u8]) -> Result<IRRepr, SyntaxErr> {
     }
 }
 
-pub fn consume_atom(s: &mut IRReader, b: &Bytes) -> Result<Option<IRRepr>, SyntaxErr> {
+pub fn consume_atom(
+    s: &mut IRReader,
+    b: &Bytes,
+    language_flags: u32,
+) -> Result<Option<IRRepr>, SyntaxErr> {
     let mut result_vec = b.data().to_vec();
     loop {
         let b = s.read(1);
@@ -172,13 +255,13 @@ pub fn consume_atom(s: &mut IRReader, b: &Bytes) -> Result<Option<IRRepr>, Synta
             if result_vec.is_empty() {
                 return Ok(None);
             } else {
-                return interpret_atom_value(&result_vec).map(Some);
+                return interpret_atom_value(&result_vec, language_flags).map(Some);
             }
         }
 
         if b.at(0) == b'(' || b.at(0) == b')' || is_space(b.at(0)) {
             s.backup(1);
-            return interpret_atom_value(&result_vec).map(Some);
+            return interpret_atom_value(&result_vec, language_flags).map(Some);
         }
 
         result_vec.push(b.at(0));
@@ -196,7 +279,7 @@ fn enlist_ir(vec: &mut [IRRepr], tail: IRRepr) -> IRRepr {
     result
 }
 
-pub fn consume_cons_body(s: &mut IRReader) -> Result<IRRepr, SyntaxErr> {
+pub fn consume_cons_body(s: &mut IRReader, language_flags: u32) -> Result<IRRepr, SyntaxErr> {
     let mut result = vec![];
 
     loop {
@@ -212,14 +295,14 @@ pub fn consume_cons_body(s: &mut IRReader) -> Result<IRRepr, SyntaxErr> {
         }
 
         if b.at(0) == b'(' {
-            let v = consume_cons_body(s)?;
+            let v = consume_cons_body(s, language_flags)?;
             result.push(v);
             continue;
         }
 
         if b.at(0) == b'.' {
             consume_whitespace(s);
-            let v = consume_object(s)?;
+            let v = consume_object(s, language_flags)?;
             consume_whitespace(s);
             let b = s.read(1);
             if b.length() == 0 || b.at(0) != b')' {
@@ -232,7 +315,7 @@ pub fn consume_cons_body(s: &mut IRReader) -> Result<IRRepr, SyntaxErr> {
             let v = consume_quoted(s, b.at(0))?;
             result.push(v);
             continue;
-        } else if let Some(f) = consume_atom(s, &b)? {
+        } else if let Some(f) = consume_atom(s, &b, language_flags)? {
             result.push(f);
             continue;
         } else {
@@ -241,26 +324,26 @@ pub fn consume_cons_body(s: &mut IRReader) -> Result<IRRepr, SyntaxErr> {
     }
 }
 
-pub fn consume_object(s: &mut IRReader) -> Result<IRRepr, SyntaxErr> {
+pub fn consume_object(s: &mut IRReader, language_flags: u32) -> Result<IRRepr, SyntaxErr> {
     consume_whitespace(s);
     let b = s.read(1);
 
     if b.length() == 0 {
         Ok(IRRepr::Null)
     } else if b.at(0) == b'(' {
-        consume_cons_body(s)
+        consume_cons_body(s, language_flags)
     } else if b.at(0) == b'\"' || b.at(0) == b'\'' {
         consume_quoted(s, b.at(0))
-    } else if let Some(ir) = consume_atom(s, &b)? {
+    } else if let Some(ir) = consume_atom(s, &b, language_flags)? {
         Ok(ir)
     } else {
         Err(SyntaxErr::new("empty stream".to_string()))
     }
 }
 
-pub fn read_ir(s: &str) -> Result<IRRepr, SyntaxErr> {
+pub fn read_ir(s: &str, language_flags: u32) -> Result<IRRepr, SyntaxErr> {
     let bytes_of_string = Bytes::new(Some(BytesFromType::Raw(s.as_bytes().to_vec())));
     let stream = Stream::new(Some(bytes_of_string));
-    let mut reader = IRReader::new(stream);
+    let mut reader = IRReader::new(stream, language_flags);
     reader.read_expr()
 }
