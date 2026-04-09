@@ -606,7 +606,7 @@ impl Emu {
 
             let return_addr = self.cpu.reg_get(Mode::User, reg::PC) + 4;
             self.cpu.reg_set(Mode::User, reg::LR, return_addr);
-            self.cpu.reg_set(Mode::User, reg::PC, new_code_address);
+            self.cpu.reg_set(Mode::User, reg::PC, new_code_address + 12);
             None
         } else if value == SWI_DISPATCH_INSTRUCTION {
             // Grab the sexp for this operation.
@@ -791,7 +791,8 @@ impl Emu {
             .set_dialect(AcceptedDialect {
                 stepping: Some(23),
                 strict: true,
-                int_fix: false,
+                int_fix: true,
+                extra_numeric_constants: false,
             })
             .set_optimize(true)
             .set_search_paths(&search_paths)
