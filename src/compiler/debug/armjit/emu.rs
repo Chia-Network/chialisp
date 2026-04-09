@@ -612,9 +612,8 @@ impl Emu {
             eprintln!("run operator {operator} args {args}");
             self.do_apply_op(runner, &srcloc, operator, args)
         } else if value == SWI_PRINT_EXPR {
-            let r5_value = self.cpu.reg_get(Mode::User, 5) + 8;
-            let to_print = self.mem.r32(r5_value);
-            eprintln!("PRINT: {}", self.get_sexp(&srcloc, to_print));
+            let r0_value = self.cpu.reg_get(Mode::User, 0);
+            eprintln!("PRINT: {}", self.get_sexp(&srcloc, r0_value));
             self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
             None
         } else {
