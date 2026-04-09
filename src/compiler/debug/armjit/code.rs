@@ -918,11 +918,9 @@ impl DwarfBuilder {
             );
             subprogram_id
         };
-        /*
         let srcloc = Srcloc::start("*args*");
         if let Ok(parsed) = parse_sexp(srcloc.clone(), args.bytes()) {
             if !parsed.is_empty() {
-                /*
                 self.add_arguments(
                     subprogram_id,
                     1,
@@ -933,10 +931,8 @@ impl DwarfBuilder {
                         parsed[0].clone(),
                     )),
                 );
-                */
             }
         }
-        */
 
         Some(name)
     }
