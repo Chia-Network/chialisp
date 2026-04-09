@@ -130,6 +130,7 @@ pub fn compile_to_arm_elf(args: &Args) -> Result<(Vec<u8>, HashMap<String, Strin
 
     let program = Program::new(
         &args.filename,
+        &args.output,
         compiled,
         env[0].clone(),
         TARGET_ADDR,

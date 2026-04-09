@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::Formatter;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::mem::swap;
 use std::path::PathBuf;
@@ -594,6 +594,9 @@ struct DwarfBuilder {
     unit_id: UnitId,
     file_to_id: HashMap<Vec<u8>, (DirectoryId, FileId)>,
     directory_to_id: HashMap<Vec<u8>, DirectoryId>,
+    synthetic_source_path: String,
+    synthetic_file_id: Option<FileId>,
+    synthetic_source_lines: Vec<String>,
     pointer_type: UnitEntryId,
 
     seq_addr_start: usize,
@@ -650,7 +653,12 @@ impl gimli::write::Writer for DwarfSectionWriter {
 }
 
 impl DwarfBuilder {
-    fn new(filename: &str, target_addr: u32, symbol_table: Rc<HashMap<String, String>>) -> Self {
+    fn new(
+        filename: &str,
+        elf_output: &str,
+        target_addr: u32,
+        symbol_table: Rc<HashMap<String, String>>,
+    ) -> Self {
         let mut path = PathBuf::new();
         path.push(filename);
         path.pop();
@@ -727,16 +735,23 @@ impl DwarfBuilder {
         type_ent.set(DW_AT_byte_size, AttributeValue::Udata(4));
         type_ent.set(DW_AT_type, AttributeValue::UnitRef(base_type_id));
 
-        let obj = DwarfBuilder {
+        let mut obj = DwarfBuilder {
             seq_addr_start: 0,
             target_addr,
             unit_id,
             file_to_id,
             directory_to_id,
+            synthetic_source_path: format!("{elf_output}.clsp"),
+            synthetic_file_id: None,
+            synthetic_source_lines: Vec::new(),
             pointer_type: type_id,
             symbol_table,
             dwarf,
         };
+
+        let synthetic_source_path = obj.synthetic_source_path.clone();
+        let (_, synthetic_file_id) = obj.add_file(&synthetic_source_path);
+        obj.synthetic_file_id = Some(synthetic_file_id);
 
         obj
     }
@@ -787,14 +802,39 @@ impl DwarfBuilder {
         self.add_file_having_dirid(dirid, &filename)
     }
 
+    fn add_synthetic_line(&mut self, source_sexp: &SExp) -> u64 {
+        self.synthetic_source_lines.push(source_sexp.to_string());
+        self.synthetic_source_lines.len() as u64
+    }
+
+    fn write_synthetic_source_file(&self) -> Result<(), String> {
+        let mut synthetic_source = self.synthetic_source_lines.join("\n");
+        if !synthetic_source.is_empty() {
+            synthetic_source.push('\n');
+        }
+        fs::write(&self.synthetic_source_path, synthetic_source)
+            .map_err(|e| format!("write synthetic source {}: {e:?}", self.synthetic_source_path))
+    }
+
     fn add_instr(
         &mut self,
         addr: usize,
         loc: &Srcloc,
+        source_sexp: &SExp,
         _instr: Instr,
         begin_end_block: Option<BeginEndBlock>,
     ) {
-        let (_, file_id) = self.add_file(&loc.file);
+        let (file_id, line, col) = if loc.file.starts_with('*') {
+            let synthetic_file_id = self.synthetic_file_id.expect("synthetic source file registered");
+            (
+                synthetic_file_id,
+                self.add_synthetic_line(source_sexp),
+                1_u64,
+            )
+        } else {
+            let (_, file_id) = self.add_file(loc.file.as_str());
+            (file_id, loc.line as u64, loc.col as u64)
+        };
         let unit = self.dwarf.units.get_mut(self.unit_id);
         if !unit.line_program.in_sequence() {
             return;
@@ -802,8 +842,8 @@ impl DwarfBuilder {
         let row = unit.line_program.row();
         row.address_offset = (addr - self.seq_addr_start) as u64;
         row.file = file_id;
-        row.line = loc.line as u64;
-        row.column = loc.col as u64;
+        row.line = line;
+        row.column = col;
         row.is_statement = addr == self.seq_addr_start;
         eprintln!("line row {} at {:?}", row.address_offset, loc);
         row.basic_block = begin_end_block == Some(BeginEndBlock::BeginBlock);
@@ -1079,10 +1119,10 @@ impl Program {
         return format!("_{}_{n}", hexify(hash));
     }
 
-    fn do_throw(&mut self, loc: &Srcloc, hash: &[u8]) {
-        self.load_atom(loc, hash, hash);
-        self.push(loc, Instr::Swi(SWI_PRINT_EXPR));
-        self.push(loc, Instr::Swi(SWI_THROW));
+    fn do_throw(&mut self, source_sexp: Rc<SExp>, loc: &Srcloc, hash: &[u8]) {
+        self.load_atom(source_sexp.clone(), loc, hash, hash);
+        self.push(source_sexp.clone(), loc, Instr::Swi(SWI_PRINT_EXPR));
+        self.push(source_sexp, loc, Instr::Swi(SWI_THROW));
     }
 
     fn add_sexp(&mut self, loc: &Srcloc, hash: &[u8], s: Rc<SExp>) -> String {
@@ -1113,14 +1153,21 @@ impl Program {
         }
     }
 
-    fn load_sexp(&mut self, loc: &Srcloc, hash: &[u8], s: Rc<SExp>) {
+    fn load_sexp(&mut self, source_sexp: Rc<SExp>, loc: &Srcloc, hash: &[u8], s: Rc<SExp>) {
         let label = self.add_sexp(loc, hash, s);
-        self.push(loc, Instr::Lea(Register::R(0), label));
+        self.push(source_sexp, loc, Instr::Lea(Register::R(0), label));
     }
 
-    fn first_rest(&mut self, loc: &Srcloc, hash: &[u8], lst: &[SExp], offset: i32) {
+    fn first_rest(
+        &mut self,
+        source_sexp: Rc<SExp>,
+        loc: &Srcloc,
+        hash: &[u8],
+        lst: &[SExp],
+        offset: i32,
+    ) {
         if lst.len() != 1 {
-            return self.do_throw(loc, hash);
+            return self.do_throw(source_sexp, loc, hash);
         }
 
         let subexp = self.add(Rc::new(lst[0].clone()));
@@ -1134,7 +1181,7 @@ impl Program {
             Instr::SwiGe(SWI_THROW),
             Instr::Ldr(Register::R(0), Register::R(0), offset),
         ] {
-            self.push(loc, i.clone());
+            self.push(source_sexp.clone(), loc, i.clone());
         }
     }
 
@@ -1145,13 +1192,14 @@ impl Program {
         a: &[u8],
         b: Rc<SExp>,
         treat_as_quoted: bool,
+        source_sexp: Rc<SExp>,
     ) {
         if treat_as_quoted {
             todo!();
         }
 
         if a == b"" {
-            return self.do_throw(loc, hash);
+            return self.do_throw(source_sexp, loc, hash);
         }
 
         // Quote is special.
@@ -1159,20 +1207,20 @@ impl Program {
             eprintln!("do_operator, quoted {b}");
             self.add(b.clone());
             let b_hash = sha256tree(b.clone());
-            return self.load_sexp(loc, &b_hash, b);
+            return self.load_sexp(source_sexp, loc, &b_hash, b);
         }
 
         // Every other operator must have a proper list following it.
         let lst = if let Some(lst) = b.proper_list() {
             lst
         } else {
-            return self.do_throw(loc, hash);
+            return self.do_throw(source_sexp, loc, hash);
         };
 
         if a == &[2] {
             // Apply operator
             if lst.len() != 2 {
-                return self.do_throw(loc, hash);
+                return self.do_throw(source_sexp, loc, hash);
             }
 
             let env_comp = self.add(Rc::new(lst[1].clone()));
@@ -1184,7 +1232,7 @@ impl Program {
                 Instr::Str(Register::R(0), Register::R(5), ENV_PTR),
                 Instr::Addi(Register::R(0), Register::R(5), 0),
             ] {
-                self.push(loc, i.clone());
+                self.push(source_sexp.clone(), loc, i.clone());
             }
 
             if let Some(quoted_code) = dequote(Rc::new(lst[0].clone())) {
@@ -1192,7 +1240,7 @@ impl Program {
                 let code_comp = self.add(quoted_code.clone());
 
                 for i in &[Instr::Bl(code_comp)] {
-                    self.push(loc, i.clone());
+                    self.push(source_sexp.clone(), loc, i.clone());
                 }
             } else {
                 let code_comp = self.add(Rc::new(lst[0].clone()));
@@ -1206,7 +1254,7 @@ impl Program {
                     Instr::Addi(Register::PC, Register::R(2), 0),
                     Instr::Addi(Register::LR, Register::R(7), 0),
                 ] {
-                    self.push(loc, i.clone());
+                    self.push(source_sexp.clone(), loc, i.clone());
                 }
             }
 
@@ -1214,13 +1262,13 @@ impl Program {
                 // Reload the old env.
                 Instr::Str(Register::R(4), Register::R(5), ENV_PTR),
             ] {
-                self.push(loc, i.clone());
+                self.push(source_sexp.clone(), loc, i.clone());
             }
             return;
         } else if a == &[3] {
             // If operator
             if lst.len() != 3 {
-                return self.do_throw(loc, hash);
+                return self.do_throw(source_sexp, loc, hash);
             }
 
             let else_clause = self.add(Rc::new(lst[2].clone()));
@@ -1240,13 +1288,13 @@ impl Program {
                 Instr::Label(else_label),
                 Instr::B(else_clause),
             ] {
-                self.push(loc, i.clone());
+                self.push(source_sexp.clone(), loc, i.clone());
             }
             return;
         } else if a == &[4] {
             // Cons operator
             if lst.len() != 2 {
-                return self.do_throw(loc, hash);
+                return self.do_throw(source_sexp, loc, hash);
             }
 
             let rest_label = self.add(Rc::new(lst[1].clone()));
@@ -1269,13 +1317,13 @@ impl Program {
                 // Move the result to r0
                 Instr::Addi(Register::R(0), Register::R(1), 0),
             ] {
-                self.push(loc, i.clone());
+                self.push(source_sexp.clone(), loc, i.clone());
             }
             return;
         } else if a == &[5] {
-            return self.first_rest(loc, hash, &lst, 0);
+            return self.first_rest(source_sexp, loc, hash, &lst, 0);
         } else if a == &[6] {
-            return self.first_rest(loc, hash, &lst, 4);
+            return self.first_rest(source_sexp, loc, hash, &lst, 4);
         } else {
             // Ensure we have this sexp loadable as data.
             let operator_sexp = Rc::new(SExp::Atom(loc.clone(), a.to_vec()));
@@ -1288,7 +1336,7 @@ impl Program {
                 Instr::Andi(Register::R(4), Register::R(4), 0),
                 Instr::Addi(Register::R(4), Register::R(4), 1),
             ] {
-                self.push(loc, i.clone());
+                self.push(source_sexp.clone(), loc, i.clone());
             }
 
             // For each subexpression, call it and replace R4 with (cons R0 R4)
@@ -1316,7 +1364,7 @@ impl Program {
                     // Replace R4 with R6 (the new cons)
                     Instr::Addi(Register::R(4), Register::R(6), 0),
                 ] {
-                    self.push(loc, i.clone());
+                    self.push(source_sexp.clone(), loc, i.clone());
                 }
             }
 
@@ -1328,20 +1376,20 @@ impl Program {
                 // Call to do the operator.
                 Instr::Swi(SWI_DISPATCH_INSTRUCTION),
             ] {
-                self.push(loc, i.clone());
+                self.push(source_sexp.clone(), loc, i.clone());
             }
         }
     }
 
     // R0 = the address of the env block.
-    fn env_select(&mut self, loc: &Srcloc, hash: &[u8], v: &[u8]) {
+    fn env_select(&mut self, source_sexp: Rc<SExp>, loc: &Srcloc, hash: &[u8], v: &[u8]) {
         if v.is_empty() {
-            self.load_atom(loc, hash, v);
+            self.load_atom(source_sexp, loc, hash, v);
             return;
         }
 
         // Let r0 be our pointer.
-        self.push(loc, Instr::Ldr(Register::R(0), Register::R(5), ENV_PTR));
+        self.push(source_sexp.clone(), loc, Instr::Ldr(Register::R(0), Register::R(5), ENV_PTR));
 
         // Whole env ref.
         if v == &[1] {
@@ -1367,7 +1415,7 @@ impl Program {
                         // Load if it was a cons.
                         Instr::Ldr(Register::R(0), Register::R(0), offset),
                     ] {
-                        self.push(loc, i.clone());
+                        self.push(source_sexp.clone(), loc, i.clone());
                     }
                 }
             }
@@ -1385,9 +1433,9 @@ impl Program {
         label
     }
 
-    fn load_atom(&mut self, loc: &Srcloc, hash: &[u8], v: &[u8]) {
+    fn load_atom(&mut self, source_sexp: Rc<SExp>, loc: &Srcloc, hash: &[u8], v: &[u8]) {
         let label = self.add_atom(hash, v);
-        self.push(loc, Instr::Lea(Register::R(0), label));
+        self.push(source_sexp, loc, Instr::Lea(Register::R(0), label));
     }
 
     fn add(&mut self, sexp: Rc<SExp>) -> String {
@@ -1401,7 +1449,13 @@ impl Program {
         body_label
     }
 
-    fn push_be(&mut self, srcloc: &Srcloc, instr: Instr, begin_end_block: Option<BeginEndBlock>) {
+    fn push_be(
+        &mut self,
+        source_sexp: Rc<SExp>,
+        srcloc: &Srcloc,
+        instr: Instr,
+        begin_end_block: Option<BeginEndBlock>,
+    ) {
         let size = instr.size(self.current_addr);
 
         let insert_instr = if let Instr::Globl(g) = &instr {
@@ -1446,14 +1500,19 @@ impl Program {
 
         if size != 0 {
             let next_addr = self.current_addr + size;
-            self.dwarf_builder
-                .add_instr(self.current_addr, srcloc, insert_instr, begin_end_block);
+            self.dwarf_builder.add_instr(
+                self.current_addr,
+                srcloc,
+                source_sexp.as_ref(),
+                insert_instr,
+                begin_end_block,
+            );
             self.current_addr = next_addr;
         }
     }
 
-    fn push(&mut self, srcloc: &Srcloc, instr: Instr) {
-        self.push_be(srcloc, instr, None);
+    fn push(&mut self, source_sexp: Rc<SExp>, srcloc: &Srcloc, instr: Instr) {
+        self.push_be(source_sexp, srcloc, instr, None);
     }
 
     fn emit_waiting(&mut self) {
@@ -1464,9 +1523,10 @@ impl Program {
             self.labels_by_hash.insert(hash.clone(), label.clone());
             self.dwarf_builder.start(self.current_addr);
 
-            self.push(&sexp.loc(), Instr::Globl(label.clone()));
-            self.push(&sexp.loc(), Instr::Label(label.clone()));
+            self.push(sexp.clone(), &sexp.loc(), Instr::Globl(label.clone()));
+            self.push(sexp.clone(), &sexp.loc(), Instr::Label(label.clone()));
             self.push_be(
+                sexp.clone(),
                 &sexp.loc(),
                 Instr::Push(vec![Register::FP, Register::LR]),
                 Some(BeginEndBlock::BeginBlock),
@@ -1481,7 +1541,7 @@ impl Program {
                 Instr::Str(Register::R(6), Register::SP, 8),
                 Instr::Str(Register::R(7), Register::SP, 12),
             ] {
-                self.push(&sexp.loc(), i.clone());
+                self.push(sexp.clone(), &sexp.loc(), i.clone());
             }
 
             // Translate body.
@@ -1489,35 +1549,35 @@ impl Program {
                 SExp::Cons(l, a, b) => {
                     if let Some((loc, a)) = is_atom(a.clone()) {
                         // do quoted operator
-                        self.do_operator(&loc, &hash, &a, b.clone(), false);
+                        self.do_operator(&loc, &hash, &a, b.clone(), false, sexp.clone());
                     } else if let Some((loc, a)) = is_wrapped_atom(a.clone()) {
                         // do unquoted operator
-                        self.do_operator(&loc, &hash, &a, b.clone(), true);
+                        self.do_operator(&loc, &hash, &a, b.clone(), true, sexp.clone());
                     } else {
                         // invalid head form, just throw.
-                        self.do_throw(&l, &hash);
+                        self.do_throw(sexp.clone(), &l, &hash);
                     }
                 }
-                SExp::Nil(l) => self.load_atom(l, &hash, &[]),
+                SExp::Nil(l) => self.load_atom(sexp.clone(), l, &hash, &[]),
                 SExp::Atom(l, v) => {
                     if v.is_empty() {
-                        return self.load_atom(l, &hash, &[]);
+                        return self.load_atom(sexp.clone(), l, &hash, &[]);
                     }
-                    self.env_select(l, &hash, v);
+                    self.env_select(sexp.clone(), l, &hash, v);
                 }
                 SExp::QuotedString(l, _, v) => {
                     if v.is_empty() {
-                        return self.load_atom(l, &hash, &[]);
+                        return self.load_atom(sexp.clone(), l, &hash, &[]);
                     }
-                    self.env_select(l, &hash, v);
+                    self.env_select(sexp.clone(), l, &hash, v);
                 }
                 SExp::Integer(l, i) => {
                     let v = bigint_to_bytes_clvm(&i);
                     let v_ref = v.data();
                     if v_ref.is_empty() {
-                        return self.load_atom(l, &hash, &[]);
+                        return self.load_atom(sexp.clone(), l, &hash, &[]);
                     }
-                    self.env_select(l, &hash, v_ref);
+                    self.env_select(sexp.clone(), l, &hash, v_ref);
                 }
             }
 
@@ -1529,10 +1589,11 @@ impl Program {
                 Instr::Subi(Register::SP, Register::FP, 4),
                 Instr::Pop(vec![Register::FP, Register::LR]),
             ] {
-                self.push(&sexp.loc(), i.clone());
+                self.push(sexp.clone(), &sexp.loc(), i.clone());
             }
 
             self.push_be(
+                sexp.clone(),
                 &sexp.loc(),
                 Instr::Bx(Register::LR),
                 Some(BeginEndBlock::EndBlock),
@@ -1543,6 +1604,7 @@ impl Program {
 
     fn start_insns(&mut self) {
         let srcloc = Srcloc::start("*prolog*");
+        let source_sexp = Rc::new(SExp::Atom(srcloc.clone(), b"prolog".to_vec()));
         for i in &[
             Instr::Section(".text".to_string()),
             Instr::Align4,
@@ -1555,12 +1617,13 @@ impl Program {
             Instr::Swi(SWI_PRINT_EXPR),
             Instr::Swi(SWI_DONE),
         ] {
-            self.push(&srcloc, i.clone());
+            self.push(source_sexp.clone(), &srcloc, i.clone());
         }
     }
 
     fn finish_insns(&mut self) -> Result<(), String> {
         let srcloc = Srcloc::start("*epilog*");
+        let source_sexp = Rc::new(SExp::Atom(srcloc.clone(), b"epilog".to_vec()));
         let mut constants = HashMap::new();
         swap(&mut constants, &mut self.constants);
 
@@ -1577,7 +1640,7 @@ impl Program {
         ]
         .iter()
         {
-            self.push(&srcloc, i.clone());
+            self.push(source_sexp.clone(), &srcloc, i.clone());
         }
 
         for (_, c) in constants.iter() {
@@ -1591,7 +1654,7 @@ impl Program {
                         Instr::Addr(a_label.clone(), false),
                         Instr::Addr(b_label.clone(), false),
                     ] {
-                        self.push(&srcloc, i.clone());
+                        self.push(source_sexp.clone(), &srcloc, i.clone());
                     }
                 }
                 Constant::Atom(label, bytes) => {
@@ -1602,7 +1665,7 @@ impl Program {
                         Instr::Long(bytes.len() * 2 + 1),
                         Instr::Bytes(bytes.clone()),
                     ] {
-                        self.push(&srcloc, i.clone());
+                        self.push(source_sexp.clone(), &srcloc, i.clone());
                     }
                 }
             }
@@ -1617,6 +1680,7 @@ impl Program {
     }
 
     pub fn to_elf(&self, output: &str) -> Result<Vec<u8>, String> {
+        self.dwarf_builder.write_synthetic_source_file()?;
         let mut sections = Vec::new();
         let mut obj = ArtifactBuilder::new(triple!("arm-unknown-unknown-unknown-elf"))
             .name(output.to_owned())
@@ -1791,12 +1855,13 @@ impl Program {
 
     pub fn new(
         filename: &str,
+        elf_output: &str,
         sexp: Rc<SExp>,
         env: Rc<SExp>,
         target_addr: u32,
         symbol_table: Rc<HashMap<String, String>>,
     ) -> Result<Self, String> {
-        let dwarf_builder = DwarfBuilder::new(filename, target_addr, symbol_table.clone());
+        let dwarf_builder = DwarfBuilder::new(filename, elf_output, target_addr, symbol_table.clone());
         let mut p: Program = Program {
             finished_insns: Vec::new(),
             first_label: Default::default(),

@@ -803,17 +803,18 @@ impl Emu {
         let compiled = compile_file(&mut allocator, runner, opts, program, &mut symbol_table)
             .expect("should compile");
         build_symbol_table_mut(&mut symbol_table, &compiled);
+        let tmpfile = NamedTempFile::new().expect("should be able to make a temp file");
+        let tmpname = tmpfile.path().to_str().unwrap().to_string();
         let symbols = Rc::new(symbol_table);
         let generator = Program::new(
             filename,
+            &tmpname,
             Rc::new(compiled),
             env_parsed[0].clone(),
             TARGET_ADDR,
             symbols.clone(),
         )
         .expect("should be generatable");
-        let tmpfile = NamedTempFile::new().expect("should be able to make a temp file");
-        let tmpname = tmpfile.path().to_str().unwrap().to_string();
         let elf_data = generator.to_elf(&tmpname).expect("should generate");
         Emu::run_to_exit(&elf_data, TARGET_ADDR, symbols)
     }
