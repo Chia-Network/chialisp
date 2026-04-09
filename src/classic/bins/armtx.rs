@@ -1,157 +1,21 @@
-use std::borrow::Borrow;
-use std::collections::{HashMap, HashSet};
-use std::fmt;
-use std::fmt::Formatter;
 use std::fs;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
-use std::mem::swap;
-use std::path::PathBuf;
 use std::rc::Rc;
-use std::str::FromStr;
-use std::sync::mpsc;
-use std::sync::mpsc::{Receiver, Sender};
-use std::thread;
 
-use argh::FromArgs;
-use armv4t_emu::{reg, Cpu, Memory, Mode};
-use clvmr::Allocator;
-use elf_rs::{Elf, ElfFile, ProgramHeaderFlags, ProgramType, SectionHeaderFlags, SectionType};
-use faerie::{ArtifactBuilder, Decl, Link, SectionKind};
-use gimli::write::{
-    Address, DirectoryId, Dwarf, FileId, LineProgram, LineString, Section, Sections, Unit, UnitId,
-};
-use gimli::{Encoding, Format, LineEncoding, LittleEndian};
-use subprocess::{Popen, PopenConfig};
-use target_lexicon::triple;
-use tempfile::NamedTempFile;
+use chialisp::compiler::debug::armjit::cmd::{Args, compile_to_arm_elf, spin_up_emulation};
 
-use chialisp::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
-use chialisp::classic::clvm::casts::bigint_to_bytes_clvm;
-use chialisp::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
+fn run_arm_conversion() -> Result<(), String> {
+    let args: Args = argh::from_env();
 
-use chialisp::compiler::clvm::{sha256tree, truthy};
-use chialisp::compiler::compiler::{compile_file, DefaultCompilerOpts};
-use chialisp::compiler::comptypes::CompilerOpts;
-use chialisp::compiler::debug::armjit::code::{Program, TARGET_ADDR};
-use chialisp::compiler::debug::armjit::emu::Emu;
-use chialisp::compiler::debug::armjit::emu_stub::{run_stub, start_stub};
-use chialisp::compiler::debug::armjit::load::ElfLoader;
-use chialisp::compiler::debug::armjit::memory::PagedMemory;
-use chialisp::compiler::debug::build_symbol_table_mut;
-use chialisp::compiler::dialect::AcceptedDialect;
-use chialisp::compiler::sexp::{
-    decode_string, parse_sexp, Atom, NodeSel, SExp, SelectNode, ThisNode,
-};
-use chialisp::compiler::srcloc::Srcloc;
+    let (elf_out, symbol_table) = compile_to_arm_elf(&args)?;
 
-/// Translate a chialisp program to debug as an arm elf executable.
-#[derive(FromArgs)]
-struct Args {
-    /// include paths
-    #[argh(option, short = 'i')]
-    pub include: Vec<String>,
-
-    #[argh(option, short = 'o', description = "output file")]
-    pub output: String,
-
-    /// file name
-    #[argh(positional)]
-    pub filename: String,
-
-    /// initial env
-    #[argh(positional)]
-    pub env: String,
-}
-
-fn spin_up_emulation(
-    signal_emu_startup_complete: Sender<()>,
-    elf_bin: &[u8],
-    symbols: Rc<HashMap<String, String>>,
-) {
-    // Tiny start.
-    let mut emu = Emu::new(elf_bin, TARGET_ADDR, symbols).expect("should have elf");
-    let mut connection = start_stub().expect("should start service");
-    signal_emu_startup_complete.send(()).expect("should send");
-    run_stub(connection, &mut emu).expect("should run"); // Until exit.
+    // copy all in-memory sections from the ELF file into system RAM
+    fs::write(&args.output, &elf_out).map_err(|e| format!("could not write elf file: {e:?}"))?;
+    spin_up_emulation(&elf_out, Rc::new(symbol_table))
 }
 
 fn main() {
-    let args: Args = argh::from_env();
-
-    let mut search_paths = args.include.clone();
-
-    let argfile = if let Ok(res) = fs::read(&args.filename) {
-        res
-    } else {
-        panic!("error reading {}", args.filename);
-    };
-
-    let srcloc = Srcloc::start(&args.filename);
-    let mut allocator = Allocator::new();
-    let runner: Rc<dyn TRunProgram> = Rc::new(DefaultProgramRunner::new());
-    let mut symbol_table = HashMap::new();
-    let opts = Rc::new(DefaultCompilerOpts::new(&args.filename))
-        .set_dialect(AcceptedDialect {
-            stepping: Some(23),
-            strict: true,
-            int_fix: true,
-        })
-        .set_optimize(true)
-        .set_search_paths(&search_paths)
-        .set_frontend_opt(false);
-    let compiled = match compile_file(
-        &mut allocator,
-        runner,
-        opts,
-        &decode_string(&argfile),
-        &mut symbol_table,
-    ) {
-        Ok(res) => res,
-        Err(e) => panic!("{:?}", e),
-    };
-    build_symbol_table_mut(&mut symbol_table, &compiled);
-    eprintln!("symbols {symbol_table:?}");
-    let mut env = match parse_sexp(srcloc.clone(), args.env.bytes()) {
-        Ok(res) => res,
-        Err(e) => panic!("{:?}", e),
-    };
-
-    if env.is_empty() {
-        env.push(Rc::new(SExp::Nil(srcloc.clone())));
-    }
-    let symbols = Rc::new(symbol_table.clone());
-
-    let program = Program::new(
-        &args.filename,
-        Rc::new(compiled),
-        env[0].clone(),
-        TARGET_ADDR,
-        symbols.clone(),
-    )
-    .expect("should generate");
-
-    let elf_out_result = program.to_elf(&args.output);
-    if let Err(e) = &elf_out_result {
-        eprintln!("Error compiling: {e:?}");
+    if let Err(e) = run_arm_conversion() {
+        eprintln!("Error {e}");
         std::process::exit(1);
     }
-    let mut elf_out = program.to_elf(&args.output).expect("should be writable");
-    // copy all in-memory sections from the ELF file into system RAM
-
-    fs::write(&args.output, &elf_out).expect("should be able to write file");
-    let (signal_emu_startup_complete, emu_startup_complete) = mpsc::channel();
-
-    // Spin up our emulation.
-    let t = thread::spawn(move || {
-        let elf_out = elf_out;
-        spin_up_emulation(signal_emu_startup_complete, &elf_out, Rc::new(symbol_table))
-        // Thread boundary.
-    });
-
-    let _ = emu_startup_complete
-        .recv()
-        .expect("should be able to start emu");
-    // Startup done, so we can spawn gdb.
-    t.join().expect("thread should join successfully");
 }

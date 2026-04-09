@@ -622,7 +622,6 @@ impl Emu {
             let printed_expr = self.get_sexp(&srcloc, r0_value).to_string();
             self.pending_gdb_console_output
                 .push(format!("CLVM: {printed_expr}"));
-            eprintln!("PRINT: {printed_expr}");
             self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
             None
         } else {
