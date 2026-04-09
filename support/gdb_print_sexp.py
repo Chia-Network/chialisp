@@ -40,7 +40,7 @@ class SExp:
 
             if len(examine.atom) != 0:
                 res += ' . '
-                res += str(examine)
+                res += examine.to_string()
 
             res += ')'
 
