@@ -26,6 +26,50 @@ fn wait_for_tcp(port: u16) -> DynResult<TcpStream> {
 
 enum EmuGdbEventLoop {}
 
+fn hex_ascii(nibble: u8) -> u8 {
+    match nibble {
+        0..=9 => b'0' + nibble,
+        10..=15 => b'a' + (nibble - 10),
+        _ => b'0',
+    }
+}
+
+fn send_gdb_console_packet<C: Connection<Error = std::io::Error>>(
+    conn: &mut C,
+    message: &str,
+) -> Result<(), std::io::Error> {
+    let payload = message.as_bytes();
+    let mut checksum = b'O';
+    conn.write(b'$')?;
+    conn.write(b'O')?;
+    for byte in payload {
+        checksum = checksum.wrapping_add(*byte >> 4);
+        checksum = checksum.wrapping_add(*byte & 0x0f);
+        conn.write(hex_ascii(*byte >> 4))?;
+        conn.write(hex_ascii(*byte & 0x0f))?;
+    }
+    let newline = b'\n';
+    checksum = checksum.wrapping_add(newline >> 4);
+    checksum = checksum.wrapping_add(newline & 0x0f);
+    conn.write(hex_ascii(newline >> 4))?;
+    conn.write(hex_ascii(newline & 0x0f))?;
+    conn.write(b'#')?;
+    conn.write(hex_ascii(checksum >> 4))?;
+    conn.write(hex_ascii(checksum & 0x0f))?;
+    conn.flush()?;
+    Ok(())
+}
+
+fn flush_pending_gdb_console_output<C: Connection<Error = std::io::Error>>(
+    target: &mut Emu,
+    conn: &mut C,
+) -> Result<(), std::io::Error> {
+    for message in target.take_pending_gdb_console_output() {
+        send_gdb_console_packet(conn, &message)?;
+    }
+    Ok(())
+}
+
 fn print_run_event(event: &RunEvent) -> String {
     match event {
         RunEvent::IncomingData => "IncomingData".to_string(),
@@ -79,6 +123,8 @@ impl run_blocking::BlockingEventLoop for EmuGdbEventLoop {
         };
 
         let run_res = target.run(poll_incoming_data);
+        flush_pending_gdb_console_output(target, conn)
+            .map_err(run_blocking::WaitForStopReasonError::Connection)?;
         eprintln!("GDB {}", print_run_event(&run_res));
         match run_res {
             RunEvent::IncomingData => {

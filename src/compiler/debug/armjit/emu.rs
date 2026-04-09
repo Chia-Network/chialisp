@@ -83,6 +83,7 @@ pub struct Emu {
     pub jit_symbols: Rc<HashMap<String, EmuSymbolInfo>>,
 
     pub prim_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>,
+    pending_gdb_console_output: Vec<String>,
 }
 
 impl SingleThreadBase for Emu {
@@ -318,6 +319,7 @@ impl Emu {
             clvm_symbols,
 
             prim_map: DefaultCompilerOpts::new("*emu*").prim_map(),
+            pending_gdb_console_output: Vec::new(),
         })
     }
 
@@ -326,6 +328,10 @@ impl Emu {
         self.cpu.reg_set(Mode::User, reg::LR, HLE_RETURN_ADDR);
         self.cpu.reg_set(Mode::User, reg::PC, self.start_addr);
         self.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+    }
+
+    pub(crate) fn take_pending_gdb_console_output(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_gdb_console_output)
     }
 
     fn allocate_and_write(&mut self, alloc_ptr: u32, sexp: Rc<SExp>) -> u32 {
@@ -613,7 +619,10 @@ impl Emu {
             self.do_apply_op(runner, &srcloc, operator, args)
         } else if value == SWI_PRINT_EXPR {
             let r0_value = self.cpu.reg_get(Mode::User, 0);
-            eprintln!("PRINT: {}", self.get_sexp(&srcloc, r0_value));
+            let printed_expr = self.get_sexp(&srcloc, r0_value).to_string();
+            self.pending_gdb_console_output
+                .push(format!("PRINT: {printed_expr}"));
+            eprintln!("PRINT: {printed_expr}");
             self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
             None
         } else {
