@@ -812,8 +812,12 @@ impl DwarfBuilder {
         if !synthetic_source.is_empty() {
             synthetic_source.push('\n');
         }
-        fs::write(&self.synthetic_source_path, synthetic_source)
-            .map_err(|e| format!("write synthetic source {}: {e:?}", self.synthetic_source_path))
+        fs::write(&self.synthetic_source_path, synthetic_source).map_err(|e| {
+            format!(
+                "write synthetic source {}: {e:?}",
+                self.synthetic_source_path
+            )
+        })
     }
 
     fn add_instr(
@@ -825,7 +829,9 @@ impl DwarfBuilder {
         begin_end_block: Option<BeginEndBlock>,
     ) {
         let (file_id, line, col) = if loc.file.starts_with('*') {
-            let synthetic_file_id = self.synthetic_file_id.expect("synthetic source file registered");
+            let synthetic_file_id = self
+                .synthetic_file_id
+                .expect("synthetic source file registered");
             (
                 synthetic_file_id,
                 self.add_synthetic_line(source_sexp),
@@ -1389,7 +1395,11 @@ impl Program {
         }
 
         // Let r0 be our pointer.
-        self.push(source_sexp.clone(), loc, Instr::Ldr(Register::R(0), Register::R(5), ENV_PTR));
+        self.push(
+            source_sexp.clone(),
+            loc,
+            Instr::Ldr(Register::R(0), Register::R(5), ENV_PTR),
+        );
 
         // Whole env ref.
         if v == &[1] {
@@ -1861,7 +1871,8 @@ impl Program {
         target_addr: u32,
         symbol_table: Rc<HashMap<String, String>>,
     ) -> Result<Self, String> {
-        let dwarf_builder = DwarfBuilder::new(filename, elf_output, target_addr, symbol_table.clone());
+        let dwarf_builder =
+            DwarfBuilder::new(filename, elf_output, target_addr, symbol_table.clone());
         let mut p: Program = Program {
             finished_insns: Vec::new(),
             first_label: Default::default(),

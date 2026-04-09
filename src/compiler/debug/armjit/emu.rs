@@ -595,7 +595,8 @@ impl Emu {
             instruction_list.push(Instr::Pop(vec![Register::FP, Register::LR]));
             instruction_list.push(Instr::Bx(Register::LR));
 
-            instruction_list[0] = Instr::Long(new_code_address as usize + 4 * instruction_list.len());
+            instruction_list[0] =
+                Instr::Long(new_code_address as usize + 4 * instruction_list.len());
             for arg in address_list.iter() {
                 instruction_list.push(Instr::Long(*arg as usize));
             }
