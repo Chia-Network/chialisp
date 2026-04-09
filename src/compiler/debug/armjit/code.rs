@@ -1253,6 +1253,8 @@ impl Program {
 
                 for i in &[
                     Instr::Bl(code_comp),
+                    Instr::Addi(Register::R(1), Register::R(0), 0),
+                    Instr::Addi(Register::R(0), Register::R(5), 0),
                     Instr::Swi(SWI_DISPATCH_NEW_CODE),
                     Instr::Addi(Register::R(0), Register::R(5), 0),
                     Instr::Addi(Register::R(7), Register::LR, 0),

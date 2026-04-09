@@ -405,7 +405,7 @@ impl Emu {
         } else if value == SWI_THROW {
             Some(Event::Trap)
         } else if value == SWI_DISPATCH_NEW_CODE {
-            let r0_value = self.cpu.reg_get(Mode::User, 0);
+            let r0_value = self.cpu.reg_get(Mode::User, 1);
             let to_run = self.get_sexp(&srcloc, r0_value);
 
             let r5_value = self.cpu.reg_get(Mode::User, 5);
