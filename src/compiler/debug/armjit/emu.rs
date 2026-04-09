@@ -470,15 +470,16 @@ impl Emu {
             // pointer to next argument                       0
             // pointer to cons                                4
             // operator address                               8
-            // reverse order argument addresses               12
-            // code                                           12 + (4 * address_list.len())
+            // code                                           12
+            // reverse order argument addresses               after code
+
             let new_code_address = self.mem.r32(alloc_address);
 
             // Emit code for each argument in reverse order, accumulating into r0.
             let mut instruction_list = vec![];
             // Values on the stack:
-            // Pointer to first argument pointer.
-            instruction_list.push(Instr::Long((new_code_address + 12) as usize));
+            // Pointer to first argument pointer.  Will be fixed up.
+            instruction_list.push(Instr::Long(0));
             // Constructed value for operator evaluation.
             instruction_list.push(Instr::Long(1));
             // Operator sexp.
@@ -594,6 +595,7 @@ impl Emu {
             instruction_list.push(Instr::Pop(vec![Register::FP, Register::LR]));
             instruction_list.push(Instr::Bx(Register::LR));
 
+            instruction_list[0] = Instr::Long(new_code_address as usize + 4 * instruction_list.len());
             for arg in address_list.iter() {
                 instruction_list.push(Instr::Long(*arg as usize));
             }
@@ -650,6 +652,7 @@ impl Emu {
             eprintln!("cpsr {cpsr:x} match {match_expression:x}");
             let perform_action = match match_expression {
                 0 => ((cpsr >> 29) & 1) != 0,
+                10 => ((cpsr >> 31) & 1) == ((cpsr >> 28) & 1),
                 14 => true,
                 _ => todo!(),
             };

@@ -180,7 +180,7 @@ pub enum Instr {
     Bx(Register),
     Lea(Register, String),
     Swi(usize),
-    SwiEq(usize),
+    SwiGe(usize),
     Cmpi(Register, usize),
     Long(usize),
     Addr(String, bool),
@@ -218,6 +218,7 @@ trait Encodable {
 enum ArmCond {
     Unconditional,
     Equal,
+    GreaterOrEqual,
 }
 
 impl ToU32 for ArmCond {
@@ -225,6 +226,7 @@ impl ToU32 for ArmCond {
         match self {
             ArmCond::Unconditional => 14 << 28,
             ArmCond::Equal => 0,
+            ArmCond::GreaterOrEqual => 10 << 28,
         }
     }
 }
@@ -493,10 +495,10 @@ impl Encodable for Instr {
                     ArmCond::Unconditional.to_u32() | ArmOp::Swi.to_u32() | (*n as u32),
                 );
             }
-            Instr::SwiEq(n) => {
+            Instr::SwiGe(n) => {
                 vec_from_u32(
                     v,
-                    ArmCond::Equal.to_u32() | ArmOp::Swi.to_u32() | (*n as u32),
+                    ArmCond::GreaterOrEqual.to_u32() | ArmOp::Swi.to_u32() | (*n as u32),
                 );
             }
             Instr::Cmpi(r, n) => {
@@ -572,7 +574,7 @@ impl fmt::Display for Instr {
             Instr::Bx(r) => write!(f, "  bx {r}"),
             Instr::Lea(r, l) => write!(f, "  ldr {r}, ={l}"),
             Instr::Swi(n) => write!(f, "  swi {n}"),
-            Instr::SwiEq(n) => write!(f, "  swieq {n}"),
+            Instr::SwiGe(n) => write!(f, "  swile {n}"),
             Instr::Long(n) => write!(f, "  .long {n}"),
             Instr::Addr(lbl, _) => write!(f, "  .long {lbl}"),
             Instr::Bytes(v) => {
@@ -1079,6 +1081,7 @@ impl Program {
 
     fn do_throw(&mut self, loc: &Srcloc, hash: &[u8]) {
         self.load_atom(loc, hash, hash);
+        self.push(loc, Instr::Swi(SWI_PRINT_EXPR));
         self.push(loc, Instr::Swi(SWI_THROW));
     }
 
@@ -1128,7 +1131,7 @@ impl Program {
             Instr::Ldr(Register::R(4), Register::R(0), 0),
             Instr::Andi(Register::R(1), Register::R(4), 1),
             Instr::Cmpi(Register::R(1), 1),
-            Instr::SwiEq(SWI_THROW),
+            Instr::SwiGe(SWI_THROW),
             Instr::Ldr(Register::R(0), Register::R(0), offset),
         ] {
             self.push(loc, i.clone());
@@ -1347,7 +1350,7 @@ impl Program {
 
         for (i, byt) in v.iter().enumerate().rev() {
             for bit in 0..8 {
-                let remaining = byt / (1 << bit);
+                let remaining = byt >> bit;
                 if remaining == 1 && i == 0 {
                     // We have the right value.
                     return;
@@ -1360,7 +1363,7 @@ impl Program {
                         Instr::Andi(Register::R(1), Register::R(4), 1),
                         Instr::Cmpi(Register::R(1), 1),
                         // Break if it was an atom.
-                        Instr::SwiEq(SWI_THROW),
+                        Instr::SwiGe(SWI_THROW),
                         // Load if it was a cons.
                         Instr::Ldr(Register::R(0), Register::R(0), offset),
                     ] {
