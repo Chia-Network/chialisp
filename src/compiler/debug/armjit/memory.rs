@@ -16,6 +16,7 @@ pub trait TargetMemory {
     fn read_u8(&self, target_addr: u32) -> u8;
 }
 
+#[derive(Clone)]
 pub struct PagedMemory {
     zeroed: Vec<u32>,
     pages: HashMap<u32, Vec<u32>>,

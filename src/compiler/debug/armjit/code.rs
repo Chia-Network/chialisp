@@ -27,12 +27,13 @@ use gimli::{DW_ATE_unsigned, DwAte, Encoding, Format, LineEncoding};
 use target_lexicon::triple;
 use tempfile::NamedTempFile;
 
-use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
+use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, bi_one, bi_zero};
 use crate::classic::clvm::casts::bigint_to_bytes_clvm;
 use crate::compiler::clvm::{sha256tree, truthy};
 use crate::compiler::debug::armjit::load::{write_u32, ElfLoader};
 use crate::compiler::sexp::{decode_string, parse_sexp, Atom, NodeSel, SExp, SelectNode, ThisNode};
 use crate::compiler::srcloc::Srcloc;
+use crate::util::Number;
 
 pub const NEXT_ALLOC_OFFSET: i32 = 0;
 
@@ -598,6 +599,7 @@ struct DwarfBuilder {
     synthetic_file_id: Option<FileId>,
     synthetic_source_lines: Vec<String>,
     pointer_type: UnitEntryId,
+    u32_type: UnitEntryId,
 
     seq_addr_start: usize,
     target_addr: u32,
@@ -607,6 +609,12 @@ struct DwarfBuilder {
     dwarf: Dwarf,
     frame_table: FrameTable,
     cfi_cie_id: Option<CieId>,
+}
+
+struct VariableLocationInfo<'a> {
+    pub beginning: u64,
+    pub end: u64,
+    start_expr: &'a dyn Fn() -> Expression,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -728,7 +736,7 @@ impl DwarfBuilder {
         let mut mutable_unit = dwarf.units.get_mut(unit_id);
         let base_type_id = mutable_unit.add(mutable_unit.root(), DW_TAG_base_type);
         let mut base_ent = mutable_unit.get_mut(base_type_id);
-        base_ent.set(DW_AT_byte_size, AttributeValue::Udata(4));
+        base_ent.set(DW_AT_byte_size, AttributeValue::Data1(4));
         base_ent.set(DW_AT_encoding, AttributeValue::Encoding(DW_ATE_unsigned));
         base_ent.set(DW_AT_name, AttributeValue::String(b"word".to_vec()));
         let type_id = mutable_unit.add(mutable_unit.root(), DW_TAG_pointer_type);
@@ -747,6 +755,7 @@ impl DwarfBuilder {
             synthetic_file_id: None,
             synthetic_source_lines: Vec::new(),
             pointer_type: type_id,
+            u32_type: base_type_id,
             symbol_table,
             dwarf,
             frame_table: FrameTable::default(),
@@ -885,41 +894,63 @@ impl DwarfBuilder {
     fn match_function(&self, label: &str) -> Option<(String, String)> {
         let mut stripped: Vec<u8> = label.bytes().skip(1).take_while(|b| *b != b'_').collect();
         if let Some(name) = self.symbol_table.get(&decode_string(&stripped)).cloned() {
+            let mut left_stripped = stripped.clone();
+            left_stripped.append(&mut b"_left_env".to_vec());
+            let left_env = if let Some(res) = self.symbol_table.get(&decode_string(&left_stripped)).cloned() {
+                res == "1"
+            } else {
+                false
+            };
+            eprintln!("{name} left_env {left_env}");
             stripped.append(&mut b"_arguments".to_vec());
             let args = self
                 .symbol_table
                 .get(&decode_string(&stripped))
                 .cloned()
-                .unwrap_or_else(|| "ENV".to_string());
+                .unwrap_or_else(|| {
+                    if left_env {
+                        "(() . ENV)".to_string()
+                    } else {
+                        "ENV".to_string()
+                    }
+                });
             return Some((name, args));
         }
 
         None
     }
 
-    fn add_arguments(&mut self, subprogram_id: UnitEntryId, here: u64, path: u64, args: Rc<SExp>) {
+    fn add_arguments(&mut self, subprogram_id: UnitEntryId, locations: &[VariableLocationInfo], here: Number, path: Number, args: Rc<SExp>) {
         eprintln!("add_arguments {here} {path} {args}");
         if let SExp::Cons(_, a, b) = args.borrow() {
-            self.add_arguments(subprogram_id, here << 1, path, a.clone());
-            self.add_arguments(subprogram_id, here << 1, path | here, b.clone());
+            self.add_arguments(subprogram_id, locations, here.clone() << 1, path.clone(), a.clone());
+            self.add_arguments(subprogram_id, locations, here.clone() << 1, path | here, b.clone());
         } else if let SExp::Atom(_, a) = args.borrow() {
             let argname = decode_string(a);
             let unit = self.dwarf.units.get_mut(self.unit_id);
-            let mut expr = Expression::new();
 
-            // Deref the environment.
-            expr.op_reg(gimli::Register(7));
+            let mut loclist = Vec::new();
 
-            /*
-            let mut i = 1;
-            while i < here {
-                expr.op_deref();
-                if (path & i) != 0 {
-                    expr.op_plus_uconst(4);
+            for l in locations.iter() {
+                let mut expr = (l.start_expr)();
+
+                let mut i = bi_one();
+                while i < here {
+                    expr.op_deref();
+                    if (path.clone() & i.clone()) != bi_zero() {
+                        expr.op_plus_uconst(4);
+                    }
+                    i <<= 1;
                 }
-                i <<= 1;
+
+                loclist.push(Location::StartEnd {
+                    begin: Address::Constant(l.beginning),
+                    end: Address::Constant(l.end),
+                    data: expr,
+                });
             }
-            */
+
+            let loc_list_id = unit.locations.add(LocationList(loclist));
 
             let at_id = unit.add(subprogram_id, DW_TAG_formal_parameter);
             let at_ent = unit.get_mut(at_id);
@@ -928,7 +959,9 @@ impl DwarfBuilder {
                 AttributeValue::String(argname.as_bytes().to_vec()),
             );
             at_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
-            at_ent.set(DW_AT_location, AttributeValue::Exprloc(expr.clone()));
+            at_ent.set(DW_AT_location, AttributeValue::LocationListRef(loc_list_id));
+
+            /*
             let at_id2 = unit.add(subprogram_id, DW_TAG_variable);
             let at_ent = unit.get_mut(at_id2);
             at_ent.set(
@@ -936,7 +969,7 @@ impl DwarfBuilder {
                 AttributeValue::String(argname.as_bytes().to_vec()),
             );
             at_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
-            at_ent.set(DW_AT_location, AttributeValue::Exprloc(expr));
+            */
         }
     }
 
@@ -976,12 +1009,18 @@ impl DwarfBuilder {
         let (name, args) = self
             .match_function(&label)
             .map(|c| c.clone())
-            .unwrap_or_else(|| (label.to_string(), "(() . ENV)".to_string()));
+            .unwrap_or_else(|| (label.to_string(), "ENV".to_string()));
+
+        // We'll make 3 subprograms to represent where the current arguments can be arrived
+        // at from, then decorate all of them with the argument retriever below.
+
         let subprogram_id = {
             let unit = self.dwarf.units.get_mut(self.unit_id);
             let subprogram_id = unit.add(unit.root(), DW_TAG_subprogram);
+
+            // Frame pointer for the function.
             let mut fbexpr_mid = Expression::new();
-            fbexpr_mid.op_breg(gimli::Register(11), 0);
+            fbexpr_mid.op_breg(gimli::Register(13), 0);
             let mut loclist = Vec::new();
             loclist.push(Location::StartEnd {
                 begin: Address::Constant(addr as u64),
@@ -1012,16 +1051,43 @@ impl DwarfBuilder {
         };
         let srcloc = Srcloc::start("*args*");
         if let Ok(parsed) = parse_sexp(srcloc.clone(), args.bytes()) {
+            let self_u32_type = self.u32_type;
+            let early_reg_closure = move || {
+                let mut early_reg_expr = Expression::new();
+                early_reg_expr.op_regval_type(gimli::Register(7), self_u32_type);
+                early_reg_expr
+            };
+            let frame_closure = || {
+                let mut frame_expr = Expression::new();
+                frame_expr.op_fbreg(12);
+                frame_expr.op_deref();
+                frame_expr
+            };
+
+            let locations = vec![
+                VariableLocationInfo {
+                    beginning: addr as u64,
+                    end: addr as u64 + 0x1c,
+                    start_expr: &early_reg_closure,
+                },
+                VariableLocationInfo {
+                    beginning: addr as u64 + 0x1c,
+                    end: (addr + size) as u64 - 2 * 4,
+                    start_expr: &frame_closure,
+                },
+                VariableLocationInfo {
+                    beginning: (addr + size) as u64 - 2 * 4,
+                    end: (addr + size) as u64,
+                    start_expr: &early_reg_closure,
+                },
+            ];
             if !parsed.is_empty() {
                 self.add_arguments(
                     subprogram_id,
-                    1,
-                    0,
-                    Rc::new(SExp::Cons(
-                        srcloc.clone(),
-                        Rc::new(SExp::Nil(srcloc.clone())),
-                        parsed[0].clone(),
-                    )),
+                    &locations,
+                    bi_one(),
+                    bi_zero(),
+                    parsed[0].clone(),
                 );
             }
         }
@@ -1664,9 +1730,8 @@ impl Program {
             Instr::Align4,
             Instr::Globl("_start".to_string()),
             Instr::Label("_start".to_string()),
-            Instr::Lea(Register::R(0), "_run".to_string()),
-            Instr::Addi(Register::R(5), Register::R(0), 0),
-            Instr::Ldr(Register::R(7), Register::R(5), 8),
+            Instr::Lea(Register::R(5), "_run".to_string()),
+            Instr::Ldr(Register::R(7), Register::R(5), 4),
             Instr::Addi(Register::R(0), Register::R(7), 0),
             Instr::Bl(self.first_label.clone()),
             // Print the last value.
@@ -1688,7 +1753,6 @@ impl Program {
             Instr::Globl("_run".to_string()),
             Instr::Label("_run".to_string()),
             Instr::Long(0x10000000),
-            Instr::Long(1),
             Instr::Addr(self.env_label.clone(), true),
             // Write the constant data.
             Instr::Align4,

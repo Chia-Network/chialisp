@@ -1,3 +1,5 @@
+import struct
+
 def byte_of(w,n):
     shift = n * 8
     return (w >> shift) & 0xff
@@ -23,11 +25,11 @@ class SExp:
     def to_string(self):
         if self.kind == 0:
             if len(self.atom) == 0:
-                return f'{hex(self.ptr)}()'
+                return '()'
             else:
                 return repr(self.atom)
         else:
-            res = f'{hex(self.ptr)}('
+            res = '('
             sep = ''
             examine = self
             proper_list = []
@@ -47,21 +49,27 @@ class SExp:
 
             return res
 
-def value(val):
-    wval = val[0]
-    if wval == 0 or wval & 1:
-        wval = val[0]
-        the_len = wval >> 1
+def read_inf_word(address):
+    res = struct.unpack('<I', gdb.selected_inferior().read_memory(address, 4))[0]
+    return res
+
+def value(address):
+    if address == 0:
+        return SExp(0, atom=[])
+
+    fval = read_inf_word(address)
+    if fval & 1:
+        the_len = fval >> 1
         num_words = (the_len + 3) >> 2
         words = []
         for v in range(num_words):
-            words.append(val[v+1])
+            words.append(read_inf_word(address + (v+1) * 4))
         final_bytes=b''.join(map(bytes_of,words))[:the_len]
-        return SExp(val[0], atom=final_bytes)
+        return SExp(address, atom=final_bytes)
     else:
-        v1 = value(val[0].cast(word_t))
-        v2 = value(val[1].cast(word_t))
-        return SExp(val[0], cons=[v1,v2])
+        v1 = value(read_inf_word(address))
+        v2 = value(read_inf_word(address+4))
+        return SExp(address, cons=[v1,v2])
 
 class WordPtrPrinter:
     def __init__(self, val):
@@ -72,8 +80,8 @@ class WordPtrPrinter:
         return got_value.to_string()
 
 def lookup_type(val):
-    if str(val.type) == 'word *':
-        return WordPtrPrinter(val)
+    if str(val.type) == 'word *' or str(val.type) == 'word' or str(val.type) == 'sexp':
+        return WordPtrPrinter(int(val.address))
     return None
 
 gdb.pretty_printers.append(lookup_type)
