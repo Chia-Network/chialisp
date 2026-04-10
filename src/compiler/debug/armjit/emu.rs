@@ -21,6 +21,7 @@ use gdbstub::target::ext::base::{single_register_access, BaseOps};
 use gdbstub::target::ext::breakpoints::{
     Breakpoints, BreakpointsOps, HwBreakpointOps, HwWatchpointOps, SwBreakpoint, SwBreakpointOps,
 };
+use gdbstub::target::ext::extended_mode::{Args, AttachKind, ExtendedModeOps, ShouldTerminate};
 use gdbstub::target::{Target, TargetResult};
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
@@ -65,6 +66,7 @@ pub enum ExecMode {
 pub struct Emu {
     start_addr: u32,
     next_module_addr: u32,
+    initial_mem: PagedMemory,
 
     // example custom register. only read/written to from the GDB client
     pub custom_reg: u32,
@@ -183,6 +185,13 @@ impl Target for Emu {
     fn support_breakpoints(&mut self) -> Option<BreakpointsOps<Self>> {
         Some(self)
     }
+
+    #[inline(always)]
+    fn support_extended_mode(
+        &mut self,
+    ) -> Option<ExtendedModeOps<'_, Self>> {
+        Some(self)
+    }
 }
 
 impl SwBreakpoint for Emu {
@@ -250,6 +259,41 @@ impl SingleThreadResume for Emu {
     }
 }
 
+impl gdbstub::target::ext::extended_mode::ExtendedMode for Emu {
+    fn run(&mut self, _filename: Option<&[u8]>, args: Args<'_, '_>) -> TargetResult<Pid, Self> {
+        // This emulator doesn't spawn a new process; "run" is implemented as a reset.
+        let _ = args.count();
+        self.reset();
+        Ok(self.reported_pid)
+    }
+
+    fn attach(&mut self, pid: Pid) -> TargetResult<(), Self> {
+        if pid == self.reported_pid {
+            Ok(())
+        } else {
+            Err(().into())
+        }
+    }
+
+    fn query_if_attached(&mut self, pid: Pid) -> TargetResult<AttachKind, Self> {
+        if pid == self.reported_pid {
+            Ok(AttachKind::Run)
+        } else {
+            Err(().into())
+        }
+    }
+
+    fn kill(&mut self, _pid: Option<Pid>) -> TargetResult<ShouldTerminate, Self> {
+        self.reset();
+        Ok(ShouldTerminate::No)
+    }
+
+    fn restart(&mut self) -> Result<(), Self::Error> {
+        self.reset();
+        Ok(())
+    }
+}
+
 fn is_apply_operator(sexp: Rc<SExp>) -> bool {
     if let SExp::Cons(_, h, t) = &*sexp {
         if is_apply(&h) {
@@ -290,6 +334,7 @@ impl Emu {
         // copy all in-memory sections from the ELF file into system RAM
         let mut elf_loader = ElfLoader::new(program_elf, start_addr).expect("should load");
         elf_loader.load(&mut mem);
+        let initial_mem = mem.clone();
 
         let jit_symbols = Rc::new(elf_loader.get_symbols());
 
@@ -309,6 +354,7 @@ impl Emu {
 
             cpu,
             mem,
+            initial_mem,
 
             watchpoints: Vec::new(),
             breakpoints: Vec::new(),
@@ -324,6 +370,9 @@ impl Emu {
     }
 
     pub(crate) fn reset(&mut self) {
+        self.mem = self.initial_mem.clone();
+        self.exec_mode = ExecMode::Continue;
+        self.pending_gdb_console_output.clear();
         self.cpu.reg_set(Mode::User, reg::SP, 0xffffff00);
         self.cpu.reg_set(Mode::User, reg::LR, HLE_RETURN_ADDR);
         self.cpu.reg_set(Mode::User, reg::PC, self.start_addr);
