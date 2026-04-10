@@ -11,7 +11,6 @@ use std::str::FromStr;
 
 use faerie::{ArtifactBuilder, Decl, Link, SectionKind};
 use gimli;
-use gimli::Arm;
 use gimli::constants::{
     DW_AT_byte_size, DW_AT_encoding, DW_AT_frame_base, DW_AT_high_pc, DW_AT_language,
     DW_AT_location, DW_AT_low_pc, DW_AT_name, DW_AT_type, DW_TAG_base_type,
@@ -23,6 +22,7 @@ use gimli::write::{
     LineProgram, LineString, Location, LocationList, Range, RangeList, Section, Sections, Unit,
     UnitEntryId, UnitId,
 };
+use gimli::Arm;
 use gimli::{DW_ATE_unsigned, DwAte, Encoding, Format, LineEncoding};
 use target_lexicon::triple;
 use tempfile::NamedTempFile;
@@ -1052,7 +1052,8 @@ impl DwarfBuilder {
 
         let mut sections = Sections::<DwarfSectionWriter>::default();
         self.dwarf.write(&mut sections)?;
-        self.frame_table.write_debug_frame(&mut sections.debug_frame)?;
+        self.frame_table
+            .write_debug_frame(&mut sections.debug_frame)?;
         self.frame_table.write_eh_frame(&mut sections.eh_frame)?;
 
         self.write_section(".debug_abbrev", &sections.debug_abbrev, instrs);
