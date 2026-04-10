@@ -27,7 +27,7 @@ use gimli::{DW_ATE_unsigned, DwAte, Encoding, Format, LineEncoding};
 use target_lexicon::triple;
 use tempfile::NamedTempFile;
 
-use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, bi_one, bi_zero};
+use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero, Bytes, BytesFromType};
 use crate::classic::clvm::casts::bigint_to_bytes_clvm;
 use crate::compiler::clvm::{sha256tree, truthy};
 use crate::compiler::debug::armjit::load::{write_u32, ElfLoader};
@@ -896,7 +896,11 @@ impl DwarfBuilder {
         if let Some(name) = self.symbol_table.get(&decode_string(&stripped)).cloned() {
             let mut left_stripped = stripped.clone();
             left_stripped.append(&mut b"_left_env".to_vec());
-            let left_env = if let Some(res) = self.symbol_table.get(&decode_string(&left_stripped)).cloned() {
+            let left_env = if let Some(res) = self
+                .symbol_table
+                .get(&decode_string(&left_stripped))
+                .cloned()
+            {
                 res == "1"
             } else {
                 false
@@ -920,11 +924,30 @@ impl DwarfBuilder {
         None
     }
 
-    fn add_arguments(&mut self, subprogram_id: UnitEntryId, locations: &[VariableLocationInfo], here: Number, path: Number, args: Rc<SExp>) {
+    fn add_arguments(
+        &mut self,
+        subprogram_id: UnitEntryId,
+        locations: &[VariableLocationInfo],
+        here: Number,
+        path: Number,
+        args: Rc<SExp>,
+    ) {
         eprintln!("add_arguments {here} {path} {args}");
         if let SExp::Cons(_, a, b) = args.borrow() {
-            self.add_arguments(subprogram_id, locations, here.clone() << 1, path.clone(), a.clone());
-            self.add_arguments(subprogram_id, locations, here.clone() << 1, path | here, b.clone());
+            self.add_arguments(
+                subprogram_id,
+                locations,
+                here.clone() << 1,
+                path.clone(),
+                a.clone(),
+            );
+            self.add_arguments(
+                subprogram_id,
+                locations,
+                here.clone() << 1,
+                path | here,
+                b.clone(),
+            );
         } else if let SExp::Atom(_, a) = args.borrow() {
             let argname = decode_string(a);
             let unit = self.dwarf.units.get_mut(self.unit_id);
