@@ -187,9 +187,7 @@ impl Target for Emu {
     }
 
     #[inline(always)]
-    fn support_extended_mode(
-        &mut self,
-    ) -> Option<ExtendedModeOps<'_, Self>> {
+    fn support_extended_mode(&mut self) -> Option<ExtendedModeOps<'_, Self>> {
         Some(self)
     }
 }
