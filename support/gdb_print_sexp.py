@@ -81,7 +81,11 @@ class WordPtrPrinter:
 
 def lookup_type(val):
     if str(val.type) == 'word *' or str(val.type) == 'word' or str(val.type) == 'sexp':
-        return WordPtrPrinter(int(val.address))
+        if val.address is not None:
+            addr = int(val.address)
+        else:
+            addr = struct.unpack('<I', val.bytes)[0]
+        return WordPtrPrinter(addr)
     return None
 
 gdb.pretty_printers.append(lookup_type)

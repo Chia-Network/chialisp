@@ -405,7 +405,7 @@ impl Emu {
         } else if value == SWI_THROW {
             Some(Event::Trap)
         } else if value == SWI_DISPATCH_NEW_CODE {
-            let r0_value = self.cpu.reg_get(Mode::User, 1);
+            let r0_value = self.cpu.reg_get(Mode::User, 0);
             let to_run = self.get_sexp(&srcloc, r0_value);
 
             let env_value = self.cpu.reg_get(Mode::User, 7);
@@ -437,15 +437,18 @@ impl Emu {
                 // We found it, transfer control.
                 eprintln!("found code, dispatch to {lookup:?}");
                 eprintln!("running code {to_run} with env {env}");
-                self.cpu.reg_set(Mode::User, reg::LR, current_pc + 4);
-                self.cpu.reg_set(Mode::User, reg::PC, lookup.address);
+                self.cpu
+                    .reg_set(Mode::User, 0, self.cpu.reg_get(Mode::User, 7));
+                self.cpu.reg_set(Mode::User, reg::LR, current_pc + 8);
+                self.cpu.reg_set(Mode::User, reg::PC, current_pc + 4);
+                self.cpu.reg_set(Mode::User, 1, lookup.address);
                 return None;
             };
 
             eprintln!("not found: running code {to_run} with env {env}");
             // Quoted is easy.
             if is_quote_operator(to_run.clone()) {
-                self.cpu.reg_set(Mode::User, 0, self.mem.r32(r0_value + 4));
+                self.cpu.reg_set(Mode::User, 1, current_pc + 8);
                 self.cpu.reg_set(Mode::User, reg::PC, current_pc + 4);
                 return None;
             }
@@ -606,9 +609,9 @@ impl Emu {
                 (new_code_address + instruction_list.len() as u32 * 4) as u32,
             );
 
-            let return_addr = self.cpu.reg_get(Mode::User, reg::PC) + 4;
-            self.cpu.reg_set(Mode::User, reg::LR, return_addr);
-            self.cpu.reg_set(Mode::User, reg::PC, new_code_address + 12);
+            self.cpu.reg_set(Mode::User, reg::LR, current_pc + 8);
+            self.cpu.reg_set(Mode::User, reg::PC, current_pc + 4);
+            self.cpu.reg_set(Mode::User, 1, new_code_address + 12);
             None
         } else if value == SWI_DISPATCH_INSTRUCTION {
             // Grab the sexp for this operation.
