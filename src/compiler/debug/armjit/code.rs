@@ -32,9 +32,7 @@ use crate::compiler::debug::armjit::load::{write_u32, ElfLoader};
 use crate::compiler::sexp::{decode_string, parse_sexp, Atom, NodeSel, SExp, SelectNode, ThisNode};
 use crate::compiler::srcloc::Srcloc;
 
-pub const ENV_PTR: i32 = 0;
-pub const NEXT_ALLOC_OFFSET: i32 = 4;
-pub const PRINTME: i32 = 8;
+pub const NEXT_ALLOC_OFFSET: i32 = 0;
 
 pub const SWI_DONE: usize = 0;
 pub const SWI_THROW: usize = 1;
@@ -180,7 +178,7 @@ pub enum Instr {
     Bx(Register),
     Lea(Register, String),
     Swi(usize),
-    SwiGe(usize),
+    SwiEq(usize),
     Cmpi(Register, usize),
     Long(usize),
     Addr(String, bool),
@@ -495,10 +493,10 @@ impl Encodable for Instr {
                     ArmCond::Unconditional.to_u32() | ArmOp::Swi.to_u32() | (*n as u32),
                 );
             }
-            Instr::SwiGe(n) => {
+            Instr::SwiEq(n) => {
                 vec_from_u32(
                     v,
-                    ArmCond::GreaterOrEqual.to_u32() | ArmOp::Swi.to_u32() | (*n as u32),
+                    ArmCond::Equal.to_u32() | ArmOp::Swi.to_u32() | (*n as u32),
                 );
             }
             Instr::Cmpi(r, n) => {
@@ -574,7 +572,7 @@ impl fmt::Display for Instr {
             Instr::Bx(r) => write!(f, "  bx {r}"),
             Instr::Lea(r, l) => write!(f, "  ldr {r}, ={l}"),
             Instr::Swi(n) => write!(f, "  swi {n}"),
-            Instr::SwiGe(n) => write!(f, "  swile {n}"),
+            Instr::SwiEq(n) => write!(f, "  swieq {n}"),
             Instr::Long(n) => write!(f, "  .long {n}"),
             Instr::Addr(lbl, _) => write!(f, "  .long {lbl}"),
             Instr::Bytes(v) => {
@@ -896,9 +894,9 @@ impl DwarfBuilder {
             let mut expr = Expression::new();
 
             // Deref the environment.
-            expr.op_fbreg(-0x18);
-            expr.op_deref();
+            expr.op_reg(gimli::Register(7));
 
+            /*
             let mut i = 1;
             while i < here {
                 expr.op_deref();
@@ -907,6 +905,7 @@ impl DwarfBuilder {
                 }
                 i <<= 1;
             }
+            */
 
             let at_id = unit.add(subprogram_id, DW_TAG_formal_parameter);
             let at_ent = unit.get_mut(at_id);
@@ -1178,13 +1177,15 @@ impl Program {
 
         let subexp = self.add(Rc::new(lst[0].clone()));
         for i in &[
-            Instr::Addi(Register::R(0), Register::R(5), 0),
+            Instr::Addi(Register::R(0), Register::R(7), 0),
             // Determine if the result is a cons.
             Instr::Bl(subexp),
-            Instr::Ldr(Register::R(4), Register::R(0), 0),
-            Instr::Andi(Register::R(1), Register::R(4), 1),
+            Instr::Cmpi(Register::R(0), 0),
+            Instr::SwiEq(SWI_THROW),
+            Instr::Ldr(Register::R(1), Register::R(0), 0),
+            Instr::Andi(Register::R(1), Register::R(1), 1),
             Instr::Cmpi(Register::R(1), 1),
-            Instr::SwiGe(SWI_THROW),
+            Instr::SwiEq(SWI_THROW),
             Instr::Ldr(Register::R(0), Register::R(0), offset),
         ] {
             self.push(source_sexp.clone(), loc, i.clone());
@@ -1233,10 +1234,10 @@ impl Program {
             // r0 = env ptr
             // Swap r0 (env) with r5[ENV_PTR]
             for i in &[
-                Instr::Addi(Register::R(0), Register::R(5), 0),
+                Instr::Addi(Register::R(0), Register::R(7), 0),
                 Instr::Bl(env_comp),
-                Instr::Ldr(Register::R(4), Register::R(5), ENV_PTR),
-                Instr::Str(Register::R(0), Register::R(5), ENV_PTR),
+                Instr::Addi(Register::R(4), Register::R(7), 0),
+                Instr::Addi(Register::R(7), Register::R(0), 0),
             ] {
                 self.push(source_sexp.clone(), loc, i.clone());
             }
@@ -1252,10 +1253,10 @@ impl Program {
                 let code_comp = self.add(Rc::new(lst[0].clone()));
 
                 for i in &[
-                    Instr::Addi(Register::R(0), Register::R(5), 0),
+                    Instr::Addi(Register::R(0), Register::R(7), 0),
                     Instr::Bl(code_comp),
                     Instr::Addi(Register::R(1), Register::R(0), 0),
-                    Instr::Addi(Register::R(0), Register::R(5), 0),
+                    Instr::Addi(Register::R(0), Register::R(7), 0),
                     Instr::Swi(SWI_DISPATCH_NEW_CODE),
                 ] {
                     self.push(source_sexp.clone(), loc, i.clone());
@@ -1264,7 +1265,7 @@ impl Program {
 
             for i in &[
                 // Reload the old env.
-                Instr::Str(Register::R(4), Register::R(5), ENV_PTR),
+                Instr::Addi(Register::R(7), Register::R(4), 0),
             ] {
                 self.push(source_sexp.clone(), loc, i.clone());
             }
@@ -1305,10 +1306,10 @@ impl Program {
             let first_label = self.add(Rc::new(lst[0].clone()));
 
             for i in &[
-                Instr::Addi(Register::R(0), Register::R(5), 0),
+                Instr::Addi(Register::R(0), Register::R(7), 0),
                 Instr::Bl(rest_label),
                 Instr::Addi(Register::R(4), Register::R(0), 0),
-                Instr::Addi(Register::R(0), Register::R(5), 0),
+                Instr::Addi(Register::R(0), Register::R(7), 0),
                 Instr::Bl(first_label),
                 // R1 = next allocated address.
                 Instr::Ldr(Register::R(1), Register::R(5), NEXT_ALLOC_OFFSET),
@@ -1338,7 +1339,6 @@ impl Program {
             // Load a nil into R4.
             for i in &[
                 Instr::Andi(Register::R(4), Register::R(4), 0),
-                Instr::Addi(Register::R(4), Register::R(4), 1),
             ] {
                 self.push(source_sexp.clone(), loc, i.clone());
             }
@@ -1357,10 +1357,9 @@ impl Program {
                     // R6 = alloc ptr
                     Instr::Addi(Register::R(6), Register::R(0), 0),
                     // Reload R0 with the env ptr.
-                    Instr::Addi(Register::R(0), Register::R(5), 0),
+                    Instr::Addi(Register::R(0), Register::R(7), 0),
                     // Call the arg code
                     Instr::Bl(clause_label),
-                    Instr::Str(Register::R(0), Register::R(5), PRINTME),
                     // Store R0 into the cons.
                     Instr::Str(Register::R(0), Register::R(6), 0),
                     // Store R4 into the cons.
@@ -1396,7 +1395,7 @@ impl Program {
         self.push(
             source_sexp.clone(),
             loc,
-            Instr::Ldr(Register::R(0), Register::R(5), ENV_PTR),
+            Instr::Addi(Register::R(0), Register::R(7), 0),
         );
 
         // Whole env ref.
@@ -1415,11 +1414,13 @@ impl Program {
 
                     for i in &[
                         // Check for a cons.
-                        Instr::Ldr(Register::R(4), Register::R(0), 0),
-                        Instr::Andi(Register::R(1), Register::R(4), 1),
+                        Instr::Cmpi(Register::R(0), 0),
+                        Instr::SwiEq(SWI_THROW),
+                        Instr::Ldr(Register::R(1), Register::R(0), 0),
+                        Instr::Andi(Register::R(1), Register::R(1), 1),
                         Instr::Cmpi(Register::R(1), 1),
                         // Break if it was an atom.
-                        Instr::SwiGe(SWI_THROW),
+                        Instr::SwiEq(SWI_THROW),
                         // Load if it was a cons.
                         Instr::Ldr(Register::R(0), Register::R(0), offset),
                     ] {
@@ -1540,14 +1541,13 @@ impl Program {
                 Some(BeginEndBlock::BeginBlock),
             );
             for i in &[
-                // Grab the env pointer.
-                Instr::Addi(Register::R(5), Register::R(0), 0),
                 Instr::Addi(Register::FP, Register::SP, 4),
                 Instr::Subi(Register::SP, Register::SP, 0x18),
                 Instr::Str(Register::R(4), Register::SP, 0),
                 Instr::Str(Register::R(5), Register::SP, 4),
                 Instr::Str(Register::R(6), Register::SP, 8),
                 Instr::Str(Register::R(7), Register::SP, 12),
+                Instr::Addi(Register::R(7), Register::R(0), 0),
             ] {
                 self.push(sexp.clone(), &sexp.loc(), i.clone());
             }
@@ -1620,6 +1620,8 @@ impl Program {
             Instr::Label("_start".to_string()),
             Instr::Lea(Register::R(0), "_run".to_string()),
             Instr::Addi(Register::R(5), Register::R(0), 0),
+            Instr::Ldr(Register::R(7), Register::R(5), 8),
+            Instr::Addi(Register::R(0), Register::R(7), 0),
             Instr::Bl(self.first_label.clone()),
             // Print the last value.
             Instr::Swi(SWI_PRINT_EXPR),
@@ -1639,9 +1641,9 @@ impl Program {
             Instr::Align4,
             Instr::Globl("_run".to_string()),
             Instr::Label("_run".to_string()),
-            Instr::Addr(self.env_label.clone(), true),
             Instr::Long(0x10000000),
             Instr::Long(1),
+            Instr::Addr(self.env_label.clone(), true),
             // Write the constant data.
             Instr::Align4,
             Instr::Section(".data".to_string()),

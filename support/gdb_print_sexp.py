@@ -8,7 +8,8 @@ def bytes_of(w):
 word_t = gdb.lookup_type('word').pointer()
 
 class SExp:
-    def __init__(self,**kwargs):
+    def __init__(self,ptr,**kwargs):
+        self.ptr = ptr
         if 'atom' in kwargs:
             self.kind = 0
             self.atom = kwargs['atom']
@@ -22,11 +23,11 @@ class SExp:
     def to_string(self):
         if self.kind == 0:
             if len(self.atom) == 0:
-                return '()'
+                return f'{hex(self.ptr)}()'
             else:
                 return repr(self.atom)
         else:
-            res = '('
+            res = f'{hex(self.ptr)}('
             sep = ''
             examine = self
             proper_list = []
@@ -56,11 +57,11 @@ def value(val):
         for v in range(num_words):
             words.append(val[v+1])
         final_bytes=b''.join(map(bytes_of,words))[:the_len]
-        return SExp(atom=final_bytes)
+        return SExp(val[0], atom=final_bytes)
     else:
         v1 = value(val[0].cast(word_t))
         v2 = value(val[1].cast(word_t))
-        return SExp(cons=[v1,v2])
+        return SExp(val[0], cons=[v1,v2])
 
 class WordPtrPrinter:
     def __init__(self, val):

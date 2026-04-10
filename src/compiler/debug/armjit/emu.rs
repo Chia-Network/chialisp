@@ -30,7 +30,7 @@ use crate::compiler::clvm::{apply_op, sha256tree};
 use crate::compiler::compiler::{compile_file, is_apply, DefaultCompilerOpts};
 use crate::compiler::comptypes::CompilerOpts;
 use crate::compiler::debug::armjit::code::{
-    Instr, Program, Register, ENV_PTR, NEXT_ALLOC_OFFSET, SWI_DISPATCH_INSTRUCTION,
+    Instr, Program, Register, NEXT_ALLOC_OFFSET, SWI_DISPATCH_INSTRUCTION,
     SWI_DISPATCH_NEW_CODE, SWI_DONE, SWI_PRINT_EXPR, SWI_THROW, TARGET_ADDR,
 };
 use crate::compiler::debug::armjit::load::{ElfLoader, EmuSymbolInfo};
@@ -369,7 +369,7 @@ impl Emu {
         args: Rc<SExp>,
     ) -> Option<Event> {
         let mut allocator = Allocator::new();
-        let alloc_ptr = self.cpu.reg_get(Mode::User, 5) + 4;
+        let alloc_ptr = self.cpu.reg_get(Mode::User, 5);
         match apply_op(
             &mut allocator,
             runner.clone(),
@@ -408,8 +408,7 @@ impl Emu {
             let r0_value = self.cpu.reg_get(Mode::User, 1);
             let to_run = self.get_sexp(&srcloc, r0_value);
 
-            let r5_value = self.cpu.reg_get(Mode::User, 5);
-            let env_value = self.mem.r32(r5_value);
+            let env_value = self.cpu.reg_get(Mode::User, 7);
             let env = self.get_sexp(&srcloc, env_value);
 
             let hash = sha256tree(to_run.clone());
@@ -546,7 +545,7 @@ impl Emu {
                 }
 
                 // Old env ptr in r4.
-                instruction_list.push(Instr::Ldr(Register::R(4), Register::R(5), ENV_PTR));
+                instruction_list.push(Instr::Addi(Register::R(4), Register::R(7), 0));
                 // Load new env ptr.
                 // It's the second head of this cons chain.
                 instruction_list.push(Instr::Ldr(
@@ -561,13 +560,13 @@ impl Emu {
                 // R0 = first(computed)
                 instruction_list.push(Instr::Ldr(Register::R(0), Register::R(0), 0));
                 // R5[ENV_PTR] = R1.
-                instruction_list.push(Instr::Str(Register::R(1), Register::R(5), ENV_PTR));
+                instruction_list.push(Instr::Addi(Register::R(7), Register::R(0), 0));
                 // Call with env argument.
-                instruction_list.push(Instr::Addi(Register::R(0), Register::R(5), 0));
+                instruction_list.push(Instr::Addi(Register::R(0), Register::R(7), 0));
                 // Perform the apply
                 instruction_list.push(Instr::Swi(SWI_DISPATCH_NEW_CODE));
                 // Reset the env from r4.
-                instruction_list.push(Instr::Str(Register::R(4), Register::R(5), ENV_PTR));
+                instruction_list.push(Instr::Addi(Register::R(7), Register::R(4), 0));
             } else {
                 // Load the operator address into R0
                 instruction_list.push(Instr::Ldr(
@@ -642,8 +641,7 @@ impl Emu {
 
         eprintln!("pc {pc:x} snoop {snoop_instruction:x}");
         if pc > 0x1010 {
-            let r5_value = self.cpu.reg_get(Mode::User, 5);
-            let env_value = self.mem.r32(r5_value);
+            let env_value = self.cpu.reg_get(Mode::User, 7);
             eprintln!("env {}", self.get_sexp(&Srcloc::start("*env*"), env_value));
         }
         if (snoop_instruction & 0x0f000000) == 0x0f000000 {
@@ -652,7 +650,7 @@ impl Emu {
             let match_expression = snoop_instruction >> 28;
             eprintln!("cpsr {cpsr:x} match {match_expression:x}");
             let perform_action = match match_expression {
-                0 => ((cpsr >> 29) & 1) != 0,
+                0 => ((cpsr >> 30) & 1) != 0,
                 10 => ((cpsr >> 31) & 1) == ((cpsr >> 28) & 1),
                 14 => true,
                 _ => todo!(),
