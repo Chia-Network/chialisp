@@ -19,6 +19,7 @@ pub struct AcceptedDialect {
     pub stepping: Option<i32>,
     pub strict: bool,
     pub int_fix: bool,
+    pub rue_codegen: bool,
     // Extra numeric constants
     pub extra_numeric_constants: bool,
 }
@@ -55,6 +56,7 @@ lazy_static! {
                         stepping: Some(21),
                         strict: true,
                         int_fix: false,
+                        rue_codegen: false,
                         extra_numeric_constants: false,
                     },
                     content: indoc! {"(
@@ -70,6 +72,7 @@ lazy_static! {
                         stepping: Some(22),
                         strict: false,
                         int_fix: false,
+                        rue_codegen: false,
                         extra_numeric_constants: false,
                     },
                     content: indoc! {"(
@@ -85,6 +88,7 @@ lazy_static! {
                         stepping: Some(23),
                         strict: true,
                         int_fix: false,
+                        rue_codegen: false,
                         extra_numeric_constants: false,
                     },
                     content: indoc! {"(
@@ -100,6 +104,7 @@ lazy_static! {
                         stepping: Some(23),
                         strict: true,
                         int_fix: true,
+                        rue_codegen: false,
                         extra_numeric_constants: false,
                     },
                     content: indoc! {"(
@@ -115,6 +120,7 @@ lazy_static! {
                         stepping: Some(24),
                         strict: true,
                         int_fix: true,
+                        rue_codegen: false,
                         extra_numeric_constants: false,
                     },
                     content: indoc! {"(
@@ -130,6 +136,23 @@ lazy_static! {
                         stepping: Some(25),
                         strict: true,
                         int_fix: true,
+                        rue_codegen: false,
+                        extra_numeric_constants: false,
+                    },
+                    content: indoc! {"(
+                    (defconstant *chialisp-version* 25)
+                )"}
+                    .to_string(),
+                },
+            ),
+            (
+                "*standard-cl-rue1*",
+                DialectDescription {
+                    accepted: AcceptedDialect {
+                        stepping: Some(25),
+                        strict: true,
+                        int_fix: true,
+                        rue_codegen: true,
                         extra_numeric_constants: false,
                     },
                     content: indoc! {"(
@@ -145,6 +168,7 @@ lazy_static! {
                         stepping: Some(25),
                         strict: true,
                         int_fix: true,
+                        rue_codegen: false,
                         extra_numeric_constants: true,
                     },
                     content: indoc! {"(
@@ -160,6 +184,7 @@ lazy_static! {
                         stepping: None,
                         strict: false,
                         int_fix: true,
+                        rue_codegen: false,
                         extra_numeric_constants: true,
                     },
                     content: indoc! {"()"}.to_string(),

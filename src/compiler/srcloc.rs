@@ -13,11 +13,8 @@ pub struct Until {
 }
 
 impl Until {
-    pub fn from_pair(p: (usize, usize)) -> Self {
-        Until {
-            line: p.0,
-            col: p.1,
-        }
+    pub fn new(line: usize, col: usize) -> Self {
+        Until { line, col }
     }
 }
 
@@ -220,11 +217,10 @@ pub fn src_location_max(a: &Srcloc) -> (usize, usize) {
 }
 
 fn add_onto(x: &Srcloc, y: &Srcloc) -> Srcloc {
+    let (sm_row, sm_col) = src_location_max(y);
     Srcloc {
-        file: x.file.clone(),
-        line: x.line,
-        col: x.col,
-        until: Some(Until::from_pair(src_location_max(y))),
+        until: Some(Until::new(sm_row, sm_col)),
+        ..x.clone()
     }
 }
 

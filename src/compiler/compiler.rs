@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use clvm_rs::allocator::Allocator;
 
@@ -13,11 +14,13 @@ use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 
 use crate::compiler::clvm::{sha256tree, NewStyleIntConversion};
 use crate::compiler::codegen::{codegen, hoist_body_let_binding, process_helper_let_bindings};
+
 use crate::compiler::comptypes::{CompileErr, CompileForm, CompilerOpts, PrimaryCodegen};
 use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
 use crate::compiler::frontend::frontend;
 use crate::compiler::optimize::get_optimizer;
 use crate::compiler::prims;
+use crate::compiler::rue::{compile_with_rue_codegen, rue_cg};
 use crate::compiler::sexp::{parse_sexp_flags, SExp};
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::{BasicCompileContext, CompileContextWrapper};
@@ -151,8 +154,17 @@ pub fn compile_pre_forms(
     opts: Rc<dyn CompilerOpts>,
     pre_forms: &[Rc<SExp>],
 ) -> Result<SExp, CompileErr> {
-    // Resolve includes, convert program source to lexemes
-    let p2 = desugar_pre_forms(context, opts.clone(), pre_forms)?;
+    // Resolve includes, convert program source to frontend representation.
+    let p0 = frontend(opts.clone(), pre_forms)?;
+    let p1 = context.frontend_optimization(opts.clone(), p0)?;
+
+    if rue_cg(opts.clone()) {
+        // Translate to Rue HIR before Chialisp desugaring.
+        // If translation fails, fall back to classic codegen for compatibility.
+        return compile_with_rue_codegen(opts.clone(), Arc::from(""), &p1);
+    }
+
+    let p2 = do_desugar(&p1)?;
 
     compile_from_compileform(context, opts, p2)
 }

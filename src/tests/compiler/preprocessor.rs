@@ -527,6 +527,7 @@ fn test_preprocess_basic_list() {
             stepping: Some(21),
             strict: true,
             int_fix: false,
+            rue_codegen: false,
             extra_numeric_constants: false,
         });
     let mut includes = Vec::new();
@@ -567,6 +568,7 @@ fn test_preprocessor_tours_includes_properly() {
             stepping: Some(21),
             strict: true,
             int_fix: false,
+            rue_codegen: false,
             extra_numeric_constants: false,
         });
     let parsed = parse_sexp(Srcloc::start(pname), prog.bytes()).expect("should parse");
