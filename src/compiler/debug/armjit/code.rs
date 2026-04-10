@@ -11,13 +11,15 @@ use std::str::FromStr;
 
 use faerie::{ArtifactBuilder, Decl, Link, SectionKind};
 use gimli;
+use gimli::Arm;
 use gimli::constants::{
     DW_AT_byte_size, DW_AT_encoding, DW_AT_frame_base, DW_AT_high_pc, DW_AT_language,
     DW_AT_location, DW_AT_low_pc, DW_AT_name, DW_AT_type, DW_TAG_base_type,
     DW_TAG_formal_parameter, DW_TAG_pointer_type, DW_TAG_subprogram, DW_TAG_variable, DW_LANG_C99,
 };
 use gimli::write::{
-    Address, Attribute, AttributeValue, DirectoryId, Dwarf, DwarfUnit, Expression, FileId,
+    Address, Attribute, AttributeValue, CallFrameInstruction, CieId, CommonInformationEntry,
+    DirectoryId, Dwarf, DwarfUnit, Expression, FileId, FrameDescriptionEntry, FrameTable,
     LineProgram, LineString, Location, LocationList, Range, RangeList, Section, Sections, Unit,
     UnitEntryId, UnitId,
 };
@@ -603,6 +605,8 @@ struct DwarfBuilder {
     symbol_table: Rc<HashMap<String, String>>,
 
     dwarf: Dwarf,
+    frame_table: FrameTable,
+    cfi_cie_id: Option<CieId>,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -745,7 +749,17 @@ impl DwarfBuilder {
             pointer_type: type_id,
             symbol_table,
             dwarf,
+            frame_table: FrameTable::default(),
+            cfi_cie_id: None,
         };
+        let cfi_encoding = Encoding {
+            address_size: 4,
+            format: Format::Dwarf32,
+            version: 1,
+        };
+        let mut cie = CommonInformationEntry::new(cfi_encoding, 1, -4, Arm::R14);
+        cie.add_instruction(CallFrameInstruction::Cfa(Arm::R13, 0));
+        obj.cfi_cie_id = Some(obj.frame_table.add_cie(cie));
 
         let synthetic_source_path = obj.synthetic_source_path.clone();
         let (_, synthetic_file_id) = obj.add_file(&synthetic_source_path);
@@ -928,6 +942,37 @@ impl DwarfBuilder {
 
     // Create dwarf traffic needed to ensure that gdb can find the locals.
     fn decorate_function(&mut self, label: &str, addr: usize, size: usize) -> Option<String> {
+        let mut fde = FrameDescriptionEntry::new(
+            Address::Constant((self.target_addr as usize + addr) as u64),
+            size as u32,
+        );
+        // Function prolog:
+        //   push {fp, lr}
+        //   add  fp, sp, #4
+        //   sub  sp, sp, #0x18
+        //
+        // Function epilog:
+        //   sub  sp, fp, #4
+        //   pop  {fp, lr}
+        //   bx   lr
+        //
+        // The canonical frame address tracks caller SP through the body:
+        // CFA = fp + 4. Saved FP/LR are at CFA-8/CFA-4.
+        fde.add_instruction(4, CallFrameInstruction::Cfa(Arm::R13, 8));
+        fde.add_instruction(4, CallFrameInstruction::Offset(Arm::R11, -8));
+        fde.add_instruction(4, CallFrameInstruction::Offset(Arm::R14, -4));
+        fde.add_instruction(8, CallFrameInstruction::Cfa(Arm::R11, 4));
+        // After `pop {fp, lr}` and before `bx lr`, execution has returned to the
+        // entry-state calling convention for this frame.
+        let post_pop_offset = (size.saturating_sub(4)) as u32;
+        fde.add_instruction(post_pop_offset, CallFrameInstruction::Cfa(Arm::R13, 0));
+        fde.add_instruction(post_pop_offset, CallFrameInstruction::Restore(Arm::R11));
+        fde.add_instruction(post_pop_offset, CallFrameInstruction::Restore(Arm::R14));
+        let cfi_cie_id = self
+            .cfi_cie_id
+            .expect("CFI CIE should be initialized for unwind info");
+        self.frame_table.add_fde(cfi_cie_id, fde);
+
         let (name, args) = self
             .match_function(&label)
             .map(|c| c.clone())
@@ -1007,6 +1052,8 @@ impl DwarfBuilder {
 
         let mut sections = Sections::<DwarfSectionWriter>::default();
         self.dwarf.write(&mut sections)?;
+        self.frame_table.write_debug_frame(&mut sections.debug_frame)?;
+        self.frame_table.write_eh_frame(&mut sections.eh_frame)?;
 
         self.write_section(".debug_abbrev", &sections.debug_abbrev, instrs);
         self.write_section(".debug_info", &sections.debug_info, instrs);
