@@ -30,8 +30,8 @@ use crate::compiler::clvm::{apply_op, sha256tree};
 use crate::compiler::compiler::{compile_file, is_apply, DefaultCompilerOpts};
 use crate::compiler::comptypes::CompilerOpts;
 use crate::compiler::debug::armjit::code::{
-    Instr, Program, Register, NEXT_ALLOC_OFFSET, SWI_DISPATCH_INSTRUCTION,
-    SWI_DISPATCH_NEW_CODE, SWI_DONE, SWI_PRINT_EXPR, SWI_THROW, TARGET_ADDR,
+    Instr, Program, Register, NEXT_ALLOC_OFFSET, SWI_DISPATCH_INSTRUCTION, SWI_DISPATCH_NEW_CODE,
+    SWI_DONE, SWI_PRINT_EXPR, SWI_THROW, TARGET_ADDR,
 };
 use crate::compiler::debug::armjit::load::{ElfLoader, EmuSymbolInfo};
 use crate::compiler::debug::armjit::memory::{PagedMemory, TargetMemory};

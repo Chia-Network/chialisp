@@ -1337,9 +1337,7 @@ impl Program {
             eprintln!("load {label} for general operator {operator_sexp}\n");
 
             // Load a nil into R4.
-            for i in &[
-                Instr::Andi(Register::R(4), Register::R(4), 0),
-            ] {
+            for i in &[Instr::Andi(Register::R(4), Register::R(4), 0)] {
                 self.push(source_sexp.clone(), loc, i.clone());
             }
 
