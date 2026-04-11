@@ -23,24 +23,24 @@ use gdbstub::target::ext::breakpoints::{
 };
 use gdbstub::target::{Target, TargetResult};
 
-use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, bi_zero};
+use crate::classic::clvm::__type_compatibility__::{bi_zero, Bytes, BytesFromType};
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 
 use crate::compiler::clvm::{apply_op, sha256tree};
 use crate::compiler::compiler::{compile_file, is_apply, DefaultCompilerOpts};
 use crate::compiler::comptypes::CompilerOpts;
 use crate::compiler::debug::armjit::code::{
-    Instr, Program, Register, NEXT_ALLOC_OFFSET, SWI_DISPATCH_INSTRUCTION, SWI_DISPATCH_NEW_CODE,
-    SWI_DONE, SWI_PRINT_EXPR, SWI_THROW, TARGET_ADDR, Encodable,
+    Encodable, Instr, Program, Register, NEXT_ALLOC_OFFSET, SWI_DISPATCH_INSTRUCTION,
+    SWI_DISPATCH_NEW_CODE, SWI_DONE, SWI_PRINT_EXPR, SWI_THROW, TARGET_ADDR,
 };
 use crate::compiler::debug::armjit::load::{ElfLoader, EmuSymbolInfo};
 use crate::compiler::debug::armjit::memory::{PagedMemory, TargetMemory};
 use crate::compiler::debug::build_symbol_table_mut;
+use crate::compiler::debug::u8_from_number;
 use crate::compiler::dialect::AcceptedDialect;
 use crate::compiler::sexp::{parse_sexp, SExp};
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::TRunProgram;
-use crate::compiler::debug::u8_from_number;
 
 pub type DynResult<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -263,7 +263,7 @@ fn is_apply_operator(sexp: Rc<SExp>) -> bool {
 
 fn is_quote(sexp: &SExp) -> bool {
     if let SExp::Atom(_, a) = sexp {
-        return a == &[1] || a == b"q";
+        return a == &[1];
     }
     false
 }
@@ -493,16 +493,18 @@ impl Emu {
             eprintln!("not found: running code {to_run} with env {env}");
             let mut address_list = vec![];
             let mut value_addr = r0_value;
-            while value_addr > 1 && self.mem.r32(value_addr).is_multiple_of(2) {
+            while value_addr != 0 && self.mem.r32(value_addr).is_multiple_of(2) {
                 address_list.push(value_addr);
                 value_addr = self.mem.r32(value_addr + 4);
             }
             let apply_operator = is_apply_operator(to_run.clone());
+            eprintln!("apply operator {apply_operator}");
             let arg_addresses: Vec<u32> = address_list
                 .iter()
                 .skip(1)
                 .map(|arg_cons_addr| self.mem.r32(*arg_cons_addr))
                 .collect();
+            eprintln!("arg addresses {arg_addresses:?}");
 
             if (value_addr & 1) != 0 && (value_addr >> 1) != 0 {
                 // Not a proper list.
@@ -543,13 +545,9 @@ impl Emu {
 
             // Arguments in env are in a proper list.  Emit code to iterate it from end to start,
             for i in (0..arg_addresses.len()).rev() {
-                instruction_list.push(Instr::Ldr(
-                    Register::R(1),
-                    Register::R(6),
-                    0,
-                ));
+                instruction_list.push(Instr::Ldr(Register::R(1), Register::R(6), 0));
                 instruction_list.push(Instr::Ldr(Register::R(0), Register::R(1), (i * 4) as i32));
-                // Now we have the operator argument in R0.  Emit a dispatch instruction.
+                // Now we have the code to dispatch in r0.
                 instruction_list.push(Instr::Swi(SWI_DISPATCH_NEW_CODE));
                 // Follow dispatcher-selected code target.
                 instruction_list.push(Instr::Bx(Register::R(1)));
@@ -571,28 +569,24 @@ impl Emu {
                 // Set the head of the cons to the newly evaluated argument.
                 instruction_list.push(Instr::Str(Register::R(0), Register::R(2), 0));
                 // Tail points at the currently built argument list.
-                instruction_list.push(Instr::Ldr(
-                    Register::R(3),
-                    Register::R(6),
-                    4,
-                ));
+                instruction_list.push(Instr::Ldr(Register::R(3), Register::R(6), 4));
                 instruction_list.push(Instr::Str(Register::R(3), Register::R(2), 4));
                 // Set the new cons ptr.
-                instruction_list.push(Instr::Str(
-                    Register::R(2),
-                    Register::R(6),
-                    4,
-                ));
+                instruction_list.push(Instr::Str(Register::R(2), Register::R(6), 4));
             }
 
             // Handle an apply instruction inline.
             if apply_operator {
                 // It acts as throw when it doesn't have the right arguments.
-                if !matches!(to_run.proper_list().map(|l| l.len()), Some(2)) {
-                    instruction_list.push(Instr::Swi(SWI_THROW));
-                    return None;
+                if !matches!(to_run.proper_list().map(|l| l.len()), Some(3)) {
+                    return Some(Event::Break);
                 }
 
+                eprintln!(
+                    "apply operator expressions code {} env {}",
+                    self.get_sexp(&srcloc, address_list[0]),
+                    self.get_sexp(&srcloc, address_list[1])
+                );
                 // Old env ptr in r4.
                 instruction_list.push(Instr::Addi(Register::R(4), Register::R(7), 0));
                 // Load new env ptr.
@@ -604,7 +598,7 @@ impl Emu {
                 ));
                 // Navigate to the first child.
                 instruction_list.push(Instr::Ldr(Register::R(1), Register::R(0), 4));
-                // R1 = head(first(computed))
+                // R1 = head(rest(computed))
                 instruction_list.push(Instr::Ldr(Register::R(1), Register::R(1), 0));
                 // R0 = first(computed)
                 instruction_list.push(Instr::Ldr(Register::R(0), Register::R(0), 0));
@@ -612,31 +606,24 @@ impl Emu {
                 instruction_list.push(Instr::Addi(Register::R(7), Register::R(0), 0));
                 // Call with env argument.
                 instruction_list.push(Instr::Addi(Register::R(0), Register::R(7), 0));
-                // Perform the apply
+                // Perform the apply.  This could dispatch to existing code by hash match
+                // even if the apply operator was synthetic.  That'd allow gdb to come
+                // back to identifiable space.
                 instruction_list.push(Instr::Swi(SWI_DISPATCH_NEW_CODE));
                 instruction_list.push(Instr::Bx(Register::R(1)));
                 // Reset the env from r4.
                 instruction_list.push(Instr::Addi(Register::R(7), Register::R(4), 0));
             } else {
+                eprintln!("dispatch non-apply");
                 // Load the operator address into R0
-                instruction_list.push(Instr::Ldr(
-                    Register::R(0),
-                    Register::R(6),
-                    8,
-                ));
-                instruction_list.push(Instr::Swi(SWI_PRINT_EXPR));
-
+                instruction_list.push(Instr::Ldr(Register::R(0), Register::R(6), 8));
                 // Load the args address into R1
-                instruction_list.push(Instr::Ldr(
-                    Register::R(1),
-                    Register::R(6),
-                    4,
-                ));
-
+                instruction_list.push(Instr::Ldr(Register::R(1), Register::R(6), 4));
                 // Emit dispatch instruction.
                 instruction_list.push(Instr::Swi(SWI_DISPATCH_INSTRUCTION));
             }
 
+            eprintln!("emit epilog");
             instruction_list.push(Instr::Ldr(Register::R(4), Register::SP, 0));
             instruction_list.push(Instr::Ldr(Register::R(5), Register::SP, 4));
             instruction_list.push(Instr::Ldr(Register::R(6), Register::SP, 8));
@@ -661,12 +648,23 @@ impl Emu {
             for (i, instr) in instruction_list.iter().enumerate() {
                 let mut encoded = Vec::new();
                 instr.encode(&mut encoded, &mut relocations, "");
-                self.mem.write_u32(new_code_address + (i * 4) as u32, (encoded[0] as u32 | (encoded[1] as u32) << 8 | (encoded[2] as u32) << 16 | (encoded[3] as u32) << 24) as u32);
+                self.mem.write_u32(
+                    new_code_address + (i * 4) as u32,
+                    (encoded[0] as u32
+                        | (encoded[1] as u32) << 8
+                        | (encoded[2] as u32) << 16
+                        | (encoded[3] as u32) << 24) as u32,
+                );
             }
 
             self.cpu.reg_set(Mode::User, reg::LR, current_pc + 8);
             self.cpu.reg_set(Mode::User, reg::PC, current_pc + 4);
             self.cpu.reg_set(Mode::User, 1, new_code_address + 12);
+            eprintln!(
+                "after dispatch new code, PC={} R1={}",
+                self.cpu.reg_get(Mode::User, reg::PC),
+                self.cpu.reg_get(Mode::User, 1)
+            );
             None
         } else if value == SWI_DISPATCH_INSTRUCTION {
             // Grab the sexp for this operation.

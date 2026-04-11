@@ -5,7 +5,7 @@ use std::rc::Rc;
 use argh::FromArgs;
 use clvmr::{run_program, Allocator, NodePtr};
 
-use crate::classic::clvm_tools::binutils::assemble_from_ir;
+use crate::classic::clvm_tools::binutils::assemble;
 use crate::classic::clvm_tools::comp_input::RunAndCompileInputData;
 use crate::classic::clvm_tools::ir::reader::read_ir;
 use crate::classic::clvm_tools::stages::run;
@@ -98,11 +98,11 @@ pub fn compile_to_arm_elf(args: &Args) -> Result<(Vec<u8>, HashMap<String, Strin
         let compiled = compile_file(&mut allocator, runner, opts, &argfile, &mut symbol_table)
             .map_err(|e| format!("failed to compile chialisp: {e:?}"))?;
         build_symbol_table_mut(&mut symbol_table, &compiled);
+        eprintln!("compiled {compiled}");
         Rc::new(compiled)
     } else {
         let compile_invoke_code = run(&mut allocator);
-        let ir_src = read_ir(&argfile, 0).map_err(|e| format!("failed to parse clvm {e:?}"))?;
-        let assembled_sexp = assemble_from_ir(&mut allocator, Rc::new(ir_src))
+        let assembled_sexp = assemble(&mut allocator, &argfile)
             .map_err(|e| format!("failed to assemble clvm {e:?}"))?;
         let input_sexp = allocator
             .new_pair(assembled_sexp, NodePtr::NIL)
@@ -120,19 +120,15 @@ pub fn compile_to_arm_elf(args: &Args) -> Result<(Vec<u8>, HashMap<String, Strin
         .map_err(|e| format!("failed to convert clvm {e:?}"))?
     };
 
-    let mut env = parse_sexp(srcloc.clone(), args.env.bytes())
-        .map_err(|e| format!("failed to parse clvm program: {e:?}"))?;
-
-    if env.is_empty() {
-        env.push(Rc::new(SExp::Nil(srcloc.clone())));
-    }
+    let env_node = assemble(&mut allocator, &args.env).map_err(|e| format!("failed to read env: {e:?}"))?;
+    let env = convert_from_clvm_rs(&mut allocator, Srcloc::start("*env*"), env_node).map_err(|e| format!("failed to convert env program: {e:?}"))?;
     let symbols = Rc::new(symbol_table.clone());
 
     let program = Program::new(
         &args.filename,
         &args.output,
         compiled,
-        env[0].clone(),
+        env,
         TARGET_ADDR,
         symbols.clone(),
     )

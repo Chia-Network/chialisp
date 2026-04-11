@@ -31,6 +31,7 @@ use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero, Bytes, Bytes
 use crate::classic::clvm::casts::bigint_to_bytes_clvm;
 use crate::compiler::clvm::{sha256tree, truthy};
 use crate::compiler::debug::armjit::load::{write_u32, ElfLoader};
+use crate::compiler::prims::prim_map;
 use crate::compiler::sexp::{decode_string, parse_sexp, Atom, NodeSel, SExp, SelectNode, ThisNode};
 use crate::compiler::srcloc::Srcloc;
 use crate::util::Number;
@@ -1187,6 +1188,7 @@ impl Constant {
 }
 
 pub struct Program {
+    prims: Rc<HashMap<Vec<u8>, Rc<SExp>>>,
     target_addr: u32,
     finished_insns: Vec<Instr>,
     first_label: String,
@@ -1221,7 +1223,7 @@ fn hexify(v: &[u8]) -> String {
     Bytes::new(Some(BytesFromType::Raw(v.to_vec()))).hex()
 }
 
-fn is_atom(a: Rc<SExp>) -> Option<(Srcloc, Vec<u8>)> {
+fn is_atom(prims: &HashMap<Vec<u8>, Rc<SExp>>, a: Rc<SExp>) -> Option<(Srcloc, Vec<u8>)> {
     match a.borrow() {
         SExp::Cons(_, _, _) => None,
         SExp::Nil(l) => Some((l.clone(), Vec::new())),
@@ -1234,13 +1236,13 @@ fn is_atom(a: Rc<SExp>) -> Option<(Srcloc, Vec<u8>)> {
     }
 }
 
-fn is_wrapped_atom(a: Rc<SExp>) -> Option<(Srcloc, Vec<u8>)> {
+fn is_wrapped_atom(prims: &HashMap<Vec<u8>, Rc<SExp>>, a: Rc<SExp>) -> Option<(Srcloc, Vec<u8>)> {
     if let Ok(NodeSel::Cons((l, a), n)) = NodeSel::Cons(Atom::Here(()), ThisNode).select_nodes(a) {
         if truthy(n) {
             return None;
         }
 
-        return Some((l, a));
+        return Some((l.clone(), a));
     }
 
     None
@@ -1381,9 +1383,7 @@ impl Program {
             let env_comp = self.add(Rc::new(lst[1].clone()));
             for i in &[
                 Instr::Addi(Register::R(0), Register::R(7), 0),
-                Instr::Swi(SWI_PRINT_EXPR),
                 Instr::Bl(env_comp),
-                Instr::Swi(SWI_PRINT_EXPR),
                 Instr::Addi(Register::R(4), Register::R(0), 0),
             ] {
                 self.push(source_sexp.clone(), loc, i.clone());
@@ -1409,9 +1409,7 @@ impl Program {
 
             for i in &[
                 Instr::Addi(Register::R(0), Register::R(7), 0),
-                Instr::Swi(SWI_PRINT_EXPR),
                 Instr::Bl(code_comp),
-                Instr::Swi(SWI_PRINT_EXPR),
                 Instr::Addi(Register::R(7), Register::R(4), 0),
                 Instr::Swi(SWI_DISPATCH_NEW_CODE),
                 Instr::Bx(Register::R(1)),
@@ -1710,10 +1708,10 @@ impl Program {
             // Translate body.
             match sexp.borrow() {
                 SExp::Cons(l, a, b) => {
-                    if let Some((loc, a)) = is_atom(a.clone()) {
+                    if let Some((loc, a)) = is_atom(&self.prims, a.clone()) {
                         // do quoted operator
                         self.do_operator(&loc, &hash, &a, b.clone(), false, sexp.clone());
-                    } else if let Some((loc, a)) = is_wrapped_atom(a.clone()) {
+                    } else if let Some((loc, a)) = is_wrapped_atom(&self.prims, a.clone()) {
                         // do unquoted operator
                         self.do_operator(&loc, &hash, &a, b.clone(), true, sexp.clone());
                     } else {
@@ -2027,6 +2025,7 @@ impl Program {
         let dwarf_builder =
             DwarfBuilder::new(filename, elf_output, target_addr, symbol_table.clone());
         let mut p: Program = Program {
+            prims: prim_map(),
             finished_insns: Vec::new(),
             first_label: Default::default(),
             env_label: Default::default(),
