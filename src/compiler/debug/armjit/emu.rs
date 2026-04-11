@@ -28,7 +28,7 @@ use crate::classic::clvm::__type_compatibility__::{bi_zero, Bytes, BytesFromType
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 
 use crate::compiler::cldb::is_print_request;
-use crate::compiler::clvm::{apply_op, sha256tree};
+use crate::compiler::clvm::{apply_op, run, sha256tree};
 use crate::compiler::compiler::{compile_file, is_apply, DefaultCompilerOpts};
 use crate::compiler::comptypes::CompilerOpts;
 use crate::compiler::debug::armjit::code::{
@@ -498,6 +498,32 @@ impl Emu {
                 return None;
             }
 
+            // Fallback to direct CLVM evaluation for code hashes we don't have compiled
+            // machine code for. This keeps evaluation semantically correct and avoids
+            // malformed synthetic dispatch paths.
+            let alloc_ptr = self.cpu.reg_get(Mode::User, 5);
+            let mut allocator = Allocator::new();
+            match run(
+                &mut allocator,
+                runner.clone(),
+                self.prim_map.clone(),
+                to_run.clone(),
+                env.clone(),
+                None,
+                None,
+            ) {
+                Ok(res) => {
+                    let write_result = self.allocate_and_write(alloc_ptr, res);
+                    self.cpu.reg_set(Mode::User, 0, write_result);
+                    self.cpu.reg_set(Mode::User, 1, current_pc + 8);
+                    self.cpu.reg_set(Mode::User, reg::PC, current_pc + 4);
+                    return None;
+                }
+                Err(e) => {
+                    eprintln!("error running fallback dispatch expression: {e:?}");
+                }
+            }
+
             eprintln!("not found: running code {to_run} with env {env}");
             let mut address_list = vec![];
             let mut value_addr = r0_value;
@@ -597,23 +623,17 @@ impl Emu {
                 );
                 // Old env ptr in r4.
                 instruction_list.push(Instr::Addi(Register::R(4), Register::R(7), 0));
-                // Load new env ptr.
-                // It's the second head of this cons chain.
-                instruction_list.push(Instr::Ldr(
-                    Register::R(0),
-                    Register::PC,
-                    (instruction_list.len() as i32) * 4 - 8,
-                ));
+                // Load computed argument list head from our local thunk frame.
+                instruction_list.push(Instr::Ldr(Register::R(0), Register::R(6), 4));
                 // Navigate to the first child.
                 instruction_list.push(Instr::Ldr(Register::R(1), Register::R(0), 4));
                 // R1 = head(rest(computed))
                 instruction_list.push(Instr::Ldr(Register::R(1), Register::R(1), 0));
                 // R0 = first(computed)
                 instruction_list.push(Instr::Ldr(Register::R(0), Register::R(0), 0));
-                // R5[ENV_PTR] = R1.
-                instruction_list.push(Instr::Addi(Register::R(7), Register::R(0), 0));
-                // Call with env argument.
-                instruction_list.push(Instr::Addi(Register::R(0), Register::R(7), 0));
+                // R7 (current env ptr) = evaluated env from computed apply args.
+                instruction_list.push(Instr::Addi(Register::R(7), Register::R(1), 0));
+                // Keep R0 as evaluated code and dispatch with R7 as env.
                 // Perform the apply.  This could dispatch to existing code by hash match
                 // even if the apply operator was synthetic.  That'd allow gdb to come
                 // back to identifiable space.
