@@ -120,8 +120,10 @@ pub fn compile_to_arm_elf(args: &Args) -> Result<(Vec<u8>, HashMap<String, Strin
         .map_err(|e| format!("failed to convert clvm {e:?}"))?
     };
 
-    let env_node = assemble(&mut allocator, &args.env).map_err(|e| format!("failed to read env: {e:?}"))?;
-    let env = convert_from_clvm_rs(&mut allocator, Srcloc::start("*env*"), env_node).map_err(|e| format!("failed to convert env program: {e:?}"))?;
+    let env_node =
+        assemble(&mut allocator, &args.env).map_err(|e| format!("failed to read env: {e:?}"))?;
+    let env = convert_from_clvm_rs(&mut allocator, Srcloc::start("*env*"), env_node)
+        .map_err(|e| format!("failed to convert env program: {e:?}"))?;
     let symbols = Rc::new(symbol_table.clone());
 
     let program = Program::new(
