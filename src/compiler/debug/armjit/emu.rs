@@ -263,7 +263,7 @@ fn is_apply_operator(sexp: Rc<SExp>) -> bool {
 
 fn is_quote(sexp: &SExp) -> bool {
     if let SExp::Atom(_, a) = sexp {
-        return a == &[1];
+        return a == &[1] || a == b"q";
     }
     false
 }
@@ -397,17 +397,27 @@ impl Emu {
     ) -> Option<Event> {
         let mut allocator = Allocator::new();
         let alloc_ptr = self.cpu.reg_get(Mode::User, 5);
+        // Dynamic synthesized code can carry symbolic operator atoms (e.g. "+" / "q").
+        // Map those through the primitive table before calling the CLVM runner.
+        let resolved_operator = match operator.borrow() {
+            SExp::Atom(l, a) => self
+                .prim_map
+                .get(a)
+                .map(|p| Rc::new(p.with_loc(l.clone())))
+                .unwrap_or_else(|| operator.clone()),
+            _ => operator.clone(),
+        };
         match apply_op(
             &mut allocator,
             runner.clone(),
             srcloc.clone(),
-            operator.clone(),
+            resolved_operator.clone(),
             args.clone(),
         ) {
             Ok(res) => {
                 // Allocate and write back result.
                 let write_result = self.allocate_and_write(alloc_ptr, res.clone());
-                eprintln!("run operator {operator} args {args} => {res}");
+                eprintln!("run operator {resolved_operator} args {args} => {res}");
                 self.cpu.reg_set(Mode::User, 0, write_result);
                 // Increment pc, we handled the operation.
                 let pc = self.cpu.reg_get(Mode::User, reg::PC);
@@ -541,6 +551,8 @@ impl Emu {
                 instruction_list.push(Instr::Ldr(Register::R(0), Register::R(1), (i * 4) as i32));
                 // Now we have the operator argument in R0.  Emit a dispatch instruction.
                 instruction_list.push(Instr::Swi(SWI_DISPATCH_NEW_CODE));
+                // Follow dispatcher-selected code target.
+                instruction_list.push(Instr::Bx(Register::R(1)));
                 // Result is in R0.
                 // Allocate a cons and compose it.
                 instruction_list.push(Instr::Ldr(
@@ -602,6 +614,7 @@ impl Emu {
                 instruction_list.push(Instr::Addi(Register::R(0), Register::R(7), 0));
                 // Perform the apply
                 instruction_list.push(Instr::Swi(SWI_DISPATCH_NEW_CODE));
+                instruction_list.push(Instr::Bx(Register::R(1)));
                 // Reset the env from r4.
                 instruction_list.push(Instr::Addi(Register::R(7), Register::R(4), 0));
             } else {
