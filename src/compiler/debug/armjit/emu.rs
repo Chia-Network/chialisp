@@ -23,7 +23,7 @@ use gdbstub::target::ext::breakpoints::{
 };
 use gdbstub::target::{Target, TargetResult};
 
-use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
+use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, bi_zero};
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 
 use crate::compiler::clvm::{apply_op, sha256tree};
@@ -40,6 +40,7 @@ use crate::compiler::dialect::AcceptedDialect;
 use crate::compiler::sexp::{parse_sexp, SExp};
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::TRunProgram;
+use crate::compiler::debug::u8_from_number;
 
 pub type DynResult<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -355,8 +356,34 @@ impl Emu {
                 self.mem.write_data(v, current_addr + 4);
                 current_addr
             }
-            _ => {
-                todo!();
+            SExp::Nil(_) => {
+                self.mem.write_u32(alloc_ptr, current_addr + 4);
+                self.mem.write_u32(current_addr, 1);
+                current_addr
+            }
+            SExp::Integer(_, i) => {
+                if *i == bi_zero() {
+                    self.mem.write_u32(alloc_ptr, current_addr + 4);
+                    self.mem.write_u32(current_addr, 1);
+                    return current_addr;
+                }
+                let v = u8_from_number(i.clone());
+                let length_to_write = ((v.len() + 3) & !3) as u32;
+                eprintln!("atom length {length_to_write}");
+                eprintln!("current_addr {current_addr:x}");
+                self.mem
+                    .write_u32(alloc_ptr, current_addr + length_to_write + 4);
+                self.mem.write_u32(current_addr, v.len() as u32 * 2 + 1);
+                current_addr
+            }
+            SExp::QuotedString(_, _, v) => {
+                let length_to_write = ((v.len() + 3) & !3) as u32;
+                eprintln!("atom length {length_to_write}");
+                eprintln!("current_addr {current_addr:x}");
+                self.mem
+                    .write_u32(alloc_ptr, current_addr + length_to_write + 4);
+                self.mem.write_u32(current_addr, v.len() as u32 * 2 + 1);
+                current_addr
             }
         }
     }
