@@ -213,7 +213,7 @@ enum BeginEndBlock {
     EndBlock,
 }
 
-trait Encodable {
+pub trait Encodable {
     fn encode(&self, v: &mut Vec<u8>, r: &mut Vec<Relocation>, function: &str);
 }
 
@@ -296,12 +296,12 @@ impl ToU32 for Rm {
     }
 }
 
-enum RelocationKind {
+pub enum RelocationKind {
     Long,
     Branch,
 }
 
-struct Relocation {
+pub struct Relocation {
     kind: RelocationKind,
     function: String,
     code_location: usize,

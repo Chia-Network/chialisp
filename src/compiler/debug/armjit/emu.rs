@@ -31,7 +31,7 @@ use crate::compiler::compiler::{compile_file, is_apply, DefaultCompilerOpts};
 use crate::compiler::comptypes::CompilerOpts;
 use crate::compiler::debug::armjit::code::{
     Instr, Program, Register, NEXT_ALLOC_OFFSET, SWI_DISPATCH_INSTRUCTION, SWI_DISPATCH_NEW_CODE,
-    SWI_DONE, SWI_PRINT_EXPR, SWI_THROW, TARGET_ADDR,
+    SWI_DONE, SWI_PRINT_EXPR, SWI_THROW, TARGET_ADDR, Encodable,
 };
 use crate::compiler::debug::armjit::load::{ElfLoader, EmuSymbolInfo};
 use crate::compiler::debug::armjit::memory::{PagedMemory, TargetMemory};
@@ -445,14 +445,15 @@ impl Emu {
                 return None;
             };
 
-            eprintln!("not found: running code {to_run} with env {env}");
             // Quoted is easy.
             if is_quote_operator(to_run.clone()) {
+                self.cpu.reg_set(Mode::User, 0, self.mem.r32(r0_value + 4));
                 self.cpu.reg_set(Mode::User, 1, current_pc + 8);
                 self.cpu.reg_set(Mode::User, reg::PC, current_pc + 4);
                 return None;
             }
 
+            eprintln!("not found: running code {to_run} with env {env}");
             let mut address_list = vec![];
             let mut value_addr = r0_value;
             while value_addr > 1 && self.mem.r32(value_addr).is_multiple_of(2) {
@@ -461,12 +462,13 @@ impl Emu {
             }
             let apply_operator = is_apply_operator(to_run.clone());
 
-            if value_addr > 1 && !self.mem.r32(value_addr).is_multiple_of(2) {
+            if (value_addr & 1) != 0 && (value_addr >> 1) != 0 {
                 // Not a proper list.
+                eprintln!("not a list {to_run}");
                 return Some(Event::Trap);
             }
 
-            let alloc_address = self.cpu.reg_get(Mode::User, 5) + 4;
+            let alloc_address = self.cpu.reg_get(Mode::User, 5);
             // Structure of data area:
             //                                                offset
             // pointer to next argument                       0
@@ -483,7 +485,7 @@ impl Emu {
             // Pointer to first argument pointer.  Will be fixed up.
             instruction_list.push(Instr::Long(0));
             // Constructed value for operator evaluation.
-            instruction_list.push(Instr::Long(1));
+            instruction_list.push(Instr::Long(0));
             // Operator sexp.
             instruction_list.push(Instr::Long(self.mem.r32(r0_value) as usize));
 
@@ -495,15 +497,16 @@ impl Emu {
             instruction_list.push(Instr::Str(Register::R(5), Register::SP, 4));
             instruction_list.push(Instr::Str(Register::R(6), Register::SP, 8));
             instruction_list.push(Instr::Str(Register::R(7), Register::SP, 12));
+            instruction_list.push(Instr::Subi(Register::R(6), Register::PC, 48));
 
             // Arguments in env are in a proper list.  Emit code to iterate it from end to start,
-            for (i, arg) in address_list.iter().skip(1).enumerate().rev() {
+            for (i, arg) in address_list.iter().enumerate().rev() {
                 instruction_list.push(Instr::Ldr(
                     Register::R(1),
-                    Register::PC,
-                    (instruction_list.len() as i32) * -4 - 12,
+                    Register::R(6),
+                    0,
                 ));
-                instruction_list.push(Instr::Ldr(Register::R(0), Register::R(1), 0));
+                instruction_list.push(Instr::Ldr(Register::R(0), Register::R(1), (i * 4) as i32));
                 // Now we have the operator argument in R0.  Emit a dispatch instruction.
                 instruction_list.push(Instr::Swi(SWI_DISPATCH_NEW_CODE));
                 // Result is in R0.
@@ -513,29 +516,29 @@ impl Emu {
                     Register::R(5),
                     NEXT_ALLOC_OFFSET,
                 ));
+                // Bump r2 to point to the next unallocated space.
+                instruction_list.push(Instr::Addi(Register::R(3), Register::R(2), 8));
+                // Update the allocation ptr.
+                instruction_list.push(Instr::Str(
+                    Register::R(3),
+                    Register::R(5),
+                    NEXT_ALLOC_OFFSET,
+                ));
                 // Set the head of the cons to the newly evaluated argument.
                 instruction_list.push(Instr::Str(Register::R(0), Register::R(2), 0));
                 // Load the cons ptr.
                 instruction_list.push(Instr::Ldr(
                     Register::R(0),
-                    Register::PC,
-                    (instruction_list.len() as i32) * -4 - 8,
+                    Register::R(6),
+                    4,
                 ));
                 // Set the tail
                 instruction_list.push(Instr::Str(Register::R(2), Register::R(0), 4));
                 // Set the new cons ptr
                 instruction_list.push(Instr::Str(
                     Register::R(2),
-                    Register::PC,
-                    (instruction_list.len() as i32) * -4 - 8,
-                ));
-                // Bump r2 to point to the next unallocated space.
-                instruction_list.push(Instr::Addi(Register::R(2), Register::R(0), 8));
-                // Update the allocation ptr.
-                instruction_list.push(Instr::Str(
-                    Register::R(2),
-                    Register::R(5),
-                    NEXT_ALLOC_OFFSET,
+                    Register::R(6),
+                    4,
                 ));
             }
 
@@ -574,15 +577,16 @@ impl Emu {
                 // Load the operator address into R0
                 instruction_list.push(Instr::Ldr(
                     Register::R(0),
-                    Register::PC,
-                    (instruction_list.len() as i32) * -4 - 4,
+                    Register::R(6),
+                    8,
                 ));
+                instruction_list.push(Instr::Swi(SWI_PRINT_EXPR));
 
                 // Load the args address into R1
                 instruction_list.push(Instr::Str(
                     Register::R(1),
-                    Register::PC,
-                    (instruction_list.len() as i32) * -4 - 8,
+                    Register::R(6),
+                    8,
                 ));
 
                 // Emit dispatch instruction.
@@ -599,7 +603,7 @@ impl Emu {
 
             instruction_list[0] =
                 Instr::Long(new_code_address as usize + 4 * instruction_list.len());
-            for arg in address_list.iter() {
+            for arg in address_list.iter().skip(1).rev() {
                 instruction_list.push(Instr::Long(*arg as usize));
             }
 
@@ -608,6 +612,13 @@ impl Emu {
                 alloc_address,
                 (new_code_address + instruction_list.len() as u32 * 4) as u32,
             );
+
+            let mut relocations = Vec::new();
+            for (i, instr) in instruction_list.iter().enumerate() {
+                let mut encoded = Vec::new();
+                instr.encode(&mut encoded, &mut relocations, "");
+                self.mem.write_u32(new_code_address + (i * 4) as u32, (encoded[0] as u32 | (encoded[1] as u32) << 8 | (encoded[2] as u32) << 16 | (encoded[3] as u32) << 24) as u32);
+            }
 
             self.cpu.reg_set(Mode::User, reg::LR, current_pc + 8);
             self.cpu.reg_set(Mode::User, reg::PC, current_pc + 4);
@@ -656,7 +667,7 @@ impl Emu {
                 0 => ((cpsr >> 30) & 1) != 0,
                 10 => ((cpsr >> 31) & 1) == ((cpsr >> 28) & 1),
                 14 => true,
-                _ => todo!(),
+                _ => todo!("match arm condition {match_expression}"),
             };
             if perform_action {
                 let trap_result = self.do_trap(pc, (snoop_instruction & 0xffffff) as usize);
