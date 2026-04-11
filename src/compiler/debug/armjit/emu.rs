@@ -820,6 +820,9 @@ impl Emu {
 impl Emu {
     /// Get an SExp at a specific address.
     fn get_sexp(&self, srcloc: &Srcloc, addr: u32) -> Rc<SExp> {
+        if addr == 0 {
+            return Rc::new(SExp::Nil(srcloc.clone()));
+        }
         let first = self.mem.read_u32(addr);
         if first == 0 || (first & 1) != 0 {
             // Atom

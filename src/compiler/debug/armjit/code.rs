@@ -168,6 +168,7 @@ pub enum Instr {
     Space(usize, u8),
     Add(Register, Register, Register),
     Addi(Register, Register, i32),
+    AddiEq(Register, Register, i32),
     Sub(Register, Register, Register),
     Subi(Register, Register, i32),
     Andi(Register, Register, i32),
@@ -177,7 +178,6 @@ pub enum Instr {
     Str(Register, Register, i32),
     Ldr(Register, Register, i32),
     B(String),
-    BEq(String),
     Bl(String),
     Bx(Register),
     Blx(Register),
@@ -365,6 +365,15 @@ impl Encodable for Instr {
                     | (1 << 25)
                     | (*imm as u32),
             ),
+            Instr::AddiEq(r_d, r_s, imm) => vec_from_u32(
+                v,
+                ArmCond::Equal.to_u32()
+                    | ArmDataOp::Add.to_u32()
+                    | Rn(r_s.clone()).to_u32()
+                    | Rd(r_d.clone()).to_u32()
+                    | (1 << 25)
+                    | (*imm as u32),
+            ),
             Instr::Sub(r_d, r_s, r_a) => vec_from_u32(
                 v,
                 ArmCond::Unconditional.to_u32()
@@ -447,15 +456,6 @@ impl Encodable for Instr {
                     reloc_target: target.clone(),
                 });
                 vec_from_u32(v, ArmCond::Unconditional.to_u32() | 5 << 25);
-            }
-            Instr::BEq(target) => {
-                r.push(Relocation {
-                    kind: RelocationKind::Branch,
-                    function: function.to_string(),
-                    code_location: v.len(),
-                    reloc_target: target.clone(),
-                });
-                vec_from_u32(v, ArmCond::Equal.to_u32() | 5 << 25);
             }
             Instr::Bl(target) => {
                 r.push(Relocation {
@@ -549,6 +549,7 @@ impl fmt::Display for Instr {
             Instr::Label(l) => write!(f, "{l}:"),
             Instr::Add(r_d, r_s, r_a) => write!(f, "  add {r_d}, {r_s}, {r_a}"),
             Instr::Addi(r_d, r_s, imm) => write!(f, "  add {r_d}, {r_s}, #{imm}"),
+            Instr::AddiEq(r_d, r_s, imm) => write!(f, "  addeq {r_d}, {r_s}, #{imm}"),
             Instr::Andi(r_d, r_s, imm) => write!(f, "  and {r_d}, {r_s}, #{imm}"),
             Instr::Sub(r_d, r_s, r_a) => write!(f, "  sub {r_d}, {r_s}, {r_a}"),
             Instr::Subi(r_d, r_s, imm) => write!(f, "  sub {r_d}, {r_s}, #{imm}"),
@@ -576,7 +577,6 @@ impl fmt::Display for Instr {
             Instr::Ldr(r_d, r_a, imm) => write!(f, "  ldr {r_d}, [{r_a}, #{imm}]"),
             Instr::B(l) => write!(f, "  b {l}"),
             Instr::Bl(l) => write!(f, "  bl {l}"),
-            Instr::BEq(l) => write!(f, "  beq {l}"),
             Instr::Bx(r) => write!(f, "  bx {r}"),
             Instr::Blx(r) => write!(f, "  blx {r}"),
             Instr::Lea(r, l) => write!(f, "  ldr {r}, ={l}"),
@@ -1438,15 +1438,20 @@ impl Program {
             let else_label = self.get_code_label(hash);
 
             for i in &[
+                Instr::Addi(Register::R(0), Register::R(7), 0),
+                Instr::Bl(else_clause),
+                Instr::Addi(Register::R(6), Register::R(0), 0),
+                Instr::Addi(Register::R(0), Register::R(7), 0),
+                Instr::Bl(then_clause),
+                Instr::Addi(Register::R(4), Register::R(0), 0),
+                Instr::Addi(Register::R(0), Register::R(7), 0),
                 Instr::Bl(cond_clause),
                 Instr::Cmpi(Register::R(0), 0),
-                Instr::Addi(Register::PC, Register::PC, 20),
+                Instr::AddiEq(Register::R(4), Register::R(6), 0),
                 Instr::Ldr(Register::R(1), Register::R(0), 0),
                 Instr::Cmpi(Register::R(1), 1),
-                Instr::Addi(Register::PC, Register::PC, 8),
-                Instr::Bl(then_clause),
-                Instr::Addi(Register::PC, Register::PC, 0),
-                Instr::Bl(else_clause),
+                Instr::AddiEq(Register::R(4), Register::R(6), 0),
+                Instr::Addi(Register::R(0), Register::R(4), 0),
             ] {
                 self.push(source_sexp.clone(), loc, i.clone());
             }
