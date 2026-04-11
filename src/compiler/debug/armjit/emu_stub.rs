@@ -144,7 +144,7 @@ impl run_blocking::BlockingEventLoop for EmuGdbEventLoop {
                 let stop_reason = match event {
                     Event::Trap => SingleThreadStopReason::Signal(Signal::SIGABRT),
                     Event::DoneStep => SingleThreadStopReason::DoneStep,
-                    Event::Halted => SingleThreadStopReason::Terminated(Signal::SIGSTOP),
+                    Event::Halted => SingleThreadStopReason::Signal(Signal::SIGSTOP),
                     Event::Break => SingleThreadStopReason::SwBreak(()),
                     Event::WatchWrite(addr) => SingleThreadStopReason::Watch {
                         tid: (),
