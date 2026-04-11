@@ -461,6 +461,11 @@ impl Emu {
                 value_addr = self.mem.r32(value_addr + 4);
             }
             let apply_operator = is_apply_operator(to_run.clone());
+            let arg_addresses: Vec<u32> = address_list
+                .iter()
+                .skip(1)
+                .map(|arg_cons_addr| self.mem.r32(*arg_cons_addr))
+                .collect();
 
             if (value_addr & 1) != 0 && (value_addr >> 1) != 0 {
                 // Not a proper list.
@@ -500,7 +505,7 @@ impl Emu {
             instruction_list.push(Instr::Subi(Register::R(6), Register::PC, 48));
 
             // Arguments in env are in a proper list.  Emit code to iterate it from end to start,
-            for (i, arg) in address_list.iter().enumerate().rev() {
+            for i in (0..arg_addresses.len()).rev() {
                 instruction_list.push(Instr::Ldr(
                     Register::R(1),
                     Register::R(6),
@@ -511,7 +516,7 @@ impl Emu {
                 instruction_list.push(Instr::Swi(SWI_DISPATCH_NEW_CODE));
                 // Result is in R0.
                 // Allocate a cons and compose it.
-                instruction_list.push(Instr::Str(
+                instruction_list.push(Instr::Ldr(
                     Register::R(2),
                     Register::R(5),
                     NEXT_ALLOC_OFFSET,
@@ -526,15 +531,14 @@ impl Emu {
                 ));
                 // Set the head of the cons to the newly evaluated argument.
                 instruction_list.push(Instr::Str(Register::R(0), Register::R(2), 0));
-                // Load the cons ptr.
+                // Tail points at the currently built argument list.
                 instruction_list.push(Instr::Ldr(
-                    Register::R(0),
+                    Register::R(3),
                     Register::R(6),
                     4,
                 ));
-                // Set the tail
-                instruction_list.push(Instr::Str(Register::R(2), Register::R(0), 4));
-                // Set the new cons ptr
+                instruction_list.push(Instr::Str(Register::R(3), Register::R(2), 4));
+                // Set the new cons ptr.
                 instruction_list.push(Instr::Str(
                     Register::R(2),
                     Register::R(6),
@@ -583,10 +587,10 @@ impl Emu {
                 instruction_list.push(Instr::Swi(SWI_PRINT_EXPR));
 
                 // Load the args address into R1
-                instruction_list.push(Instr::Str(
+                instruction_list.push(Instr::Ldr(
                     Register::R(1),
                     Register::R(6),
-                    8,
+                    4,
                 ));
 
                 // Emit dispatch instruction.
@@ -603,7 +607,7 @@ impl Emu {
 
             instruction_list[0] =
                 Instr::Long(new_code_address as usize + 4 * instruction_list.len());
-            for arg in address_list.iter().skip(1).rev() {
+            for arg in arg_addresses.iter() {
                 instruction_list.push(Instr::Long(*arg as usize));
             }
 
