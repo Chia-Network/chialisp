@@ -40,6 +40,7 @@ use crate::compiler::debug::armjit::memory::{PagedMemory, TargetMemory};
 use crate::compiler::debug::build_symbol_table_mut;
 use crate::compiler::debug::u8_from_number;
 use crate::compiler::dialect::AcceptedDialect;
+use crate::compiler::prims::primquote;
 use crate::compiler::sexp::{parse_sexp, SExp};
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::TRunProgram;
@@ -85,7 +86,6 @@ pub struct Emu {
     pub clvm_symbols: Rc<HashMap<String, String>>,
     pub jit_symbols: Rc<HashMap<String, EmuSymbolInfo>>,
 
-    pub prim_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>,
     pending_gdb_console_output: Vec<String>,
 }
 
@@ -333,7 +333,6 @@ impl Emu {
             jit_symbols,
             clvm_symbols,
 
-            prim_map: DefaultCompilerOpts::new("*emu*").prim_map(),
             pending_gdb_console_output: Vec::new(),
         })
     }
@@ -498,7 +497,32 @@ impl Emu {
                 return None;
             }
 
+            if let Ok(number) = to_run.get_number() {
+                // Path retrieval.
+                let new_expr = Rc::new(SExp::Cons(
+                    srcloc.clone(),
+                    Rc::new(primquote(srcloc.clone(), to_run)),
+                    Rc::new(SExp::Cons(
+                        srcloc.clone(),
+                        Rc::new(primquote(srcloc.clone(), env)),
+                        Rc::new(SExp::Nil(srcloc.clone())),
+                    )),
+                ));
+                if let Some(error) = self.do_apply_op(
+                    runner,
+                    &srcloc,
+                    Rc::new(SExp::Atom(srcloc.clone(), vec![2])),
+                    new_expr,
+                ) {
+                    return Some(error);
+                }
+                self.cpu.reg_set(Mode::User, 1, current_pc + 8);
+                self.cpu.reg_set(Mode::User, reg::PC, current_pc + 4);
+                return None;
+            }
+
             eprintln!("not found: running code {to_run} with env {env}");
+
             let mut address_list = vec![];
             let mut value_addr = r0_value;
             while value_addr != 0 && self.mem.r32(value_addr).is_multiple_of(2) {
@@ -599,21 +623,15 @@ impl Emu {
                 instruction_list.push(Instr::Addi(Register::R(4), Register::R(7), 0));
                 // Load new env ptr.
                 // It's the second head of this cons chain.
-                instruction_list.push(Instr::Ldr(
-                    Register::R(0),
-                    Register::PC,
-                    (instruction_list.len() as i32) * 4 - 8,
-                ));
-                // Navigate to the first child.
+                instruction_list.push(Instr::Ldr(Register::R(0), Register::R(6), 4));
+                instruction_list.push(Instr::Swi(SWI_PRINT_EXPR));
+                // Navigate to the first(rest(computed)) for the environment.
                 instruction_list.push(Instr::Ldr(Register::R(1), Register::R(0), 4));
-                // R1 = head(rest(computed))
                 instruction_list.push(Instr::Ldr(Register::R(1), Register::R(1), 0));
                 // R0 = first(computed)
                 instruction_list.push(Instr::Ldr(Register::R(0), Register::R(0), 0));
-                // R5[ENV_PTR] = R1.
-                instruction_list.push(Instr::Addi(Register::R(7), Register::R(0), 0));
-                // Call with env argument.
-                instruction_list.push(Instr::Addi(Register::R(0), Register::R(7), 0));
+                // R7 = env
+                instruction_list.push(Instr::Addi(Register::R(7), Register::R(1), 0));
                 // Perform the apply.  This could dispatch to existing code by hash match
                 // even if the apply operator was synthetic.  That'd allow gdb to come
                 // back to identifiable space.

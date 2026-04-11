@@ -1439,14 +1439,14 @@ impl Program {
 
             for i in &[
                 Instr::Bl(cond_clause),
+                Instr::Cmpi(Register::R(0), 0),
+                Instr::Addi(Register::PC, Register::PC, 20),
                 Instr::Ldr(Register::R(1), Register::R(0), 0),
                 Instr::Cmpi(Register::R(1), 1),
-                Instr::BEq(else_label.clone()),
+                Instr::Addi(Register::PC, Register::PC, 8),
                 Instr::Bl(then_clause),
-                // Else clause acts as a function for relocation purposes.
-                Instr::Globl(else_label.clone()),
-                Instr::Label(else_label),
-                Instr::B(else_clause),
+                Instr::Addi(Register::PC, Register::PC, 0),
+                Instr::Bl(else_clause),
             ] {
                 self.push(source_sexp.clone(), loc, i.clone());
             }
