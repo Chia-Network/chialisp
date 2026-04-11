@@ -1,5 +1,6 @@
 // Based on https://github.com/daniel5151/gdbstub/blob/master/examples/armv4t/emu.rs
 
+use num_bigint::ToBigInt;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fs;
@@ -26,6 +27,7 @@ use gdbstub::target::{Target, TargetResult};
 use crate::classic::clvm::__type_compatibility__::{bi_zero, Bytes, BytesFromType};
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 
+use crate::compiler::cldb::is_print_request;
 use crate::compiler::clvm::{apply_op, sha256tree};
 use crate::compiler::compiler::{compile_file, is_apply, DefaultCompilerOpts};
 use crate::compiler::comptypes::CompilerOpts;
@@ -278,6 +280,18 @@ fn is_quote_operator(sexp: Rc<SExp>) -> bool {
     false
 }
 
+fn match_printing(operator: Rc<SExp>, sexp: Rc<SExp>) -> Option<Rc<SExp>> {
+    if let Ok(v) = operator.get_number() {
+        if v == 34_u32.to_bigint().unwrap() {
+            if let Some((_, outputs)) = is_print_request(&sexp) {
+                return Some(outputs);
+            }
+        }
+    }
+
+    None
+}
+
 impl Emu {
     pub fn new(
         program_elf: &[u8],
@@ -397,27 +411,21 @@ impl Emu {
     ) -> Option<Event> {
         let mut allocator = Allocator::new();
         let alloc_ptr = self.cpu.reg_get(Mode::User, 5);
-        // Dynamic synthesized code can carry symbolic operator atoms (e.g. "+" / "q").
-        // Map those through the primitive table before calling the CLVM runner.
-        let resolved_operator = match operator.borrow() {
-            SExp::Atom(l, a) => self
-                .prim_map
-                .get(a)
-                .map(|p| Rc::new(p.with_loc(l.clone())))
-                .unwrap_or_else(|| operator.clone()),
-            _ => operator.clone(),
-        };
+        if let Some(printing) = match_printing(operator.clone(), args.clone()) {
+            self.pending_gdb_console_output
+                .push(format!("DEBUG: {printing}"));
+        }
         match apply_op(
             &mut allocator,
             runner.clone(),
             srcloc.clone(),
-            resolved_operator.clone(),
+            operator.clone(),
             args.clone(),
         ) {
             Ok(res) => {
                 // Allocate and write back result.
                 let write_result = self.allocate_and_write(alloc_ptr, res.clone());
-                eprintln!("run operator {resolved_operator} args {args} => {res}");
+                eprintln!("run operator {operator} args {args} => {res}");
                 self.cpu.reg_set(Mode::User, 0, write_result);
                 // Increment pc, we handled the operation.
                 let pc = self.cpu.reg_get(Mode::User, reg::PC);
