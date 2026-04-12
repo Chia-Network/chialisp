@@ -53,6 +53,7 @@ const HLE_RETURN_ADDR: u32 = 0x12345678;
 pub enum Event {
     DoneStep,
     Halted,
+    Output,
     Trap,
     Break,
     WatchWrite(u32),
@@ -402,9 +403,11 @@ impl Emu {
     ) -> Option<Event> {
         let mut allocator = Allocator::new();
         let alloc_ptr = self.cpu.reg_get(Mode::User, 5);
+        let mut debug = false;
         if let Some(printing) = match_printing(operator.clone(), args.clone()) {
             self.pending_gdb_console_output
                 .push(format!("DEBUG: {printing}"));
+            debug = true;
         }
         match apply_op(
             &mut allocator,
@@ -420,7 +423,11 @@ impl Emu {
                 // Increment pc, we handled the operation.
                 let pc = self.cpu.reg_get(Mode::User, reg::PC);
                 self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
-                None
+                if debug {
+                    Some(Event::Output)
+                } else {
+                    None
+                }
             }
             Err(e) => {
                 eprintln!("error simulating instruction: {e:?}");
@@ -687,7 +694,7 @@ impl Emu {
             self.pending_gdb_console_output
                 .push(format!("CLVM({label:x}): r{register} = {printed_expr}"));
             self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
-            None
+            Some(Event::Output)
         } else {
             self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
             Some(Event::Break)

@@ -145,6 +145,7 @@ impl run_blocking::BlockingEventLoop for EmuGdbEventLoop {
                     Event::Trap => SingleThreadStopReason::Signal(Signal::SIGABRT),
                     Event::DoneStep => SingleThreadStopReason::DoneStep,
                     Event::Halted => SingleThreadStopReason::Signal(Signal::SIGSTOP),
+                    Event::Output => SingleThreadStopReason::Signal(Signal::SIGUSR1),
                     Event::Break => SingleThreadStopReason::SwBreak(()),
                     Event::WatchWrite(addr) => SingleThreadStopReason::Watch {
                         tid: (),

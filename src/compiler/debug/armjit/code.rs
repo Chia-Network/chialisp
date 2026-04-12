@@ -1393,7 +1393,6 @@ impl Program {
                 self.push(source_sexp.clone(), loc, i.clone());
             }
 
-            /*
             if let Some(quoted_code) = dequote(Rc::new(lst[0].clone())) {
                 // Short circuit by reading out the quoted code and running it.
                 let code_comp = self.add(quoted_code.clone());
@@ -1401,26 +1400,23 @@ impl Program {
                 for i in &[
                     Instr::Addi(Register::R(7), Register::R(4), 0),
                     Instr::Addi(Register::R(0), Register::R(7), 0),
-                    Instr::Swi(SWI_PRINT_EXPR),
                     Instr::Bl(quoted_code.to_string()),
-                    Instr::Swi(SWI_PRINT_EXPR),
                 ] {
                     self.push(source_sexp.clone(), loc, i.clone());
                 }
             } else {
-            */
-            let code_comp = self.add(Rc::new(lst[0].clone()));
+                let code_comp = self.add(Rc::new(lst[0].clone()));
 
-            for i in &[
-                Instr::Addi(Register::R(0), Register::R(7), 0),
-                Instr::Bl(code_comp),
-                Instr::Addi(Register::R(7), Register::R(4), 0),
-                Instr::Swi(SWI_DISPATCH_NEW_CODE),
-                Instr::Bx(Register::R(1)),
-            ] {
-                self.push(source_sexp.clone(), loc, i.clone());
+                for i in &[
+                    Instr::Addi(Register::R(0), Register::R(7), 0),
+                    Instr::Bl(code_comp),
+                    Instr::Addi(Register::R(7), Register::R(4), 0),
+                    Instr::Swi(SWI_DISPATCH_NEW_CODE),
+                    Instr::Bx(Register::R(1)),
+                ] {
+                    self.push(source_sexp.clone(), loc, i.clone());
+                }
             }
-            //}
 
             for i in &[
                 // Reload the old env.
@@ -1429,41 +1425,39 @@ impl Program {
                 self.push(source_sexp.clone(), loc, i.clone());
             }
             return;
-            /*
-            } else if a == &[3] {
-                // If operator
-                if lst.len() != 3 {
-                    return self.do_throw(source_sexp, loc, hash);
-                }
+        } else if a == &[3] {
+            // If operator
+            if lst.len() != 3 {
+                return self.do_throw(source_sexp, loc, hash);
+            }
 
-                let else_clause = self.add(Rc::new(lst[2].clone()));
-                let then_clause = self.add(Rc::new(lst[1].clone()));
-                let cond_clause = self.add(Rc::new(lst[0].clone()));
+            let else_clause = self.add(Rc::new(lst[2].clone()));
+            let then_clause = self.add(Rc::new(lst[1].clone()));
+            let cond_clause = self.add(Rc::new(lst[0].clone()));
 
-                for i in &[
-                    Instr::Addi(Register::R(0), Register::R(7), 0),
-                    Instr::Bl(else_clause),
-                    Instr::Swi(swi_print(0, 35)),
-                    Instr::Addi(Register::R(6), Register::R(0), 0),
-                    Instr::Addi(Register::R(0), Register::R(7), 0),
-                    Instr::Bl(then_clause),
-                    Instr::Swi(swi_print(0, 34)),
-                    Instr::Addi(Register::R(4), Register::R(0), 0),
-                    Instr::Addi(Register::R(0), Register::R(7), 0),
-                    Instr::Bl(cond_clause),
-                    Instr::Swi(swi_print(0, 33)),
-                    Instr::Cmpi(Register::R(0), 0),
-                    Instr::AddiEq(Register::R(4), Register::R(6), 0),
-                    Instr::Ldr(Register::R(1), Register::R(0), 0),
-                    Instr::Cmpi(Register::R(1), 1),
-                    Instr::AddiEq(Register::R(4), Register::R(6), 0),
-                    Instr::Addi(Register::R(0), Register::R(4), 0),
-                    Instr::Swi(swi_print(0, 32)),
-                ] {
-                    self.push(source_sexp.clone(), loc, i.clone());
-                }
-                return;
-                */
+            for i in &[
+                Instr::Addi(Register::R(0), Register::R(7), 0),
+                Instr::Bl(else_clause),
+                Instr::Swi(swi_print(0, 35)),
+                Instr::Addi(Register::R(6), Register::R(0), 0),
+                Instr::Addi(Register::R(0), Register::R(7), 0),
+                Instr::Bl(then_clause),
+                Instr::Swi(swi_print(0, 34)),
+                Instr::Addi(Register::R(4), Register::R(0), 0),
+                Instr::Addi(Register::R(0), Register::R(7), 0),
+                Instr::Bl(cond_clause),
+                Instr::Swi(swi_print(0, 33)),
+                Instr::Cmpi(Register::R(0), 0),
+                Instr::AddiEq(Register::R(4), Register::R(6), 0),
+                Instr::Ldr(Register::R(1), Register::R(0), 0),
+                Instr::Cmpi(Register::R(1), 1),
+                Instr::AddiEq(Register::R(4), Register::R(6), 0),
+                Instr::Addi(Register::R(0), Register::R(4), 0),
+                Instr::Swi(swi_print(0, 32)),
+            ] {
+                self.push(source_sexp.clone(), loc, i.clone());
+            }
+            return;
         } else if a == &[4] {
             // Cons operator
             if lst.len() != 2 {
