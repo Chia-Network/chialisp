@@ -2240,15 +2240,6 @@ impl Program {
             })
             .collect();
 
-        // Declare friendly function labels once. These provide stable names in
-        // debuggers while code remains keyed by hash labels internally.
-        let mut declared_colloquial_names = HashSet::new();
-        for funname in self.function_symbols.values() {
-            if declared_colloquial_names.insert(funname.clone()) {
-                decls.push((funname.clone(), Decl::function().global().into()));
-            }
-        }
-
         // Declare .debug_aranges
         decls.push((
             ".debug_aranges".to_string(),
@@ -2263,22 +2254,12 @@ impl Program {
         let mut in_function = None;
 
         let mut produced_code = 0;
-        let mut defined_colloquial_names = HashSet::new();
         let mut handle_def_end = |target_addr: u32,
-                                  defined_colloquial_names: &mut HashSet<String>,
                                   function_body: &mut Vec<u8>,
                                   in_function: &mut Option<String>|
          -> Result<(), String> {
             if let Some(defname) = in_function.as_ref() {
                 if !function_body.is_empty() {
-                    if let Some(funname) = self.function_symbols.get(defname) {
-                        if funname != defname && !defined_colloquial_names.contains(funname) {
-                            obj.define(funname, vec![]).map_err(|e| {
-                                format!("define colloquial symbol {funname}: {e:?}")
-                            })?;
-                            defined_colloquial_names.insert(funname.clone());
-                        }
-                    }
                     eprintln!("obj define {defname}");
                     produced_code += function_body.len();
                     obj.define(defname, function_body.clone())
@@ -2294,7 +2275,6 @@ impl Program {
             if let Instr::Globl(name) = i {
                 handle_def_end(
                     self.target_addr,
-                    &mut defined_colloquial_names,
                     &mut function_body,
                     &mut in_function,
                 )?;
@@ -2308,7 +2288,6 @@ impl Program {
 
         handle_def_end(
             self.target_addr,
-            &mut defined_colloquial_names,
             &mut function_body,
             &mut in_function,
         )?;

@@ -299,6 +299,9 @@ impl<'a> ElfLoader<'a> {
     // Return the symbol list from the elf executable.
     pub fn get_symbols(&self) -> HashMap<String, EmuSymbolInfo> {
         if !self.symbol_string_table.is_empty() {
+            let is_tree_hash = |s: &str| -> bool {
+                s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+            };
             let get_string = |idx: u32| -> Vec<u8> {
                 self.symbol_string_table
                     .iter()
@@ -316,20 +319,26 @@ impl<'a> ElfLoader<'a> {
                         .contains(SectionHeaderFlags::SHF_EXECINSTR)
                     {
                         let raw = decode_string(&sym_string);
-                        let stripped = if let Some(stripped) =
+                        let hash_from_label = if let Some(hash_candidate) =
                             raw.strip_prefix('_').and_then(|s| s.split('_').next())
                         {
-                            stripped.to_string()
+                            if is_tree_hash(hash_candidate) {
+                                Some(hash_candidate.to_string())
+                            } else {
+                                None
+                            }
                         } else {
-                            raw.clone()
+                            None
                         };
                         let sym_info = EmuSymbolInfo {
-                            stripped: stripped.clone(),
+                            stripped: hash_from_label.clone().unwrap_or_else(|| raw.clone()),
                             raw: raw.clone(),
                             address: self.sections[es.st_shndx as usize] + es.st_value,
                         };
                         result.insert(raw, sym_info.clone());
-                        result.insert(stripped, sym_info);
+                        if let Some(stripped) = hash_from_label {
+                            result.insert(stripped, sym_info);
+                        }
                     }
                 }
             }
