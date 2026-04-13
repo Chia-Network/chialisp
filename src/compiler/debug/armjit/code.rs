@@ -1575,8 +1575,8 @@ fn append_function_alias_symbols(
     };
 
     let shstrtab_hdr = section_header(e_shstrndx).ok_or("invalid shstrtab section header")?;
-    let shstrtab_off = read_u32_le(elf_bytes, shstrtab_hdr + 16).ok_or("shstrtab offset missing")?
-        as usize;
+    let shstrtab_off =
+        read_u32_le(elf_bytes, shstrtab_hdr + 16).ok_or("shstrtab offset missing")? as usize;
     let shstrtab_size =
         read_u32_le(elf_bytes, shstrtab_hdr + 20).ok_or("shstrtab size missing")? as usize;
     if shstrtab_off + shstrtab_size > elf_bytes.len() {
@@ -2489,8 +2489,7 @@ impl Program {
             .read_to_end(&mut result_buf)
             .map_err(|e| format!("capture {e:?}"))?;
 
-        let added_aliases =
-            append_function_alias_symbols(&mut result_buf, &self.function_symbols)?;
+        let added_aliases = append_function_alias_symbols(&mut result_buf, &self.function_symbols)?;
         if added_aliases > 0 {
             eprintln!("added {added_aliases} function alias symbols for debugger lookup");
         }
