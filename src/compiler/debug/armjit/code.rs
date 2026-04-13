@@ -611,16 +611,252 @@ struct DwarfBuilder {
     target_addr: u32,
 
     symbol_table: Rc<HashMap<String, String>>,
+    named_functions: Vec<NamedFunctionInfo>,
+    assigned_named_functions: HashSet<String>,
 
     dwarf: Dwarf,
     frame_table: FrameTable,
     cfi_cie_id: Option<CieId>,
 }
 
+#[derive(Clone, Debug)]
+struct NamedFunctionInfo {
+    name: String,
+    args: String,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+}
+
+impl NamedFunctionInfo {
+    fn contains_line(&self, line: usize) -> bool {
+        if let (Some(start), Some(end)) = (self.start_line, self.end_line) {
+            return line >= start && line <= end;
+        }
+
+        false
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SourceSpan {
+    start_line: usize,
+    end_line: usize,
+}
+
+#[derive(Clone, Debug)]
+struct SourceDefunInfo {
+    name: String,
+    args: String,
+    start_line: usize,
+    end_line: usize,
+}
+
 struct VariableLocationInfo<'a> {
     pub beginning: u64,
     pub end: u64,
     start_expr: &'a dyn Fn() -> Expression,
+}
+
+fn is_hex_hash(text: &str) -> bool {
+    text.len() == 64 && text.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn parse_defun_signature(line: &str) -> Option<(String, String)> {
+    let marker = "(defun ";
+    let start = line.find(marker)?;
+    let rest = &line[start + marker.len()..];
+    let mut name = String::new();
+    let mut consumed = 0;
+    for ch in rest.chars() {
+        if ch.is_whitespace() || ch == ')' || ch == '(' {
+            break;
+        }
+        name.push(ch);
+        consumed += ch.len_utf8();
+    }
+    if name.is_empty() {
+        return None;
+    }
+
+    let after_name = &rest[consumed..];
+    let args_start = after_name.find('(')?;
+    let args_text = &after_name[args_start..];
+    let mut depth = 0_i32;
+    for (idx, ch) in args_text.char_indices() {
+        if ch == '(' {
+            depth += 1;
+        } else if ch == ')' {
+            depth -= 1;
+            if depth == 0 {
+                return Some((name, args_text[..=idx].to_string()));
+            }
+        }
+    }
+
+    None
+}
+
+fn parse_defun_name(line: &str) -> Option<String> {
+    parse_defun_signature(line).map(|(name, _)| name)
+}
+
+fn parse_source_markers(value: &str) -> Option<Vec<(usize, usize)>> {
+    let bytes = value.as_bytes();
+    let mut markers = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'(' {
+            i += 1;
+            continue;
+        }
+
+        let mut line_end = i + 1;
+        while line_end < bytes.len() && bytes[line_end].is_ascii_digit() {
+            line_end += 1;
+        }
+        if line_end == i + 1 || line_end >= bytes.len() || bytes[line_end] != b')' {
+            i += 1;
+            continue;
+        }
+
+        if line_end + 1 >= bytes.len() || bytes[line_end + 1] != b':' {
+            i += 1;
+            continue;
+        }
+
+        let mut col_end = line_end + 2;
+        while col_end < bytes.len() && bytes[col_end].is_ascii_digit() {
+            col_end += 1;
+        }
+        if col_end == line_end + 2 {
+            i += 1;
+            continue;
+        }
+
+        let line = std::str::from_utf8(&bytes[i + 1..line_end])
+            .ok()?
+            .parse::<usize>()
+            .ok()?;
+        let col = std::str::from_utf8(&bytes[line_end + 2..col_end])
+            .ok()?
+            .parse::<usize>()
+            .ok()?;
+        markers.push((line, col));
+        i = col_end;
+    }
+
+    if markers.is_empty() {
+        None
+    } else {
+        Some(markers)
+    }
+}
+
+fn parse_source_span(value: &str) -> Option<SourceSpan> {
+    let markers = parse_source_markers(value)?;
+    let (start_line, _) = markers.first().copied()?;
+    let (end_line, _) = markers.last().copied()?;
+    Some(SourceSpan {
+        start_line,
+        end_line,
+    })
+}
+
+fn is_marked_source_location(value: &str) -> bool {
+    parse_source_span(value).is_some()
+}
+
+fn collect_source_defuns(source_lines: &[String]) -> Vec<SourceDefunInfo> {
+    let mut starts = Vec::new();
+    for (idx, line) in source_lines.iter().enumerate() {
+        if let Some((name, args)) = parse_defun_signature(line) {
+            starts.push((idx + 1, name, args));
+        }
+    }
+
+    let mut result = Vec::new();
+    for (idx, (start_line, name, args)) in starts.iter().enumerate() {
+        let end_line = if let Some((next_start, _, _)) = starts.get(idx + 1) {
+            next_start.saturating_sub(1)
+        } else {
+            source_lines.len().max(*start_line)
+        };
+        result.push(SourceDefunInfo {
+            name: name.clone(),
+            args: args.clone(),
+            start_line: *start_line,
+            end_line,
+        });
+    }
+
+    result
+}
+
+fn collect_named_functions(
+    source_lines: &[String],
+    symbol_table: &HashMap<String, String>,
+) -> Vec<NamedFunctionInfo> {
+    let source_defuns = collect_source_defuns(source_lines);
+    let mut by_name: HashMap<String, SourceDefunInfo> = HashMap::new();
+    let mut by_args: HashMap<String, Vec<String>> = HashMap::new();
+    for defun in source_defuns.iter() {
+        by_name.insert(defun.name.clone(), defun.clone());
+        by_args
+            .entry(defun.args.clone())
+            .or_default()
+            .push(defun.name.clone());
+    }
+
+    let mut named_functions = Vec::new();
+    for (key, args_value) in symbol_table.iter() {
+        if !key.ends_with("_arguments") {
+            continue;
+        }
+        let hash = &key[..key.len().saturating_sub("_arguments".len())];
+        if !is_hex_hash(hash) {
+            continue;
+        }
+
+        let name_from_hash = symbol_table
+            .get(hash)
+            .filter(|v| !is_marked_source_location(v) && !v.starts_with("__chia__"))
+            .cloned();
+        let inferred_name = name_from_hash.or_else(|| {
+            by_args
+                .get(args_value)
+                .and_then(|matches| (matches.len() == 1).then(|| matches[0].clone()))
+        });
+        let Some(name) = inferred_name else {
+            continue;
+        };
+
+        if name.starts_with("__chia__") {
+            continue;
+        }
+
+        let left_env_key = format!("{hash}_left_env");
+        let args = if symbol_table.get(&left_env_key).map(|v| v == "1") == Some(true) {
+            format!("(() . {args_value})")
+        } else {
+            args_value.clone()
+        };
+        let range = by_name.get(&name);
+        named_functions.push(NamedFunctionInfo {
+            name,
+            args,
+            start_line: range.map(|r| r.start_line),
+            end_line: range.map(|r| r.end_line),
+        });
+    }
+
+    named_functions.sort_by(|a, b| {
+        a.start_line
+            .cmp(&b.start_line)
+            .then_with(|| a.end_line.cmp(&b.end_line))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    named_functions.dedup_by(|a, b| a.name == b.name);
+    named_functions
 }
 
 #[derive(Default, Clone, Debug)]
@@ -669,12 +905,109 @@ impl gimli::write::Writer for DwarfSectionWriter {
 }
 
 impl DwarfBuilder {
+    fn pick_name_for_label(
+        &mut self,
+        label: &str,
+        fallback_name: Option<String>,
+        fallback_args: Option<String>,
+    ) -> Option<(String, String)> {
+        let mut stripped: Vec<u8> = label.bytes().skip(1).take_while(|b| *b != b'_').collect();
+        let hash_key = decode_string(&stripped);
+
+        let mut left_stripped = stripped.clone();
+        left_stripped.append(&mut b"_left_env".to_vec());
+        let left_env = self
+            .symbol_table
+            .get(&decode_string(&left_stripped))
+            .map(|res| res == "1")
+            .unwrap_or(false);
+        stripped.append(&mut b"_arguments".to_vec());
+        let args_from_symbol = self.symbol_table.get(&decode_string(&stripped)).cloned();
+
+        if let Some(name) = self.symbol_table.get(&hash_key).cloned() {
+            if !is_marked_source_location(&name) && !name.starts_with("__chia__") {
+                let args = args_from_symbol.unwrap_or_else(|| {
+                    if left_env {
+                        "(() . ENV)".to_string()
+                    } else {
+                        "ENV".to_string()
+                    }
+                });
+                return Some((name, args));
+            }
+        }
+
+        if let Some(SourceSpan {
+            start_line,
+            end_line,
+        }) = self
+            .symbol_table
+            .get(&hash_key)
+            .and_then(|v| parse_source_span(v))
+        {
+            for info in self.named_functions.iter() {
+                let inside = info.contains_line(start_line) || info.contains_line(end_line);
+                if inside && !self.assigned_named_functions.contains(&info.name) {
+                    self.assigned_named_functions.insert(info.name.clone());
+                    return Some((info.name.clone(), info.args.clone()));
+                }
+            }
+
+            if let Some((best_name, best_args)) = self
+                .named_functions
+                .iter()
+                .filter(|info| !self.assigned_named_functions.contains(&info.name))
+                .map(|info| {
+                    let distance =
+                        if let (Some(start), Some(end)) = (info.start_line, info.end_line) {
+                            if start_line < start {
+                                start - start_line
+                            } else if start_line > end {
+                                start_line - end
+                            } else {
+                                0
+                            }
+                        } else {
+                            usize::MAX / 4
+                        };
+                    (distance, info.name.clone(), info.args.clone())
+                })
+                .min_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)))
+                .map(|(_, n, a)| (n, a))
+            {
+                self.assigned_named_functions.insert(best_name.clone());
+                return Some((best_name, best_args));
+            }
+        }
+
+        let fallback_name = fallback_name?;
+        let args = fallback_args.unwrap_or_else(|| {
+            if left_env {
+                "(() . ENV)".to_string()
+            } else {
+                "ENV".to_string()
+            }
+        });
+        if self.assigned_named_functions.contains(&fallback_name)
+            || self
+                .named_functions
+                .iter()
+                .any(|f| f.name == fallback_name && f.start_line.is_some())
+        {
+            return None;
+        }
+        self.assigned_named_functions.insert(fallback_name.clone());
+        Some((fallback_name, args))
+    }
+
     fn new(
         filename: &str,
         elf_output: &str,
         target_addr: u32,
         symbol_table: Rc<HashMap<String, String>>,
     ) -> Self {
+        let source_text = fs::read_to_string(filename).unwrap_or_default();
+        let source_lines = source_text.lines().map(str::to_string).collect::<Vec<_>>();
         let mut path = PathBuf::new();
         path.push(filename);
         path.pop();
@@ -763,6 +1096,8 @@ impl DwarfBuilder {
             pointer_type: type_id,
             u32_type: base_type_id,
             symbol_table,
+            named_functions: Vec::new(),
+            assigned_named_functions: HashSet::new(),
             dwarf,
             frame_table: FrameTable::default(),
             cfi_cie_id: None,
@@ -779,6 +1114,7 @@ impl DwarfBuilder {
         let synthetic_source_path = obj.synthetic_source_path.clone();
         let (_, synthetic_file_id) = obj.add_file(&synthetic_source_path);
         obj.synthetic_file_id = Some(synthetic_file_id);
+        obj.named_functions = collect_named_functions(&source_lines, obj.symbol_table.as_ref());
 
         obj
     }
@@ -897,43 +1233,8 @@ impl DwarfBuilder {
             .end_sequence((addr - self.seq_addr_start) as u64);
     }
 
-    fn match_function(&self, label: &str) -> Option<(String, String)> {
-        let mut stripped: Vec<u8> = label.bytes().skip(1).take_while(|b| *b != b'_').collect();
-        if let Some(name) = self.symbol_table.get(&decode_string(&stripped)).cloned() {
-            let mut left_stripped = stripped.clone();
-            left_stripped.append(&mut b"_left_env".to_vec());
-            let left_env = if let Some(res) = self
-                .symbol_table
-                .get(&decode_string(&left_stripped))
-                .cloned()
-            {
-                res == "1"
-            } else {
-                false
-            };
-            eprintln!("{name} left_env {left_env}");
-            stripped.append(&mut b"_arguments".to_vec());
-            let args = self
-                .symbol_table
-                .get(&decode_string(&stripped))
-                .map(|s| {
-                    if left_env {
-                        format!("(() . {s})")
-                    } else {
-                        s.to_string()
-                    }
-                })
-                .unwrap_or_else(|| {
-                    if left_env {
-                        "(() . ENV)".to_string()
-                    } else {
-                        "ENV".to_string()
-                    }
-                });
-            return Some((name, args));
-        }
-
-        None
+    fn match_function(&mut self, label: &str) -> Option<(String, String)> {
+        self.pick_name_for_label(label, None, None)
     }
 
     fn add_arguments(
@@ -1041,9 +1342,45 @@ impl DwarfBuilder {
             .expect("CFI CIE should be initialized for unwind info");
         self.frame_table.add_fde(cfi_cie_id, fde);
 
+        let stripped_label = decode_string(
+            &label
+                .bytes()
+                .skip(1)
+                .take_while(|b| *b != b'_')
+                .collect::<Vec<u8>>(),
+        );
+        let fallback_name = self
+            .symbol_table
+            .get(&stripped_label)
+            .filter(|name| !is_marked_source_location(name) && !name.starts_with("__chia__"))
+            .cloned();
+        let fallback_args = fallback_name.as_ref().map(|_| {
+            let args_key = format!("{stripped_label}_arguments");
+            let left_key = format!("{stripped_label}_left_env");
+            let left_env = self
+                .symbol_table
+                .get(&left_key)
+                .map(|res| res == "1")
+                .unwrap_or(false);
+            self.symbol_table
+                .get(&args_key)
+                .map(|s| {
+                    if left_env {
+                        format!("(() . {s})")
+                    } else {
+                        s.to_string()
+                    }
+                })
+                .unwrap_or_else(|| {
+                    if left_env {
+                        "(() . ENV)".to_string()
+                    } else {
+                        "ENV".to_string()
+                    }
+                })
+        });
         let (name, args) = self
-            .match_function(&label)
-            .map(|c| c.clone())
+            .pick_name_for_label(label, fallback_name, fallback_args)
             .unwrap_or_else(|| (label.to_string(), "ENV".to_string()));
 
         // We'll make 3 subprograms to represent where the current arguments can be arrived
@@ -1055,7 +1392,7 @@ impl DwarfBuilder {
 
             // Frame pointer for the function.
             let mut fbexpr_mid = Expression::new();
-            fbexpr_mid.op_breg(gimli::Register(13), 0);
+            fbexpr_mid.op_breg(gimli::Register(11), 0);
             let mut loclist = Vec::new();
             loclist.push(Location::StartEnd {
                 begin: Address::Constant(addr as u64),
@@ -1661,7 +1998,12 @@ impl Program {
                     self.current_addr - self.start_addr,
                 ) {
                     eprintln!("end block with function {function_name}");
-                    self.function_symbols.insert(label.clone(), function_name);
+                    if function_name != *label
+                        && !function_name.starts_with('_')
+                        && !is_marked_source_location(&function_name)
+                    {
+                        self.function_symbols.insert(label.clone(), function_name);
+                    }
                 }
                 self.current_symbol = None;
             }
@@ -1898,9 +2240,13 @@ impl Program {
             })
             .collect();
 
-        // Declare functions as imports and later link the labels they belong to.
-        for (label, funname) in self.function_symbols.iter() {
-            decls.push((funname.clone(), Decl::function().into()));
+        // Declare friendly function labels once. These provide stable names in
+        // debuggers while code remains keyed by hash labels internally.
+        let mut declared_colloquial_names = HashSet::new();
+        for funname in self.function_symbols.values() {
+            if declared_colloquial_names.insert(funname.clone()) {
+                decls.push((funname.clone(), Decl::function().global().into()));
+            }
         }
 
         // Declare .debug_aranges
@@ -1926,15 +2272,17 @@ impl Program {
             if let Some(defname) = in_function.as_ref() {
                 if !function_body.is_empty() {
                     if let Some(funname) = self.function_symbols.get(defname) {
-                        if !defined_colloquial_names.contains(funname) {
-                            obj.define(funname, vec![]).map_err(|e| format!("{e:?}"))?;
+                        if funname != defname && !defined_colloquial_names.contains(funname) {
+                            obj.define(funname, vec![]).map_err(|e| {
+                                format!("define colloquial symbol {funname}: {e:?}")
+                            })?;
                             defined_colloquial_names.insert(funname.clone());
                         }
                     }
                     eprintln!("obj define {defname}");
                     produced_code += function_body.len();
                     obj.define(defname, function_body.clone())
-                        .map_err(|e| format!("{e:?}"))?;
+                        .map_err(|e| format!("define function body {defname}: {e:?}"))?;
                     *function_body = Vec::new();
                 }
             }
@@ -1980,7 +2328,7 @@ impl Program {
 
         for (name, bytes) in sections.iter() {
             obj.define(name, bytes.clone())
-                .map_err(|e| format!("{e:?}"))?;
+                .map_err(|e| format!("define section {name}: {e:?}"))?;
         }
 
         for r in relocations.iter() {
