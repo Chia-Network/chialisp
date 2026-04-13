@@ -2273,11 +2273,7 @@ impl Program {
 
         for i in self.finished_insns.iter() {
             if let Instr::Globl(name) = i {
-                handle_def_end(
-                    self.target_addr,
-                    &mut function_body,
-                    &mut in_function,
-                )?;
+                handle_def_end(self.target_addr, &mut function_body, &mut in_function)?;
                 in_function = Some(name.to_string());
             }
 
@@ -2286,11 +2282,7 @@ impl Program {
             }
         }
 
-        handle_def_end(
-            self.target_addr,
-            &mut function_body,
-            &mut in_function,
-        )?;
+        handle_def_end(self.target_addr, &mut function_body, &mut in_function)?;
         // Create .debug_aranges
         let mut debug_aranges: Vec<u8> = (0..0x20).map(|_| 0).collect();
         write_u32(&mut debug_aranges, 0, 0x1c);

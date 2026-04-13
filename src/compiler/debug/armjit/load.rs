@@ -299,9 +299,8 @@ impl<'a> ElfLoader<'a> {
     // Return the symbol list from the elf executable.
     pub fn get_symbols(&self) -> HashMap<String, EmuSymbolInfo> {
         if !self.symbol_string_table.is_empty() {
-            let is_tree_hash = |s: &str| -> bool {
-                s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
-            };
+            let is_tree_hash =
+                |s: &str| -> bool { s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()) };
             let get_string = |idx: u32| -> Vec<u8> {
                 self.symbol_string_table
                     .iter()
