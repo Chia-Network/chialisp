@@ -1272,10 +1272,12 @@ impl DwarfBuilder {
 
                 let mut i = bi_one();
                 while i < here {
-                    expr.op_deref();
                     if (path.clone() & i.clone()) != bi_zero() {
+                        // Cons cells store car/cdr pointers at [ptr] and [ptr+4].
+                        // For right branches, step to cdr slot before dereferencing.
                         expr.op_plus_uconst(4);
                     }
+                    expr.op_deref();
                     i <<= 1;
                 }
 
@@ -1384,9 +1386,74 @@ impl DwarfBuilder {
             .unwrap_or_else(|| (label.to_string(), "ENV".to_string()));
 
         // GDB is unstable on this target when resolving named breakpoints through
-        // subprogram DIEs. Keep unwind info, but skip named subprogram DIE emission.
-        // User-facing function names are provided via ELF aliases at link output time.
-        let _ = (addr, size, args);
+        // broad subprogram DIE emission. Keep user-facing symbol lookup via ELF aliases,
+        // and only emit subprogram/argument DIEs for the non-inline mandelbrot entry
+        // points we need argument decoding for.
+        let emit_args_for_name =
+            matches!(name.as_str(), "scan" | "basic-scanline" | "escape-steps");
+        let subprogram_id = if emit_args_for_name {
+            let unit = self.dwarf.units.get_mut(self.unit_id);
+            let subprogram_id = unit.add(unit.root(), DW_TAG_subprogram);
+            let mut sub_ent = unit.get_mut(subprogram_id);
+            // Keep the DIE name unique/stable while breakpoints are resolved from ELF
+            // aliases. GDB still uses this DIE for argument decoding by PC range.
+            sub_ent.set(
+                DW_AT_name,
+                AttributeValue::String(label.as_bytes().to_vec()),
+            );
+            sub_ent.set(
+                DW_AT_low_pc,
+                AttributeValue::Address(Address::Constant(
+                    (self.target_addr as usize + addr) as u64,
+                )),
+            );
+            sub_ent.set(
+                DW_AT_high_pc,
+                AttributeValue::Address(Address::Constant(
+                    (self.target_addr as usize + addr + size) as u64,
+                )),
+            );
+            Some(subprogram_id)
+        } else {
+            None
+        };
+
+        if let Some(subprogram_id) = subprogram_id {
+            if let Some(parsed_args) = parse_argument_list(&args) {
+                let self_u32_type = self.u32_type;
+                let early_reg_closure = move || {
+                    let mut early_reg_expr = Expression::new();
+                    // Before the function prologue copies ENV into r7, incoming ENV is in r0.
+                    early_reg_expr.op_regval_type(gimli::Register(0), self_u32_type);
+                    early_reg_expr
+                };
+                let frame_closure = || {
+                    let mut frame_expr = Expression::new();
+                    // After prologue setup, ENV is held in r7 for the body.
+                    frame_expr.op_regval_type(gimli::Register(7), self_u32_type);
+                    frame_expr
+                };
+
+                let locations = vec![
+                    VariableLocationInfo {
+                        beginning: addr as u64,
+                        end: addr as u64 + 0x1c,
+                        start_expr: &early_reg_closure,
+                    },
+                    VariableLocationInfo {
+                        beginning: addr as u64 + 0x1c,
+                        end: (addr + size) as u64 - 2 * 4,
+                        start_expr: &frame_closure,
+                    },
+                    VariableLocationInfo {
+                        beginning: (addr + size) as u64 - 2 * 4,
+                        end: (addr + size) as u64,
+                        start_expr: &early_reg_closure,
+                    },
+                ];
+                self.add_arguments(subprogram_id, &locations, bi_one(), bi_zero(), parsed_args);
+            }
+        }
 
         Some(name)
     }
@@ -1534,14 +1601,15 @@ struct ElfSymbolCore {
 
 fn append_function_alias_symbols(
     elf_bytes: &mut Vec<u8>,
-    function_symbols: &HashMap<String, String>,
+    alias_symbols: &HashMap<String, String>,
+    alias_value_adjustments: &HashMap<String, u32>,
 ) -> Result<usize, String> {
-    if function_symbols.is_empty() {
+    if alias_symbols.is_empty() {
         return Ok(0);
     }
 
     let mut aliases = HashMap::<String, String>::new();
-    for (code_symbol, friendly_name) in function_symbols.iter() {
+    for (code_symbol, friendly_name) in alias_symbols.iter() {
         if friendly_name.starts_with('_')
             || friendly_name.starts_with("__chia__")
             || is_marked_source_location(friendly_name)
@@ -1678,7 +1746,11 @@ fn append_function_alias_symbols(
             continue;
         }
         if let Some(src) = symbol_by_name.get(code_symbol) {
-            additions.push((friendly_name.clone(), *src));
+            let mut adjusted = *src;
+            if let Some(delta) = alias_value_adjustments.get(code_symbol) {
+                adjusted.st_value = adjusted.st_value.saturating_add(*delta);
+            }
+            additions.push((friendly_name.clone(), adjusted));
         }
     }
     if additions.is_empty() {
@@ -1723,6 +1795,70 @@ fn append_function_alias_symbols(
     write_u32(elf_bytes, symtab_hdr + 20, new_symtab.len() as u32);
 
     Ok(additions.len())
+}
+
+fn parse_argument_list(args: &str) -> Option<Rc<SExp>> {
+    let srcloc = Srcloc::start("*args*");
+    let parsed = parse_sexp(srcloc, args.bytes()).ok()?;
+    if parsed.len() != 1 {
+        return None;
+    }
+    parsed.into_iter().next()
+}
+
+fn maybe_decode_i32_atom(arg: &Rc<SExp>) -> Option<i32> {
+    match arg.borrow() {
+        SExp::Nil(_) => Some(0),
+        SExp::Atom(_, bytes) if bytes.is_empty() => Some(0),
+        SExp::Atom(_, bytes) => {
+            if bytes.len() > 4 {
+                return None;
+            }
+            let mut value: i32 = 0;
+            for b in bytes.iter() {
+                value = (value << 8) | (*b as i32);
+            }
+            let bits = (bytes.len() * 8) as u32;
+            if bits > 0 && (value & (1 << (bits - 1))) != 0 {
+                Some(value - (1 << bits))
+            } else {
+                Some(value)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn read_env_i32_values(arg: &Rc<SExp>) -> Option<Vec<i32>> {
+    let mut values = Vec::new();
+    let mut cur = arg.clone();
+    loop {
+        match cur.borrow() {
+            SExp::Nil(_) => break,
+            SExp::Cons(_, left, right) => {
+                values.push(maybe_decode_i32_atom(left)?);
+                cur = right.clone();
+            }
+            _ => return None,
+        }
+    }
+    Some(values)
+}
+
+fn strip_left_env_wrapper(args: Rc<SExp>) -> Rc<SExp> {
+    match args.as_ref() {
+        SExp::Cons(_, left, right) => match (left.as_ref(), right.as_ref()) {
+            // Canonical left-env wrapper is (() . <real-args>)
+            (SExp::Nil(_), _) => right.clone(),
+            (SExp::Cons(_, ll, lr), _)
+                if matches!(ll.as_ref(), SExp::Nil(_)) && matches!(lr.as_ref(), SExp::Nil(_)) =>
+            {
+                right.clone()
+            }
+            _ => args,
+        },
+        _ => args,
+    }
 }
 
 fn is_atom(prims: &HashMap<Vec<u8>, Rc<SExp>>, a: Rc<SExp>) -> Option<(Srcloc, Vec<u8>)> {
@@ -2151,16 +2287,16 @@ impl Program {
         }
 
         if end_block {
-            self.current_addr = (self.current_addr + 15) & !15;
+            let function_end = self.current_addr + size;
             if let Some(label) = self.current_symbol.as_ref() {
                 eprintln!(
                     "end block for label {label} {:x}-{:x}",
-                    self.start_addr, self.current_addr
+                    self.start_addr, function_end
                 );
                 if let Some(function_name) = self.dwarf_builder.decorate_function(
                     label,
                     self.start_addr,
-                    self.current_addr - self.start_addr,
+                    function_end - self.start_addr,
                 ) {
                     eprintln!("end block with function {function_name}");
                     if function_name != *label
@@ -2489,7 +2625,13 @@ impl Program {
             .read_to_end(&mut result_buf)
             .map_err(|e| format!("capture {e:?}"))?;
 
-        let added_aliases = append_function_alias_symbols(&mut result_buf, &self.function_symbols)?;
+        let alias_symbols = self.function_symbols.clone();
+        let alias_value_adjustments = HashMap::new();
+        let added_aliases = append_function_alias_symbols(
+            &mut result_buf,
+            &alias_symbols,
+            &alias_value_adjustments,
+        )?;
         if added_aliases > 0 {
             eprintln!("added {added_aliases} function alias symbols for debugger lookup");
         }
