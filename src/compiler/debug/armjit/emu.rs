@@ -691,8 +691,13 @@ impl Emu {
             let label = (value >> 8);
             let r0_value = self.cpu.reg_get(Mode::User, register as u8);
             let printed_expr = self.get_sexp(&srcloc, r0_value).to_string();
-            self.pending_gdb_console_output
-                .push(format!("CLVM({label:x}): r{register} = {printed_expr}"));
+            if label != 0 || register != 0 {
+                self.pending_gdb_console_output
+                    .push(format!("CLVM({label:x}): r{register} = {printed_expr}"));
+            } else {
+                self.pending_gdb_console_output
+                    .push(format!("CLVM: {printed_expr}"));
+            }
             self.cpu.reg_set(Mode::User, reg::PC, pc + 4);
             Some(Event::Output)
         } else {
