@@ -971,10 +971,10 @@ impl DwarfBuilder {
 
                 let mut i = bi_one();
                 while i < here {
-                    expr.op_deref();
                     if (path.clone() & i.clone()) != bi_zero() {
                         expr.op_plus_uconst(4);
                     }
+                    expr.op_deref();
                     i <<= 1;
                 }
 
