@@ -1383,31 +1383,10 @@ impl DwarfBuilder {
             .pick_name_for_label(label, fallback_name, fallback_args)
             .unwrap_or_else(|| (label.to_string(), "ENV".to_string()));
 
-        let emit_subprogram_die = !name.starts_with('_')
-            && !name.starts_with("__chia__")
-            && !is_marked_source_location(&name);
-        let subprogram_id = if emit_subprogram_die {
-            let unit = self.dwarf.units.get_mut(self.unit_id);
-            let subprogram_id = unit.add(unit.root(), DW_TAG_subprogram);
-            let mut sub_ent = unit.get_mut(subprogram_id);
-            sub_ent.set(DW_AT_name, AttributeValue::String(name.as_bytes().to_vec()));
-            sub_ent.set(
-                DW_AT_low_pc,
-                AttributeValue::Address(Address::Constant(
-                    (self.target_addr as usize + addr) as u64,
-                )),
-            );
-            sub_ent.set(
-                DW_AT_high_pc,
-                AttributeValue::Address(Address::Constant(
-                    (self.target_addr as usize + addr + size) as u64,
-                )),
-            );
-            Some(subprogram_id)
-        } else {
-            None
-        };
-        let _ = (subprogram_id, args);
+        // GDB is unstable on this target when resolving named breakpoints through
+        // subprogram DIEs. Keep unwind info, but skip named subprogram DIE emission.
+        // User-facing function names are provided via ELF aliases at link output time.
+        let _ = (addr, size, args);
 
         Some(name)
     }
@@ -1503,6 +1482,247 @@ impl fmt::Display for Program {
 
 fn hexify(v: &[u8]) -> String {
     Bytes::new(Some(BytesFromType::Raw(v.to_vec()))).hex()
+}
+
+fn read_u16_le(data: &[u8], offset: usize) -> Option<u16> {
+    if offset + 2 > data.len() {
+        return None;
+    }
+    Some((data[offset] as u16) | ((data[offset + 1] as u16) << 8))
+}
+
+fn read_u32_le(data: &[u8], offset: usize) -> Option<u32> {
+    if offset + 4 > data.len() {
+        return None;
+    }
+    Some(
+        (data[offset] as u32)
+            | ((data[offset + 1] as u32) << 8)
+            | ((data[offset + 2] as u32) << 16)
+            | ((data[offset + 3] as u32) << 24),
+    )
+}
+
+fn read_string_at(table: &[u8], offset: usize) -> Option<String> {
+    if offset >= table.len() {
+        return None;
+    }
+    let bytes: Vec<u8> = table
+        .iter()
+        .skip(offset)
+        .take_while(|b| **b != 0)
+        .copied()
+        .collect();
+    Some(decode_string(&bytes))
+}
+
+fn align_up(value: usize, align: usize) -> usize {
+    if align <= 1 {
+        return value;
+    }
+    ((value + align - 1) / align) * align
+}
+
+#[derive(Clone, Copy)]
+struct ElfSymbolCore {
+    st_value: u32,
+    st_size: u32,
+    st_info: u8,
+    st_other: u8,
+    st_shndx: u16,
+}
+
+fn append_function_alias_symbols(
+    elf_bytes: &mut Vec<u8>,
+    function_symbols: &HashMap<String, String>,
+) -> Result<usize, String> {
+    if function_symbols.is_empty() {
+        return Ok(0);
+    }
+
+    let mut aliases = HashMap::<String, String>::new();
+    for (code_symbol, friendly_name) in function_symbols.iter() {
+        if friendly_name.starts_with('_')
+            || friendly_name.starts_with("__chia__")
+            || is_marked_source_location(friendly_name)
+        {
+            continue;
+        }
+        aliases
+            .entry(friendly_name.clone())
+            .or_insert_with(|| code_symbol.clone());
+    }
+    if aliases.is_empty() {
+        return Ok(0);
+    }
+
+    // ELF32 header offsets.
+    let e_shoff = read_u32_le(elf_bytes, 32).ok_or("elf header missing e_shoff")? as usize;
+    let e_shentsize = read_u16_le(elf_bytes, 46).ok_or("elf header missing e_shentsize")? as usize;
+    let e_shnum = read_u16_le(elf_bytes, 48).ok_or("elf header missing e_shnum")? as usize;
+    let e_shstrndx = read_u16_le(elf_bytes, 50).ok_or("elf header missing e_shstrndx")? as usize;
+    if e_shentsize == 0 || e_shnum == 0 || e_shstrndx >= e_shnum {
+        return Ok(0);
+    }
+
+    let section_header = |idx: usize| -> Option<usize> {
+        let offset = e_shoff + idx * e_shentsize;
+        if offset + e_shentsize <= elf_bytes.len() {
+            Some(offset)
+        } else {
+            None
+        }
+    };
+
+    let shstrtab_hdr = section_header(e_shstrndx).ok_or("invalid shstrtab section header")?;
+    let shstrtab_off = read_u32_le(elf_bytes, shstrtab_hdr + 16).ok_or("shstrtab offset missing")?
+        as usize;
+    let shstrtab_size =
+        read_u32_le(elf_bytes, shstrtab_hdr + 20).ok_or("shstrtab size missing")? as usize;
+    if shstrtab_off + shstrtab_size > elf_bytes.len() {
+        return Err("shstrtab extends beyond file".to_string());
+    }
+    let shstrtab = elf_bytes[shstrtab_off..(shstrtab_off + shstrtab_size)].to_vec();
+
+    let mut symtab_index = None;
+    let mut strtab_index = None;
+    for idx in 0..e_shnum {
+        let Some(shoff) = section_header(idx) else {
+            continue;
+        };
+        let Some(name_off) = read_u32_le(elf_bytes, shoff) else {
+            continue;
+        };
+        let Some(name) = read_string_at(&shstrtab, name_off as usize) else {
+            continue;
+        };
+        if name == ".symtab" {
+            symtab_index = Some(idx);
+        } else if name == ".strtab" {
+            strtab_index = Some(idx);
+        }
+    }
+
+    let (Some(symtab_idx), Some(strtab_idx)) = (symtab_index, strtab_index) else {
+        return Ok(0);
+    };
+
+    let symtab_hdr = section_header(symtab_idx).ok_or("invalid symtab header")?;
+    let strtab_hdr = section_header(strtab_idx).ok_or("invalid strtab header")?;
+
+    let symtab_off =
+        read_u32_le(elf_bytes, symtab_hdr + 16).ok_or("symtab offset missing")? as usize;
+    let symtab_size =
+        read_u32_le(elf_bytes, symtab_hdr + 20).ok_or("symtab size missing")? as usize;
+    let symtab_align =
+        read_u32_le(elf_bytes, symtab_hdr + 32).ok_or("symtab align missing")? as usize;
+    let symtab_entsize =
+        read_u32_le(elf_bytes, symtab_hdr + 36).ok_or("symtab entsize missing")? as usize;
+    let strtab_off =
+        read_u32_le(elf_bytes, strtab_hdr + 16).ok_or("strtab offset missing")? as usize;
+    let strtab_size =
+        read_u32_le(elf_bytes, strtab_hdr + 20).ok_or("strtab size missing")? as usize;
+    let strtab_align =
+        read_u32_le(elf_bytes, strtab_hdr + 32).ok_or("strtab align missing")? as usize;
+
+    if symtab_entsize != 16 {
+        return Err(format!("unexpected symtab entry size: {symtab_entsize}"));
+    }
+    if symtab_off + symtab_size > elf_bytes.len() || strtab_off + strtab_size > elf_bytes.len() {
+        return Err("symtab/strtab extends beyond file".to_string());
+    }
+
+    let old_symtab = elf_bytes[symtab_off..(symtab_off + symtab_size)].to_vec();
+    let old_strtab = elf_bytes[strtab_off..(strtab_off + strtab_size)].to_vec();
+
+    let mut existing_names = HashSet::new();
+    let mut symbol_by_name = HashMap::<String, ElfSymbolCore>::new();
+    for idx in 0..(old_symtab.len() / symtab_entsize) {
+        let off = idx * symtab_entsize;
+        let Some(st_name) = read_u32_le(&old_symtab, off) else {
+            continue;
+        };
+        let Some(name) = read_string_at(&old_strtab, st_name as usize) else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        existing_names.insert(name.clone());
+        let Some(st_value) = read_u32_le(&old_symtab, off + 4) else {
+            continue;
+        };
+        let Some(st_size) = read_u32_le(&old_symtab, off + 8) else {
+            continue;
+        };
+        let st_info = old_symtab[off + 12];
+        let st_other = old_symtab[off + 13];
+        let Some(st_shndx) = read_u16_le(&old_symtab, off + 14) else {
+            continue;
+        };
+        symbol_by_name.insert(
+            name,
+            ElfSymbolCore {
+                st_value,
+                st_size,
+                st_info,
+                st_other,
+                st_shndx,
+            },
+        );
+    }
+
+    let mut additions = Vec::<(String, ElfSymbolCore)>::new();
+    for (friendly_name, code_symbol) in aliases.iter() {
+        if existing_names.contains(friendly_name) {
+            continue;
+        }
+        if let Some(src) = symbol_by_name.get(code_symbol) {
+            additions.push((friendly_name.clone(), *src));
+        }
+    }
+    if additions.is_empty() {
+        return Ok(0);
+    }
+
+    let mut new_strtab = old_strtab.clone();
+    let mut new_symtab = old_symtab.clone();
+    for (friendly_name, src) in additions.iter() {
+        let name_offset = new_strtab.len() as u32;
+        new_strtab.extend_from_slice(friendly_name.as_bytes());
+        new_strtab.push(0);
+
+        let mut entry = [0_u8; 16];
+        write_u32(&mut entry, 0, name_offset);
+        write_u32(&mut entry, 4, src.st_value);
+        write_u32(&mut entry, 8, src.st_size);
+        entry[12] = src.st_info;
+        entry[13] = src.st_other;
+        entry[14] = (src.st_shndx & 0xff) as u8;
+        entry[15] = ((src.st_shndx >> 8) & 0xff) as u8;
+        new_symtab.extend_from_slice(&entry);
+    }
+
+    let strtab_align = if strtab_align == 0 { 1 } else { strtab_align };
+    let symtab_align = if symtab_align == 0 { 1 } else { symtab_align };
+    let strtab_new_off = align_up(elf_bytes.len(), strtab_align);
+    if strtab_new_off > elf_bytes.len() {
+        elf_bytes.resize(strtab_new_off, 0);
+    }
+    elf_bytes.extend_from_slice(&new_strtab);
+
+    let symtab_new_off = align_up(elf_bytes.len(), symtab_align);
+    if symtab_new_off > elf_bytes.len() {
+        elf_bytes.resize(symtab_new_off, 0);
+    }
+    elf_bytes.extend_from_slice(&new_symtab);
+
+    write_u32(elf_bytes, strtab_hdr + 16, strtab_new_off as u32);
+    write_u32(elf_bytes, strtab_hdr + 20, new_strtab.len() as u32);
+    write_u32(elf_bytes, symtab_hdr + 16, symtab_new_off as u32);
+    write_u32(elf_bytes, symtab_hdr + 20, new_symtab.len() as u32);
+
+    Ok(additions.len())
 }
 
 fn is_atom(prims: &HashMap<Vec<u8>, Rc<SExp>>, a: Rc<SExp>) -> Option<(Srcloc, Vec<u8>)> {
@@ -2268,6 +2488,12 @@ impl Program {
         reread_file
             .read_to_end(&mut result_buf)
             .map_err(|e| format!("capture {e:?}"))?;
+
+        let added_aliases =
+            append_function_alias_symbols(&mut result_buf, &self.function_symbols)?;
+        if added_aliases > 0 {
+            eprintln!("added {added_aliases} function alias symbols for debugger lookup");
+        }
 
         // Patch up
         let create_patches = |result_buf: &mut [u8]| {
