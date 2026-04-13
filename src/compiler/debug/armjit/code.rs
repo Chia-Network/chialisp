@@ -1351,6 +1351,11 @@ impl DwarfBuilder {
                 .take_while(|b| *b != b'_')
                 .collect::<Vec<u8>>(),
         );
+        let left_env = self
+            .symbol_table
+            .get(&format!("{stripped_label}_left_env"))
+            .map(|res| res == "1")
+            .unwrap_or(false);
         let fallback_name = self
             .symbol_table
             .get(&stripped_label)
@@ -1358,12 +1363,6 @@ impl DwarfBuilder {
             .cloned();
         let fallback_args = fallback_name.as_ref().map(|_| {
             let args_key = format!("{stripped_label}_arguments");
-            let left_key = format!("{stripped_label}_left_env");
-            let left_env = self
-                .symbol_table
-                .get(&left_key)
-                .map(|res| res == "1")
-                .unwrap_or(false);
             self.symbol_table
                 .get(&args_key)
                 .map(|s| {
@@ -1419,7 +1418,10 @@ impl DwarfBuilder {
         };
 
         if let Some(subprogram_id) = subprogram_id {
-            if let Some(parsed_args) = parse_argument_list(&args) {
+            if let Some(mut parsed_args) = parse_argument_list(&args) {
+                if left_env {
+                    parsed_args = strip_left_env_wrapper(parsed_args);
+                }
                 let self_u32_type = self.u32_type;
                 let early_reg_closure = move || {
                     let mut early_reg_expr = Expression::new();
