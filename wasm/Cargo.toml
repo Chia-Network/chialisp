@@ -18,7 +18,7 @@ path = "src/mod.rs"
 
 [dependencies]
 chialisp = { path= "..", features = [] }
-clvmr = { version = "0.16.0", features = ["pre-eval"] }
+clvmr = { version = "0.17.5", features = ["pre-eval"] }
 wasm-bindgen = "=0.2.100"
 js-sys = "0.3.60"
 num-bigint = "0.4.0"

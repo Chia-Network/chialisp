@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
-use clvm_rs::chia_dialect::{ChiaDialect, NO_UNKNOWN_OPS};
+use clvm_rs::chia_dialect::{ChiaDialect, ClvmFlags};
 use clvm_rs::cost::Cost;
 use clvm_rs::dialect::{Dialect, OperatorSet};
 use clvm_rs::error::EvalErr;
@@ -23,7 +23,7 @@ use crate::classic::clvm_tools::ir::reader::read_ir;
 use crate::classic::clvm_tools::ir::writer::write_ir_to_stream;
 use crate::classic::clvm_tools::sha256tree::TreeHash;
 use crate::classic::clvm_tools::stages::stage_0::{
-    DefaultProgramRunner, OriginalDialect, RunProgramOption, TRunProgram,
+    choose_run_flags, DefaultProgramRunner, OriginalDialect, RunProgramOption, TRunProgram,
 };
 use crate::classic::clvm_tools::stages::stage_2::compile::do_com_prog_for_dialect;
 use crate::classic::clvm_tools::stages::stage_2::optimize::do_optimize;
@@ -59,6 +59,9 @@ pub struct CompilerOperatorsInternal {
     compiler_opts: RefCell<Option<Rc<dyn CompilerOpts>>>,
     // The version of the operators selected by the user.  version 1 includes bls.
     operators_version: RefCell<Option<usize>>,
+    // Since flags have moved into the dialect in clvmr 0.17, they need to move
+    // here too.
+    flags: RefCell<ClvmFlags>,
 }
 
 /// Given a list of search paths, find a full path to a file whose partial name
@@ -135,6 +138,7 @@ impl CompilerOperatorsInternal {
             opt_memo: RefCell::new(HashMap::new()),
             compiler_opts: RefCell::new(None),
             operators_version: RefCell::new(None),
+            flags: RefCell::new(ClvmFlags::empty()),
         }
     }
 
@@ -375,6 +379,14 @@ impl Dialect for CompilerOperatorsInternal {
         36
     }
 
+    fn flags(&self) -> ClvmFlags {
+        *self.flags.borrow()
+    }
+
+    fn gc_candidate(&self, _allocator: &Allocator, _node: NodePtr) -> bool {
+        false
+    }
+
     // The softfork operator comes with an extension argument.
     fn softfork_extension(&self, ext: u32) -> OperatorSet {
         match ext {
@@ -396,10 +408,10 @@ impl Dialect for CompilerOperatorsInternal {
             .get_operators_version()
             .unwrap_or(OPERATORS_LATEST_VERSION);
         let base_dialect = if new_operators > 0 {
-            let rc: Box<dyn Dialect> = Box::new(ChiaDialect::new(NO_UNKNOWN_OPS));
+            let rc: Box<dyn Dialect> = Box::new(ChiaDialect::new(ClvmFlags::NO_UNKNOWN_OPS));
             rc
         } else {
-            let rc: Box<dyn Dialect> = Box::new(OriginalDialect::new(NO_UNKNOWN_OPS));
+            let rc: Box<dyn Dialect> = Box::new(OriginalDialect::new(ClvmFlags::NO_UNKNOWN_OPS));
             rc
         };
         // Ensure we have at least the bls extensions available.
@@ -489,14 +501,27 @@ impl TRunProgram for CompilerOperatorsInternal {
         option: Option<RunProgramOption>,
     ) -> Response {
         let max_cost = option.as_ref().and_then(|o| o.max_cost).unwrap_or(0);
-        run_program_with_pre_eval(
+
+        // Flags are a dialect thing now, so we ensure that they're in sync at each stack level.
+        let new_flags = option
+            .as_ref()
+            .map(|o| choose_run_flags(o.operators_version))
+            .unwrap_or(ClvmFlags::NO_UNKNOWN_OPS);
+        let old_flags = *self.flags.borrow();
+        self.flags.replace(new_flags);
+
+        let result = run_program_with_pre_eval(
             allocator,
             self,
             program,
             args,
             max_cost,
             option.and_then(|o| o.pre_eval_f),
-        )
+        );
+
+        // Use the original flags after running.
+        self.flags.replace(old_flags);
+        result
     }
 }
 
