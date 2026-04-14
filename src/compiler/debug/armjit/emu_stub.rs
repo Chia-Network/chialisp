@@ -175,9 +175,14 @@ impl run_blocking::BlockingEventLoop for EmuGdbEventLoop {
     }
 }
 
-pub fn start_stub(port: Option<u16>) -> Result<(SocketAddr, Box<dyn ConnectionExt<Error = std::io::Error>>), ()> {
+pub fn start_stub(
+    port: Option<u16>,
+) -> Result<(SocketAddr, Box<dyn ConnectionExt<Error = std::io::Error>>), ()> {
     let connection = wait_for_tcp(port).map_err(|_| ())?;
-    Ok((connection.local_addr().map_err(|_| ())?, Box::new(connection)))
+    Ok((
+        connection.local_addr().map_err(|_| ())?,
+        Box::new(connection),
+    ))
 }
 
 pub fn run_stub(

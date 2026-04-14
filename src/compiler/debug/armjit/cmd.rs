@@ -51,7 +51,8 @@ pub fn spin_up_emulation(
     // Tiny start.
     let mut emu = Emu::new(elf_bin, TARGET_ADDR, symbols)
         .map_err(|e| format!("could not create emulator: {e:?}"))?;
-    let (addr, connection) = start_stub(port).map_err(|e| format!("could not start gdb service: {e:?}"))?;
+    let (addr, connection) =
+        start_stub(port).map_err(|e| format!("could not start gdb service: {e:?}"))?;
     run_stub(connection, &mut emu).map_err(|e| format!("could not run program for gdb: {e:?}"))?;
     Ok(addr)
 }

@@ -31,7 +31,9 @@ fn test_smoke_arm_debug() {
         sender.send(local_addr).unwrap();
         eprintln!("Waiting for a GDB connection on {:?}...", local_addr);
         let (stream, _addr) = sock.accept().unwrap();
-        run_stub(Box::new(stream), &mut emu).map_err(|e| format!("could not run program for gdb: {e:?}")).unwrap();
+        run_stub(Box::new(stream), &mut emu)
+            .map_err(|e| format!("could not run program for gdb: {e:?}"))
+            .unwrap();
     });
     let addr = receiver.recv().unwrap();
     eprintln!("connect gdb to {addr}");
