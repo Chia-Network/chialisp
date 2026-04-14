@@ -1049,41 +1049,56 @@ impl DwarfBuilder {
         // We'll make 3 subprograms to represent where the current arguments can be arrived
         // at from, then decorate all of them with the argument retriever below.
 
-        let subprogram_id = {
+        eprintln!("get subprogram");
+        let mut subprogram_names = vec![name.clone()];
+        if name != label {
+            // Keep a typed DIE for both the colloquial and emitted symbol names so
+            // either one resolves to the same pointer return type in debuggers.
+            subprogram_names.push(label.to_string());
+        }
+        let subprogram_ids = {
             let unit = self.dwarf.units.get_mut(self.unit_id);
-            let subprogram_id = unit.add(unit.root(), DW_TAG_subprogram);
+            let mut subprogram_ids = Vec::with_capacity(subprogram_names.len());
+            for subprogram_name in subprogram_names.iter() {
+                let subprogram_id = unit.add(unit.root(), DW_TAG_subprogram);
 
-            // Frame pointer for the function.
-            let mut fbexpr_mid = Expression::new();
-            fbexpr_mid.op_breg(gimli::Register(13), 0);
-            let mut loclist = Vec::new();
-            loclist.push(Location::StartEnd {
-                begin: Address::Constant(addr as u64),
-                end: Address::Constant((addr + size) as u64),
-                data: fbexpr_mid,
-            });
-            let loc_list_id = unit.locations.add(LocationList(loclist));
-            let mut sub_ent = unit.get_mut(subprogram_id);
-            sub_ent.set(DW_AT_name, AttributeValue::String(name.as_bytes().to_vec()));
-            sub_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
-            sub_ent.set(
-                DW_AT_low_pc,
-                AttributeValue::Address(Address::Constant(
-                    (self.target_addr as usize + addr) as u64,
-                )),
-            );
-            sub_ent.set(
-                DW_AT_high_pc,
-                AttributeValue::Address(Address::Constant(
-                    (self.target_addr as usize + addr + size) as u64,
-                )),
-            );
-            sub_ent.set(
-                DW_AT_frame_base,
-                AttributeValue::LocationListRef(loc_list_id),
-            );
-            subprogram_id
+                // Frame pointer for the function.
+                let mut fbexpr_mid = Expression::new();
+                fbexpr_mid.op_breg(gimli::Register(13), 0);
+                let mut loclist = Vec::new();
+                loclist.push(Location::StartEnd {
+                    begin: Address::Constant(addr as u64),
+                    end: Address::Constant((addr + size) as u64),
+                    data: fbexpr_mid,
+                });
+                let loc_list_id = unit.locations.add(LocationList(loclist));
+                let mut sub_ent = unit.get_mut(subprogram_id);
+                sub_ent.set(
+                    DW_AT_name,
+                    AttributeValue::String(subprogram_name.as_bytes().to_vec()),
+                );
+                sub_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
+                sub_ent.set(
+                    DW_AT_low_pc,
+                    AttributeValue::Address(Address::Constant(
+                        (self.target_addr as usize + addr) as u64,
+                    )),
+                );
+                sub_ent.set(
+                    DW_AT_high_pc,
+                    AttributeValue::Address(Address::Constant(
+                        (self.target_addr as usize + addr + size) as u64,
+                    )),
+                );
+                sub_ent.set(
+                    DW_AT_frame_base,
+                    AttributeValue::LocationListRef(loc_list_id),
+                );
+                subprogram_ids.push(subprogram_id);
+            }
+            subprogram_ids
         };
+        eprintln!("about to parse args");
         let srcloc = Srcloc::start("*args*");
         if let Ok(parsed) = parse_sexp(srcloc.clone(), args.bytes()) {
             let self_u32_type = self.u32_type;
@@ -1117,16 +1132,19 @@ impl DwarfBuilder {
                 },
             ];
             if !parsed.is_empty() {
-                self.add_arguments(
-                    subprogram_id,
-                    &locations,
-                    bi_one(),
-                    bi_zero(),
-                    parsed[0].clone(),
-                );
+                for subprogram_id in subprogram_ids.iter().copied() {
+                    self.add_arguments(
+                        subprogram_id,
+                        &locations,
+                        bi_one(),
+                        bi_zero(),
+                        parsed[0].clone(),
+                    );
+                }
             }
         }
 
+        eprintln!("function {name}");
         Some(name)
     }
 
@@ -1993,32 +2011,41 @@ impl Program {
             .map_err(|e| format!("link {e:?}"))?;
         }
 
+        eprintln!("get temp file path");
         let mut file = NamedTempFile::new().map_err(|e| format!("named temp {e:?}"))?;
         let name = file.path().to_str().unwrap().to_string();
+        eprintln!("open reread");
         let mut reread_file = File::open(&name).map_err(|e| format!("reopen {e:?}"))?;
+        eprintln!("writing to tmp file");
         obj.write(file.into_file())
             .map_err(|e| format!("obj write {e:?}"))?;
+        eprintln!("seek 0");
         reread_file
             .seek(SeekFrom::Start(0))
             .map_err(|e| format!("seek {e:?}"))?;
         let mut result_buf = Vec::new();
+        eprintln!("seek 0");
         reread_file
             .read_to_end(&mut result_buf)
             .map_err(|e| format!("capture {e:?}"))?;
 
         // Patch up
+        eprintln!("reload elf");
         let create_patches = |result_buf: &mut [u8]| {
             let elf_loader = ElfLoader::new(result_buf, self.target_addr).expect("should load");
             elf_loader.patch_sections()
         };
 
+        eprintln!("create patches");
         let patches = create_patches(&mut result_buf);
+        eprintln!("patches made");
 
         for (i, (target, value)) in patches.into_iter().enumerate() {
             eprintln!("section {i} target {target:x} value {value:x}");
             write_u32(&mut result_buf, target, value);
         }
 
+        eprintln!("code succeeded");
         Ok(result_buf)
     }
 
