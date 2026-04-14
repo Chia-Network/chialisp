@@ -31,13 +31,13 @@ jobs:
     - name: Set up rusts
       uses: actions-rs/toolchain@v1
       with:
-        toolchain: stable
+        toolchain: 1.94.1
         components: rustfmt, clippy
 
     - name: Set up rust (stable)
       uses: actions-rs/toolchain@v1
       with:
-        toolchain: stable
+        toolchain: 1.94.1
         components: rustfmt, clippy
 
     - name: fmt (stable)

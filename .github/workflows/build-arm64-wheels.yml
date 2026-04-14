@@ -33,7 +33,7 @@ jobs:
         echo "${PATH}"
         yum -y install openssl-devel
         source /root/.cargo/env
-        rustup default stable
+        rustup default 1.94.1
         rustup target add aarch64-unknown-linux-musl
         rm -rf venv
         export PATH="${PATH}:/opt/python/cp10-cp10/bin/"

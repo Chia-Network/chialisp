@@ -34,7 +34,7 @@ jobs:
     - name: Set up rust
       uses: actions-rs/toolchain@v1
       with:
-        toolchain: stable
+        toolchain: 1.94.1
 
     - uses: actions/setup-python@v6
       name: Install Python ${{ matrix.python }}
@@ -342,7 +342,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-          toolchain: stable-2025-08-07-x86_64-unknown-linux-gnu
+          toolchain: 1.94.1-x86_64-unknown-linux-gnu
       - name: clippy
         run: |
           # Add --all-targets as a separate step
@@ -361,7 +361,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-          toolchain: stable-2025-08-07-x86_64-unknown-linux-gnu
+          toolchain: 1.94.1-x86_64-unknown-linux-gnu
       - name: cargo fmt
         run: cargo fmt --all -- --files-with-diff --check
 
@@ -375,7 +375,7 @@ jobs:
       - name: Install rust
         uses: actions-rs/toolchain@v1
         with:
-            toolchain: stable
+            toolchain: 1.94.1
             components: rustfmt, clippy
       - name: cargo test
         run: cargo test
