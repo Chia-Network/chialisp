@@ -41,9 +41,9 @@ jobs:
         components: rustfmt, clippy
 
     - name: fmt (stable)
-      run: cargo +stable fmt -- --files-with-diff --check
+      run: cargo +1.94.1 fmt -- --files-with-diff --check
     - name: clippy (stable)
-      run: cargo +stable clippy && cargo +stable clippy --manifest-path wasm/Cargo.toml
+      run: cargo +1.94.1 clippy && cargo +1.94.1 clippy --manifest-path wasm/Cargo.toml
     - name: tests
       run: cargo test && cargo test --release
     # The design of 'run' causes it to drop main.sym unannounced when compiling.
