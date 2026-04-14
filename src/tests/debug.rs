@@ -22,7 +22,9 @@ fn test_smoke_arm_debug() {
     let (sender, receiver) = channel();
     let t = thread::spawn(move || {
         let (output, symbols) = compile_to_arm_elf(&args).expect("should compile");
+        eprintln!("compile_to_arm_elf succeeded");
         fs::write(&args.output, &output).expect("should be able to write file");
+        eprintln!("elf file written to {}", args.output);
         // Tiny start.
         let mut emu = Emu::new(&output, TARGET_ADDR, Rc::new(symbols)).unwrap();
         let sockaddr = format!("127.0.0.1:0");
