@@ -1049,6 +1049,7 @@ impl DwarfBuilder {
         // We'll make 3 subprograms to represent where the current arguments can be arrived
         // at from, then decorate all of them with the argument retriever below.
 
+        eprintln!("get subprogram");
         let subprogram_id = {
             let unit = self.dwarf.units.get_mut(self.unit_id);
             let subprogram_id = unit.add(unit.root(), DW_TAG_subprogram);
@@ -1084,6 +1085,7 @@ impl DwarfBuilder {
             );
             subprogram_id
         };
+        eprintln!("about to parse args");
         let srcloc = Srcloc::start("*args*");
         if let Ok(parsed) = parse_sexp(srcloc.clone(), args.bytes()) {
             let self_u32_type = self.u32_type;
@@ -1127,6 +1129,7 @@ impl DwarfBuilder {
             }
         }
 
+        eprintln!("function {name}");
         Some(name)
     }
 
