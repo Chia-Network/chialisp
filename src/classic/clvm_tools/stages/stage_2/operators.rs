@@ -526,7 +526,7 @@ impl TRunProgram for CompilerOperatorsInternal {
         let new_flags = option
             .as_ref()
             .map(|o| choose_run_flags(o.operators_version))
-            .unwrap_or(ClvmFlags::NO_UNKNOWN_OPS);
+            .unwrap_or(ClvmFlags::NO_UNKNOWN_OPS | ClvmFlags::ENABLE_KECCAK_OPS_OUTSIDE_GUARD);
         let old_flags = *self.flags.borrow();
         self.flags.replace(new_flags);
 
