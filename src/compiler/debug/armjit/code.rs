@@ -1766,9 +1766,7 @@ impl Program {
                 Instr::Bx(Register::LR),
                 Some(BeginEndBlock::EndBlock),
             );
-            eprintln!("dwarf builder end...");
             self.dwarf_builder.end(self.current_addr);
-            eprintln!("dwarf builder end... done");
         }
     }
 
