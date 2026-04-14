@@ -30,8 +30,8 @@ use tempfile::NamedTempFile;
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero, Bytes, BytesFromType};
 use crate::classic::clvm::casts::bigint_to_bytes_clvm;
 use crate::compiler::clvm::{sha256tree, truthy};
+use crate::compiler::comptypes::CompileForm;
 use crate::compiler::debug::armjit::load::{write_u32, ElfLoader};
-use crate::compiler::prims::prim_map;
 use crate::compiler::sexp::{decode_string, parse_sexp, Atom, NodeSel, SExp, SelectNode, ThisNode};
 use crate::compiler::srcloc::Srcloc;
 use crate::util::Number;
@@ -1188,7 +1188,7 @@ impl Constant {
 }
 
 pub struct Program {
-    prims: Rc<HashMap<Vec<u8>, Rc<SExp>>>,
+    program: HashMap<String, Srcloc>,
     target_addr: u32,
     finished_insns: Vec<Instr>,
     first_label: String,
@@ -1201,6 +1201,7 @@ pub struct Program {
     symbol_table: Rc<HashMap<String, String>>,
     current_symbol: Option<String>,
     function_symbols: HashMap<String, String>,
+    renamed_symbols: HashMap<String, String>,
     start_addr: usize,
     current_addr: usize,
     dwarf_builder: DwarfBuilder,
@@ -1223,7 +1224,7 @@ fn hexify(v: &[u8]) -> String {
     Bytes::new(Some(BytesFromType::Raw(v.to_vec()))).hex()
 }
 
-fn is_atom(prims: &HashMap<Vec<u8>, Rc<SExp>>, a: Rc<SExp>) -> Option<(Srcloc, Vec<u8>)> {
+fn is_atom(a: Rc<SExp>) -> Option<(Srcloc, Vec<u8>)> {
     match a.borrow() {
         SExp::Cons(_, _, _) => None,
         SExp::Nil(l) => Some((l.clone(), Vec::new())),
@@ -1236,7 +1237,7 @@ fn is_atom(prims: &HashMap<Vec<u8>, Rc<SExp>>, a: Rc<SExp>) -> Option<(Srcloc, V
     }
 }
 
-fn is_wrapped_atom(prims: &HashMap<Vec<u8>, Rc<SExp>>, a: Rc<SExp>) -> Option<(Srcloc, Vec<u8>)> {
+fn is_wrapped_atom(a: Rc<SExp>) -> Option<(Srcloc, Vec<u8>)> {
     if let Ok(NodeSel::Cons((l, a), n)) = NodeSel::Cons(Atom::Here(()), ThisNode).select_nodes(a) {
         if truthy(n) {
             return None;
@@ -1715,10 +1716,10 @@ impl Program {
             // Translate body.
             match sexp.borrow() {
                 SExp::Cons(l, a, b) => {
-                    if let Some((loc, a)) = is_atom(&self.prims, a.clone()) {
+                    if let Some((loc, a)) = is_atom(a.clone()) {
                         // do quoted operator
                         self.do_operator(&loc, &hash, &a, b.clone(), false, sexp.clone());
-                    } else if let Some((loc, a)) = is_wrapped_atom(&self.prims, a.clone()) {
+                    } else if let Some((loc, a)) = is_wrapped_atom(a.clone()) {
                         // do unquoted operator
                         self.do_operator(&loc, &hash, &a, b.clone(), true, sexp.clone());
                     } else {
@@ -2022,6 +2023,7 @@ impl Program {
     }
 
     pub fn new(
+        program: HashMap<String, Srcloc>,
         filename: &str,
         elf_output: &str,
         sexp: Rc<SExp>,
@@ -2032,7 +2034,7 @@ impl Program {
         let dwarf_builder =
             DwarfBuilder::new(filename, elf_output, target_addr, symbol_table.clone());
         let mut p: Program = Program {
-            prims: prim_map(),
+            program,
             finished_insns: Vec::new(),
             first_label: Default::default(),
             env_label: Default::default(),
@@ -2043,6 +2045,7 @@ impl Program {
             constants: Default::default(),
             symbol_table: Default::default(),
             function_symbols: Default::default(),
+            renamed_symbols: Default::default(),
             current_addr: 0,
             start_addr: 0,
             target_addr,
