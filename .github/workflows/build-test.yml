@@ -224,7 +224,7 @@ jobs:
     - name: Run tests
       if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.12')
       run: |
-        cargo test debug -- --nocapture
+        cargo test smoke_arm_debug -- --nocapture
         cargo test --features=fuzz
 
     - name: Exhaustive assign tests
@@ -384,9 +384,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install gdb-multiarch -y
       - name: cargo test
-        run: |
-          cargo test debug -- --nocapture
-          cargo test
+        run: cargo test
 
   coverage:
     runs-on: ubuntu-latest
