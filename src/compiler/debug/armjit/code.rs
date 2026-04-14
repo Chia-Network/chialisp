@@ -1050,40 +1050,53 @@ impl DwarfBuilder {
         // at from, then decorate all of them with the argument retriever below.
 
         eprintln!("get subprogram");
-        let subprogram_id = {
+        let mut subprogram_names = vec![name.clone()];
+        if name != label {
+            // Keep a typed DIE for both the colloquial and emitted symbol names so
+            // either one resolves to the same pointer return type in debuggers.
+            subprogram_names.push(label.to_string());
+        }
+        let subprogram_ids = {
             let unit = self.dwarf.units.get_mut(self.unit_id);
-            let subprogram_id = unit.add(unit.root(), DW_TAG_subprogram);
+            let mut subprogram_ids = Vec::with_capacity(subprogram_names.len());
+            for subprogram_name in subprogram_names.iter() {
+                let subprogram_id = unit.add(unit.root(), DW_TAG_subprogram);
 
-            // Frame pointer for the function.
-            let mut fbexpr_mid = Expression::new();
-            fbexpr_mid.op_breg(gimli::Register(13), 0);
-            let mut loclist = Vec::new();
-            loclist.push(Location::StartEnd {
-                begin: Address::Constant(addr as u64),
-                end: Address::Constant((addr + size) as u64),
-                data: fbexpr_mid,
-            });
-            let loc_list_id = unit.locations.add(LocationList(loclist));
-            let mut sub_ent = unit.get_mut(subprogram_id);
-            sub_ent.set(DW_AT_name, AttributeValue::String(name.as_bytes().to_vec()));
-            sub_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
-            sub_ent.set(
-                DW_AT_low_pc,
-                AttributeValue::Address(Address::Constant(
-                    (self.target_addr as usize + addr) as u64,
-                )),
-            );
-            sub_ent.set(
-                DW_AT_high_pc,
-                AttributeValue::Address(Address::Constant(
-                    (self.target_addr as usize + addr + size) as u64,
-                )),
-            );
-            sub_ent.set(
-                DW_AT_frame_base,
-                AttributeValue::LocationListRef(loc_list_id),
-            );
-            subprogram_id
+                // Frame pointer for the function.
+                let mut fbexpr_mid = Expression::new();
+                fbexpr_mid.op_breg(gimli::Register(13), 0);
+                let mut loclist = Vec::new();
+                loclist.push(Location::StartEnd {
+                    begin: Address::Constant(addr as u64),
+                    end: Address::Constant((addr + size) as u64),
+                    data: fbexpr_mid,
+                });
+                let loc_list_id = unit.locations.add(LocationList(loclist));
+                let mut sub_ent = unit.get_mut(subprogram_id);
+                sub_ent.set(
+                    DW_AT_name,
+                    AttributeValue::String(subprogram_name.as_bytes().to_vec()),
+                );
+                sub_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
+                sub_ent.set(
+                    DW_AT_low_pc,
+                    AttributeValue::Address(Address::Constant(
+                        (self.target_addr as usize + addr) as u64,
+                    )),
+                );
+                sub_ent.set(
+                    DW_AT_high_pc,
+                    AttributeValue::Address(Address::Constant(
+                        (self.target_addr as usize + addr + size) as u64,
+                    )),
+                );
+                sub_ent.set(
+                    DW_AT_frame_base,
+                    AttributeValue::LocationListRef(loc_list_id),
+                );
+                subprogram_ids.push(subprogram_id);
+            }
+            subprogram_ids
         };
         eprintln!("about to parse args");
         let srcloc = Srcloc::start("*args*");
@@ -1119,13 +1132,15 @@ impl DwarfBuilder {
                 },
             ];
             if !parsed.is_empty() {
-                self.add_arguments(
-                    subprogram_id,
-                    &locations,
-                    bi_one(),
-                    bi_zero(),
-                    parsed[0].clone(),
-                );
+                for subprogram_id in subprogram_ids.iter().copied() {
+                    self.add_arguments(
+                        subprogram_id,
+                        &locations,
+                        bi_one(),
+                        bi_zero(),
+                        parsed[0].clone(),
+                    );
+                }
             }
         }
 
