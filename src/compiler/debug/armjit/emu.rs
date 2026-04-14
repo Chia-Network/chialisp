@@ -40,8 +40,12 @@ use crate::compiler::debug::armjit::memory::{PagedMemory, TargetMemory};
 use crate::compiler::debug::build_symbol_table_mut;
 use crate::compiler::debug::u8_from_number;
 use crate::compiler::dialect::AcceptedDialect;
+#[cfg(test)]
+use crate::compiler::frontend::frontend;
 use crate::compiler::prims::primquote;
 use crate::compiler::sexp::{parse_sexp, SExp};
+#[cfg(test)]
+use crate::compiler::sexp::decode_string;
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::TRunProgram;
 
@@ -869,6 +873,13 @@ impl Emu {
             .set_optimize(true)
             .set_search_paths(&search_paths)
             .set_frontend_opt(false);
+
+        let parsed_program = parse_sexp(srcloc.clone(), program.bytes()).map_err(|e| format!("failed to parse chialisp program {filename}"))?;
+        let fe = frontend(opts.clone(), &parsed_program).map_err(|e| format!("failed to compose frontend program"))?;
+        let range_results: HashMap<String, Srcloc> = fe.helpers.iter().map(|h| {
+            (decode_string(h.name()), h.loc())
+        }).collect();
+
         let compiled = compile_file(&mut allocator, runner, opts, program, &mut symbol_table)
             .expect("should compile");
         build_symbol_table_mut(&mut symbol_table, &compiled);
@@ -876,6 +887,7 @@ impl Emu {
         let tmpname = tmpfile.path().to_str().unwrap().to_string();
         let symbols = Rc::new(symbol_table);
         let generator = Program::new(
+	    range_results,            
             filename,
             &tmpname,
             Rc::new(compiled),
