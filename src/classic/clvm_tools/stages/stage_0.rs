@@ -164,7 +164,7 @@ impl Dialect for OriginalDialect {
     }
 
     fn flags(&self) -> ClvmFlags {
-        todo!();
+        self.flags
     }
 
     fn gc_candidate(&self, _allocator: &Allocator, _node: NodePtr) -> bool {
