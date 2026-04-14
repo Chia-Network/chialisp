@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use std::net::SocketAddr;
 use std::rc::Rc;
 
 use argh::FromArgs;
@@ -45,12 +46,15 @@ pub struct Args {
 pub fn spin_up_emulation(
     elf_bin: &[u8],
     symbols: Rc<HashMap<String, String>>,
-) -> Result<(), String> {
+    port: Option<u16>,
+) -> Result<SocketAddr, String> {
     // Tiny start.
     let mut emu = Emu::new(elf_bin, TARGET_ADDR, symbols)
         .map_err(|e| format!("could not create emulator: {e:?}"))?;
-    let connection = start_stub().map_err(|e| format!("could not start gdb service: {e:?}"))?;
-    run_stub(connection, &mut emu).map_err(|e| format!("could not run program for gdb: {e:?}"))
+    let (addr, connection) =
+        start_stub(port).map_err(|e| format!("could not start gdb service: {e:?}"))?;
+    run_stub(connection, &mut emu).map_err(|e| format!("could not run program for gdb: {e:?}"))?;
+    Ok(addr)
 }
 
 pub fn compile_to_arm_elf(args: &Args) -> Result<(Vec<u8>, HashMap<String, String>), String> {

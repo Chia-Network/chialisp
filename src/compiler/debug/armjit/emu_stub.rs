@@ -8,16 +8,16 @@ use gdbstub::stub::DisconnectReason;
 use gdbstub::stub::GdbStub;
 use gdbstub::stub::SingleThreadStopReason;
 use gdbstub::target::Target;
-use std::net::TcpListener;
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpListener, TcpStream};
 
 use crate::compiler::debug::armjit::emu::{DynResult, Emu, Event, RunEvent};
 
-fn wait_for_tcp(port: u16) -> DynResult<TcpStream> {
-    let sockaddr = format!("127.0.0.1:{}", port);
-    eprintln!("Waiting for a GDB connection on {:?}...", sockaddr);
+fn wait_for_tcp(port: Option<u16>) -> DynResult<TcpStream> {
+    let sockaddr = format!("127.0.0.1:{}", port.unwrap_or(0));
 
     let sock = TcpListener::bind(sockaddr)?;
+    let local_addr = sock.local_addr();
+    eprintln!("Waiting for a GDB connection on {:?}...", local_addr);
     let (stream, addr) = sock.accept()?;
     eprintln!("Debugger connected from {}", addr);
 
@@ -175,8 +175,14 @@ impl run_blocking::BlockingEventLoop for EmuGdbEventLoop {
     }
 }
 
-pub fn start_stub() -> Result<Box<dyn ConnectionExt<Error = std::io::Error>>, ()> {
-    Ok(Box::new(wait_for_tcp(9001).map_err(|_| ())?))
+pub fn start_stub(
+    port: Option<u16>,
+) -> Result<(SocketAddr, Box<dyn ConnectionExt<Error = std::io::Error>>), ()> {
+    let connection = wait_for_tcp(port).map_err(|_| ())?;
+    Ok((
+        connection.local_addr().map_err(|_| ())?,
+        Box::new(connection),
+    ))
 }
 
 pub fn run_stub(

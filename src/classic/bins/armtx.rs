@@ -10,7 +10,8 @@ fn run_arm_conversion() -> Result<(), String> {
 
     // copy all in-memory sections from the ELF file into system RAM
     fs::write(&args.output, &elf_out).map_err(|e| format!("could not write elf file: {e:?}"))?;
-    spin_up_emulation(&elf_out, Rc::new(symbol_table))
+    spin_up_emulation(&elf_out, Rc::new(symbol_table), Some(9001))?;
+    Ok(())
 }
 
 fn main() {

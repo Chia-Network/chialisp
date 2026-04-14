@@ -2010,32 +2010,41 @@ impl Program {
             .map_err(|e| format!("link {e:?}"))?;
         }
 
+        eprintln!("get temp file path");
         let mut file = NamedTempFile::new().map_err(|e| format!("named temp {e:?}"))?;
         let name = file.path().to_str().unwrap().to_string();
+        eprintln!("open reread");
         let mut reread_file = File::open(&name).map_err(|e| format!("reopen {e:?}"))?;
+        eprintln!("writing to tmp file");
         obj.write(file.into_file())
             .map_err(|e| format!("obj write {e:?}"))?;
+        eprintln!("seek 0");
         reread_file
             .seek(SeekFrom::Start(0))
             .map_err(|e| format!("seek {e:?}"))?;
         let mut result_buf = Vec::new();
+        eprintln!("seek 0");
         reread_file
             .read_to_end(&mut result_buf)
             .map_err(|e| format!("capture {e:?}"))?;
 
         // Patch up
+        eprintln!("reload elf");
         let create_patches = |result_buf: &mut [u8]| {
             let elf_loader = ElfLoader::new(result_buf, self.target_addr).expect("should load");
             elf_loader.patch_sections()
         };
 
+        eprintln!("create patches");
         let patches = create_patches(&mut result_buf);
+        eprintln!("patches made");
 
         for (i, (target, value)) in patches.into_iter().enumerate() {
             eprintln!("section {i} target {target:x} value {value:x}");
             write_u32(&mut result_buf, target, value);
         }
 
+        eprintln!("code succeeded");
         Ok(result_buf)
     }
 
