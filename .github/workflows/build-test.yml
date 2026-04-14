@@ -223,7 +223,9 @@ jobs:
 
     - name: Run tests
       if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.12')
-      run: cargo test --features=fuzz
+      run: |
+        cargo test debug -- --nocapture
+        cargo test --features=fuzz
 
     - name: Exhaustive assign tests
       if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.12')
