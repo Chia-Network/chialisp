@@ -1,5 +1,5 @@
 use clvm_rs::allocator::{Allocator, NodePtr};
-use clvm_rs::chia_dialect::{ChiaDialect, ENABLE_KECCAK_OPS_OUTSIDE_GUARD, NO_UNKNOWN_OPS};
+use clvm_rs::chia_dialect::{ChiaDialect, ClvmFlags};
 use clvm_rs::core_ops::{op_cons, op_eq, op_first, op_if, op_listp, op_raise, op_rest};
 use clvm_rs::cost::Cost;
 use clvm_rs::dialect::{Dialect, OperatorSet};
@@ -14,6 +14,14 @@ use clvm_rs::reduction::{Reduction, Response};
 use clvm_rs::run_program::{run_program_with_pre_eval, PreEval};
 
 use crate::classic::clvm::OPERATORS_LATEST_VERSION;
+
+pub fn choose_run_flags(operators_version: usize) -> ClvmFlags {
+    if operators_version < 2 {
+        ClvmFlags::NO_UNKNOWN_OPS
+    } else {
+        ClvmFlags::NO_UNKNOWN_OPS | ClvmFlags::ENABLE_KECCAK_OPS_OUTSIDE_GUARD
+    }
+}
 
 #[derive(Default)]
 pub struct RunProgramOption {
@@ -48,11 +56,11 @@ impl Default for DefaultProgramRunner {
 }
 
 pub struct OriginalDialect {
-    flags: u32,
+    flags: ClvmFlags,
 }
 
 impl OriginalDialect {
-    pub fn new(flags: u32) -> Self {
+    pub fn new(flags: ClvmFlags) -> Self {
         OriginalDialect { flags }
     }
 }
@@ -62,10 +70,10 @@ fn unknown_operator(
     allocator: &mut Allocator,
     o: NodePtr,
     args: NodePtr,
-    flags: u32,
+    flags: ClvmFlags,
     max_cost: Cost,
 ) -> Response {
-    if (flags & NO_UNKNOWN_OPS) != 0 {
+    if (flags & ClvmFlags::NO_UNKNOWN_OPS) != ClvmFlags::empty() {
         Err(EvalErr::InternalError(
             o,
             "unimplemented operator".to_string(),
@@ -132,7 +140,7 @@ impl Dialect for OriginalDialect {
                 return unknown_operator(allocator, o, argument_list, self.flags, max_cost);
             }
         };
-        f(allocator, argument_list, max_cost)
+        f(allocator, argument_list, max_cost, self.flags())
     }
 
     fn quote_kw(&self) -> u32 {
@@ -152,7 +160,15 @@ impl Dialect for OriginalDialect {
     }
 
     fn allow_unknown_ops(&self) -> bool {
-        (self.flags & NO_UNKNOWN_OPS) == 0
+        (self.flags & ClvmFlags::NO_UNKNOWN_OPS) == ClvmFlags::empty()
+    }
+
+    fn flags(&self) -> ClvmFlags {
+        todo!();
+    }
+
+    fn gc_candidate(&self, _allocator: &Allocator, _node: NodePtr) -> bool {
+        false
     }
 }
 
@@ -187,7 +203,7 @@ impl TRunProgram for DefaultProgramRunner {
         match operators_version {
             0 => run_program_with_pre_eval_dialect(
                 allocator,
-                &OriginalDialect::new(NO_UNKNOWN_OPS),
+                &OriginalDialect::new(ClvmFlags::NO_UNKNOWN_OPS),
                 program,
                 args,
                 max_cost,
@@ -195,7 +211,7 @@ impl TRunProgram for DefaultProgramRunner {
             ),
             1 => run_program_with_pre_eval_dialect(
                 allocator,
-                &ChiaDialect::new(NO_UNKNOWN_OPS),
+                &ChiaDialect::new(ClvmFlags::NO_UNKNOWN_OPS),
                 program,
                 args,
                 max_cost,
@@ -203,7 +219,9 @@ impl TRunProgram for DefaultProgramRunner {
             ),
             _ => run_program_with_pre_eval_dialect(
                 allocator,
-                &ChiaDialect::new(NO_UNKNOWN_OPS | ENABLE_KECCAK_OPS_OUTSIDE_GUARD),
+                &ChiaDialect::new(
+                    ClvmFlags::NO_UNKNOWN_OPS | ClvmFlags::ENABLE_KECCAK_OPS_OUTSIDE_GUARD,
+                ),
                 program,
                 args,
                 max_cost,
