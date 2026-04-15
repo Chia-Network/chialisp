@@ -2233,7 +2233,8 @@ impl Program {
             p.remap_locations
                 .insert(remap_hash_hex.clone(), remap_sexp.loc());
             p.add_sexp(&remap_sexp.loc(), &remap_hash, remap_sexp.clone());
-            p.add(remap_sexp);
+            let remap_label = p.add(remap_sexp);
+            eprintln!("remap selected label {remap_label} for {name}");
         }
         p.first_label = p.add(sexp.clone());
         p.start_insns();
