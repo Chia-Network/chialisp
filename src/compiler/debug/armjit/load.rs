@@ -310,12 +310,20 @@ impl<'a> ElfLoader<'a> {
             let mut result = HashMap::new();
             for es in self.symbols.iter() {
                 let sym_string = get_string(es.st_name);
+                let raw = decode_string(&sym_string);
+                if raw.is_empty() {
+                    continue;
+                }
                 if let Some(target_section) = self.elf.section_header_nth(es.st_shndx as usize) {
+                    let sym_info = EmuSymbolInfo {
+                        stripped: raw.clone(),
+                        raw: raw.clone(),
+                        address: self.sections[es.st_shndx as usize] + es.st_value,
+                    };
                     if target_section
                         .flags()
                         .contains(SectionHeaderFlags::SHF_EXECINSTR)
                     {
-                        let raw = decode_string(&sym_string);
                         let stripped = if let Some(stripped) =
                             raw.strip_prefix('_').and_then(|s| s.split('_').next())
                         {
@@ -323,13 +331,13 @@ impl<'a> ElfLoader<'a> {
                         } else {
                             raw.clone()
                         };
-                        let sym_info = EmuSymbolInfo {
-                            stripped: stripped.clone(),
-                            raw: raw.clone(),
-                            address: self.sections[es.st_shndx as usize] + es.st_value,
-                        };
-                        result.insert(raw, sym_info.clone());
-                        result.insert(stripped, sym_info);
+                        let mut function_sym_info = sym_info.clone();
+                        function_sym_info.stripped = stripped.clone();
+                        result.insert(raw, function_sym_info.clone());
+                        result.insert(stripped, function_sym_info);
+                    } else if raw.starts_with("_$_") {
+                        // Hash -> renamed function alias data entries.
+                        result.insert(raw, sym_info);
                     }
                 }
             }

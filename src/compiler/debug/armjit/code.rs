@@ -1012,7 +1012,13 @@ impl DwarfBuilder {
     }
 
     // Create dwarf traffic needed to ensure that gdb can find the locals.
-    fn decorate_function(&mut self, label: &str, addr: usize, size: usize) -> Option<String> {
+    fn decorate_function(
+        &mut self,
+        label: &str,
+        addr: usize,
+        size: usize,
+        preferred_name: Option<&str>,
+    ) -> Option<String> {
         let mut fde = FrameDescriptionEntry::new(
             Address::Constant((self.target_addr as usize + addr) as u64),
             size as u32,
@@ -1044,10 +1050,13 @@ impl DwarfBuilder {
             .expect("CFI CIE should be initialized for unwind info");
         self.frame_table.add_fde(cfi_cie_id, fde);
 
-        let (name, args) = self
-            .match_function(&label)
-            .map(|c| c.clone())
-            .unwrap_or_else(|| (label.to_string(), "ENV".to_string()));
+        let (name, args) = if let Some(preferred_name) = preferred_name {
+            (preferred_name.to_string(), "ENV".to_string())
+        } else {
+            self.match_function(&label)
+                .map(|c| c.clone())
+                .unwrap_or_else(|| (label.to_string(), "ENV".to_string()))
+        };
 
         // We'll make 3 subprograms to represent where the current arguments can be arrived
         // at from, then decorate all of them with the argument retriever below.
@@ -1221,8 +1230,10 @@ pub struct Program {
     constants: HashMap<Vec<u8>, Constant>,
     symbol_table: Rc<HashMap<String, String>>,
     current_symbol: Option<String>,
+    current_symbol_name: Option<String>,
     function_symbols: HashMap<String, String>,
     renamed_symbols: HashMap<String, String>,
+    remap_locations: HashMap<String, Srcloc>,
     start_addr: usize,
     current_addr: usize,
     dwarf_builder: DwarfBuilder,
@@ -1282,33 +1293,32 @@ pub fn swi_print(register: usize, label: usize) -> usize {
     SWI_PRINT_EXPR | register << 4 | label << 8
 }
 
-fn find_by_hash(hash: &[u8], sexp: Rc<SExp>) -> (Vec<u8>, Option<Rc<SExp>>) {
+fn collect_by_hash(hash: &[u8], sexp: Rc<SExp>, matches: &mut Vec<Rc<SExp>>) -> Vec<u8> {
     if let SExp::Cons(_, a, b) = &*sexp {
-        let (mut hash_a, found_a) = find_by_hash(hash, a.clone());
-        if let Some(ref fh) = found_a {
-            return (hash_a, found_a);
-        }
-        let (mut hash_b, found_b) = find_by_hash(hash, b.clone());
-        if let Some(ref fh) = found_b {
-            return (hash_b, found_b);
-        }
+        let hash_a = collect_by_hash(hash, a.clone(), matches);
+        let hash_b = collect_by_hash(hash, b.clone(), matches);
         let mut hasher = Sha256::new();
         hasher.update([2]);
         hasher.update(&hash_a);
         hasher.update(&hash_b);
         let my_hash = hasher.finalize().to_vec();
         if my_hash == hash {
-            return (my_hash, Some(sexp.clone()));
+            matches.push(sexp);
         }
-        (my_hash, None)
+        my_hash
     } else {
         let the_hash = sha256tree(sexp.clone());
         if the_hash == hash {
-            (the_hash, Some(sexp.clone()))
-        } else {
-            (the_hash, None)
+            matches.push(sexp);
         }
+        the_hash
     }
+}
+
+fn find_all_by_hash(hash: &[u8], sexp: Rc<SExp>) -> Vec<Rc<SExp>> {
+    let mut matches = Vec::new();
+    collect_by_hash(hash, sexp, &mut matches);
+    matches
 }
 
 struct Function {
@@ -1318,6 +1328,37 @@ struct Function {
 }
 
 impl Program {
+    fn get_renamed_function_label(&self, hash: &[u8]) -> Option<String> {
+        let hash_string = hex::encode(hash);
+        self.renamed_symbols.get(&hash_string).cloned()
+    }
+
+    fn label_is_taken(&self, label: &str) -> bool {
+        self.labels_by_hash.values().any(|existing| existing == label)
+    }
+
+    fn get_program_function_label(&self, sexp: Rc<SExp>) -> Option<String> {
+        let target_loc = sexp.loc();
+        let hash = sha256tree(sexp.clone());
+        let hash_hex = hex::encode(&hash);
+        if let Some(remap_loc) = self.remap_locations.get(&hash_hex) {
+            if remap_loc == &target_loc {
+                if let Some(name) = self.renamed_symbols.get(&hash_hex) {
+                    return Some(name.clone());
+                }
+            }
+        }
+        self.program
+            .iter()
+            .find(|(_name, loc)| loc.overlap(&target_loc))
+            .map(|(name, _loc)| name.clone())
+    }
+
+    fn get_renamed_name_for_label(&self, label: &str) -> Option<String> {
+        let hash = label.strip_prefix('_').and_then(|s| s.split('_').next())?;
+        self.renamed_symbols.get(hash).cloned()
+    }
+
     fn get_code_label(&mut self, hash: &[u8]) -> String {
         let n = if let Some(n) = self.encounters_of_code.get(hash).clone() {
             *n
@@ -1660,25 +1701,20 @@ impl Program {
 
     fn add(&mut self, sexp: Rc<SExp>) -> String {
         let hash = sha256tree(sexp.clone());
+        if let Some(existing_label) = self.labels_by_hash.get(&hash) {
+            return existing_label.clone();
+        }
 
         // Note: get_code_label issues a fresh label for this hash every time.
-        let body_label = self.get_code_label(&hash);
+        let generated_body_label = self.get_code_label(&hash);
+        let body_label = self
+            .get_renamed_function_label(&hash)
+            .or_else(|| self.get_program_function_label(sexp.clone()))
+            .filter(|label| !self.label_is_taken(label))
+            .unwrap_or(generated_body_label);
         eprintln!("label {body_label} for {sexp} at {}", sexp.loc());
 
-        let body_label =
-            if let Some(new_name) = self.program.iter().find(|(name, loc)| {
-                loc.overlap(&sexp.loc())
-            }).map(|(name, _)| name.clone()) {
-                if !self.renamed_symbols.contains_key(&new_name) {
-                    self.renamed_symbols.insert(new_name.clone(), body_label.clone());
-                    new_name
-                } else {
-                    body_label
-                }
-            } else {
-                body_label
-            };
-
+        self.labels_by_hash.insert(hash, body_label.clone());
         self.waiting_programs
             .push((body_label.clone(), sexp.clone()));
         body_label
@@ -1700,6 +1736,7 @@ impl Program {
             //
             // Ensure we set the current symbol.
             self.current_symbol = Some(g.clone());
+            self.current_symbol_name = self.get_renamed_name_for_label(g);
 
             instr
         } else {
@@ -1722,15 +1759,18 @@ impl Program {
                     "end block for label {label} {:x}-{:x}",
                     self.start_addr, self.current_addr
                 );
+                let preferred_name = self.current_symbol_name.clone();
                 if let Some(function_name) = self.dwarf_builder.decorate_function(
                     label,
                     self.start_addr,
                     self.current_addr - self.start_addr,
+                    preferred_name.as_deref(),
                 ) {
                     eprintln!("end block with function {function_name}");
                     self.function_symbols.insert(label.clone(), function_name);
                 }
                 self.current_symbol = None;
+                self.current_symbol_name = None;
             }
         }
 
@@ -1907,6 +1947,28 @@ impl Program {
         }
         swap(&mut constants, &mut self.constants);
 
+        // Export remapped function names by hash so the emulator can resolve
+        // a tree hash to a renamed symbol after loading the ELF.
+        let mut renamed_symbols: Vec<_> = self
+            .renamed_symbols
+            .iter()
+            .map(|(hash, target_name)| (hash.clone(), target_name.clone()))
+            .collect();
+        renamed_symbols.sort_by(|a, b| a.0.cmp(&b.0));
+        for (hash, target_name) in renamed_symbols.into_iter() {
+            let mut target_name_bytes = target_name.as_bytes().to_vec();
+            target_name_bytes.push(0);
+            let remap_label = format!("_$_{hash}");
+            for i in &[
+                Instr::Align4,
+                Instr::Globl(remap_label.clone()),
+                Instr::Label(remap_label),
+                Instr::Bytes(target_name_bytes.clone()),
+            ] {
+                self.push(source_sexp.clone(), &srcloc, i.clone());
+            }
+        }
+
         self.dwarf_builder
             .write(self.current_addr, &mut self.finished_insns)
             .unwrap();
@@ -1967,7 +2029,9 @@ impl Program {
 
         // Declare functions as imports and later link the labels they belong to.
         for (label, funname) in self.function_symbols.iter() {
-            decls.push((funname.clone(), Decl::function().into()));
+            if label != funname {
+                decls.push((funname.clone(), Decl::function().into()));
+            }
         }
 
         // Declare .debug_aranges
@@ -1993,7 +2057,7 @@ impl Program {
             if let Some(defname) = in_function.as_ref() {
                 if !function_body.is_empty() {
                     if let Some(funname) = self.function_symbols.get(defname) {
-                        if !defined_colloquial_names.contains(funname) {
+                        if funname != defname && !defined_colloquial_names.contains(funname) {
                             obj.define(funname, vec![]).map_err(|e| format!("{e:?}"))?;
                             defined_colloquial_names.insert(funname.clone());
                         }
@@ -2106,6 +2170,35 @@ impl Program {
         target_addr: u32,
         symbol_table: Rc<HashMap<String, String>>,
     ) -> Result<Self, String> {
+        let remap_hashes: Vec<_> = symbol_table
+            .iter()
+            .filter_map(|(hash, name)| {
+                if name.contains(':') || name.contains('_') || name == "source_file" {
+                    return None;
+                }
+                if !program.contains_key(name) {
+                    return None;
+                }
+
+                if let Ok(byte_hash) = hex::decode(hash) {
+                    let all_matches = find_all_by_hash(&byte_hash, sexp.clone());
+                    let selected = if let Some(target_loc) = program.get(name) {
+                        all_matches
+                            .iter()
+                            .find(|matched| target_loc.overlap(&matched.loc()))
+                            .cloned()
+                    } else {
+                        None
+                    }
+                    .or_else(|| all_matches.first().cloned());
+                    if let Some(selected) = selected {
+                        return Some((byte_hash, name.clone(), selected));
+                    }
+                }
+                None
+            })
+            .collect();
+
         let dwarf_builder =
             DwarfBuilder::new(filename, elf_output, target_addr, symbol_table.clone());
         let mut p: Program = Program {
@@ -2121,36 +2214,29 @@ impl Program {
             symbol_table: Default::default(),
             function_symbols: Default::default(),
             renamed_symbols: Default::default(),
+            remap_locations: Default::default(),
             current_addr: 0,
             start_addr: 0,
             target_addr,
             current_symbol: None,
+            current_symbol_name: None,
             dwarf_builder,
         };
 
         p.symbol_table = symbol_table;
         let loc = Srcloc::start("*env*");
         let envhash = sha256tree(env.clone());
+        for (remap_hash, name, remap_sexp) in remap_hashes.into_iter() {
+            let remap_hash_hex = hex::encode(&remap_hash);
+            eprintln!("should remap hash {} to {name}", remap_hash_hex);
+            p.renamed_symbols.insert(remap_hash_hex.clone(), name.clone());
+            p.remap_locations
+                .insert(remap_hash_hex.clone(), remap_sexp.loc());
+            p.add_sexp(&remap_sexp.loc(), &remap_hash, remap_sexp.clone());
+            p.add(remap_sexp);
+        }
         p.first_label = p.add(sexp.clone());
         p.start_insns();
-        let remap_hashes: Vec<_> = p.symbol_table.iter().filter_map(|(hash, name)| {
-            if name.contains(':') {
-                return None;
-            }
-
-            if let Ok(byte_hash) = hex::decode(&hash) {
-                if let (remap_hash, Some(sexp)) = find_by_hash(&byte_hash, sexp.clone()) {
-                    return Some((remap_hash, name.clone(), sexp.clone()));
-                }
-            }
-            None
-        }).collect();
-
-        for (remap_hash, name, sexp) in remap_hashes.into_iter() {
-            eprintln!("should remap hash {} to {name}", hex::encode(&remap_hash));
-            p.renamed_symbols.insert(hex::encode(&remap_hash), name.clone());
-            p.add_sexp(&sexp.loc(), &remap_hash, sexp.clone());
-        }
         p.env_label = p.add_sexp(&loc, &envhash, env);
         p.emit_waiting();
         p.finish_insns()?;

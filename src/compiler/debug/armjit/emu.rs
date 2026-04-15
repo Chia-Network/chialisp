@@ -298,6 +298,40 @@ fn match_printing(operator: Rc<SExp>, sexp: Rc<SExp>) -> Option<Rc<SExp>> {
 }
 
 impl Emu {
+    fn get_nul_terminated_string(&self, addr: u32) -> Option<String> {
+        if addr == 0 {
+            return None;
+        }
+
+        let mut out = Vec::new();
+        for i in 0..1024_u32 {
+            let b = self.mem.read_u8(addr + i);
+            if b == 0 {
+                return Some(String::from_utf8_lossy(&out).to_string());
+            }
+            out.push(b);
+        }
+
+        None
+    }
+
+    fn lookup_dispatch_target_by_hash(&self, hash_hex: &str) -> Option<u32> {
+        if let Some(lookup) = self.jit_symbols.get(hash_hex) {
+            return Some(lookup.address);
+        }
+
+        let alias_symbol = format!("_$_{hash_hex}");
+        if let Some(alias_info) = self.jit_symbols.get(&alias_symbol) {
+            if let Some(alias_name) = self.get_nul_terminated_string(alias_info.address) {
+                if let Some(lookup) = self.jit_symbols.get(&alias_name) {
+                    return Some(lookup.address);
+                }
+            }
+        }
+
+        None
+    }
+
     pub fn new(
         program_elf: &[u8],
         start_addr: u32,
@@ -477,13 +511,13 @@ impl Emu {
             // Setup stack frame in code buffer.
 
             let current_pc = self.cpu.reg_get(Mode::User, reg::PC);
-            if let Some(lookup) = self.jit_symbols.get(&string_of_hash) {
+            if let Some(dispatch_address) = self.lookup_dispatch_target_by_hash(&string_of_hash) {
                 // We found it, transfer control.
                 self.cpu
                     .reg_set(Mode::User, 0, self.cpu.reg_get(Mode::User, 7));
                 self.cpu.reg_set(Mode::User, reg::LR, current_pc + 8);
                 self.cpu.reg_set(Mode::User, reg::PC, current_pc + 4);
-                self.cpu.reg_set(Mode::User, 1, lookup.address);
+                self.cpu.reg_set(Mode::User, 1, dispatch_address);
                 return None;
             };
 
