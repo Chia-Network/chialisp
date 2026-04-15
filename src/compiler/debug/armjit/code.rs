@@ -1532,22 +1532,18 @@ impl Program {
             for i in &[
                 Instr::Addi(Register::R(0), Register::R(7), 0),
                 Instr::Bl(else_clause),
-                Instr::Swi(swi_print(0, 35)),
                 Instr::Addi(Register::R(6), Register::R(0), 0),
                 Instr::Addi(Register::R(0), Register::R(7), 0),
                 Instr::Bl(then_clause),
-                Instr::Swi(swi_print(0, 34)),
                 Instr::Addi(Register::R(4), Register::R(0), 0),
                 Instr::Addi(Register::R(0), Register::R(7), 0),
                 Instr::Bl(cond_clause),
-                Instr::Swi(swi_print(0, 33)),
                 Instr::Cmpi(Register::R(0), 0),
                 Instr::AddiEq(Register::R(4), Register::R(6), 0),
                 Instr::Ldr(Register::R(1), Register::R(0), 0),
                 Instr::Cmpi(Register::R(1), 1),
                 Instr::AddiEq(Register::R(4), Register::R(6), 0),
                 Instr::Addi(Register::R(0), Register::R(4), 0),
-                Instr::Swi(swi_print(0, 32)),
             ] {
                 self.push(source_sexp.clone(), loc, i.clone());
             }
