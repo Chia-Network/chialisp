@@ -99,38 +99,41 @@ pub fn compile_to_arm_elf(args: &Args) -> Result<(Vec<u8>, HashMap<String, Strin
 
     let opts = DefaultCompilerOpts::new(&args.filename).set_search_paths(&parsed.search_paths);
 
-    let (program_locations, compiled) =
-        if parsed.dialect.stepping.is_some() {
-            let parsed_program = parse_sexp(Srcloc::start(&args.filename), argfile.bytes()).map_err(|e| format!("failed to parse chialisp program {}", args.filename))?;
-            let fe = frontend(parsed.opts.clone(), &parsed_program).map_err(|e| format!("failed to compose frontend program"))?;
-            let compiled = compile_file(&mut allocator, runner, opts, &argfile, &mut symbol_table)
-                .map_err(|e| format!("failed to compile chialisp: {e:?}"))?;
-            build_symbol_table_mut(&mut symbol_table, &compiled);
-            eprintln!("compiled {compiled}");
-            let range_results: HashMap<String, Srcloc> = fe.helpers.iter().map(|h| {
-                (decode_string(h.name()), h.loc())
-            }).collect();
-            (range_results, Rc::new(compiled))
-        } else {
-            let compile_invoke_code = run(&mut allocator);
-            let assembled_sexp = assemble(&mut allocator, &argfile)
-                .map_err(|e| format!("failed to assemble clvm {e:?}"))?;
-            let input_sexp = allocator
-                .new_pair(assembled_sexp, NodePtr::NIL)
-                .map_err(|e| format!("failed to allocate compiler args {e:?}"))?;
-            special_runner.set_compiler_opts(Some(opts));
-            let run_program_output = special_runner
-                .run_program(&mut allocator, compile_invoke_code, input_sexp, None)
-                .map_err(|e| format!("failed to run classic compiler: {e:?}"))?;
-            symbol_table = special_runner.get_compiles();
-            let compiled = convert_from_clvm_rs(
-                &mut allocator,
-                Srcloc::start(&args.filename),
-                run_program_output.1,
-            )
-                .map_err(|e| format!("failed to convert clvm {e:?}"))?;
-            (HashMap::new(), compiled)
-        };
+    let (program_locations, compiled) = if parsed.dialect.stepping.is_some() {
+        let parsed_program = parse_sexp(Srcloc::start(&args.filename), argfile.bytes())
+            .map_err(|e| format!("failed to parse chialisp program {}", args.filename))?;
+        let fe = frontend(parsed.opts.clone(), &parsed_program)
+            .map_err(|e| format!("failed to compose frontend program"))?;
+        let compiled = compile_file(&mut allocator, runner, opts, &argfile, &mut symbol_table)
+            .map_err(|e| format!("failed to compile chialisp: {e:?}"))?;
+        build_symbol_table_mut(&mut symbol_table, &compiled);
+        eprintln!("compiled {compiled}");
+        let range_results: HashMap<String, Srcloc> = fe
+            .helpers
+            .iter()
+            .map(|h| (decode_string(h.name()), h.loc()))
+            .collect();
+        (range_results, Rc::new(compiled))
+    } else {
+        let compile_invoke_code = run(&mut allocator);
+        let assembled_sexp = assemble(&mut allocator, &argfile)
+            .map_err(|e| format!("failed to assemble clvm {e:?}"))?;
+        let input_sexp = allocator
+            .new_pair(assembled_sexp, NodePtr::NIL)
+            .map_err(|e| format!("failed to allocate compiler args {e:?}"))?;
+        special_runner.set_compiler_opts(Some(opts));
+        let run_program_output = special_runner
+            .run_program(&mut allocator, compile_invoke_code, input_sexp, None)
+            .map_err(|e| format!("failed to run classic compiler: {e:?}"))?;
+        symbol_table = special_runner.get_compiles();
+        let compiled = convert_from_clvm_rs(
+            &mut allocator,
+            Srcloc::start(&args.filename),
+            run_program_output.1,
+        )
+        .map_err(|e| format!("failed to convert clvm {e:?}"))?;
+        (HashMap::new(), compiled)
+    };
 
     let env_node =
         assemble(&mut allocator, &args.env).map_err(|e| format!("failed to read env: {e:?}"))?;

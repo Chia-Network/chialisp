@@ -43,9 +43,9 @@ use crate::compiler::dialect::AcceptedDialect;
 #[cfg(test)]
 use crate::compiler::frontend::frontend;
 use crate::compiler::prims::primquote;
-use crate::compiler::sexp::{parse_sexp, SExp};
 #[cfg(test)]
 use crate::compiler::sexp::decode_string;
+use crate::compiler::sexp::{parse_sexp, SExp};
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::TRunProgram;
 
@@ -908,11 +908,15 @@ impl Emu {
             .set_search_paths(&search_paths)
             .set_frontend_opt(false);
 
-        let parsed_program = parse_sexp(srcloc.clone(), program.bytes()).map_err(|e| format!("failed to parse chialisp program {filename}"))?;
-        let fe = frontend(opts.clone(), &parsed_program).map_err(|e| format!("failed to compose frontend program"))?;
-        let range_results: HashMap<String, Srcloc> = fe.helpers.iter().map(|h| {
-            (decode_string(h.name()), h.loc())
-        }).collect();
+        let parsed_program = parse_sexp(srcloc.clone(), program.bytes())
+            .map_err(|e| format!("failed to parse chialisp program {filename}"))?;
+        let fe = frontend(opts.clone(), &parsed_program)
+            .map_err(|e| format!("failed to compose frontend program"))?;
+        let range_results: HashMap<String, Srcloc> = fe
+            .helpers
+            .iter()
+            .map(|h| (decode_string(h.name()), h.loc()))
+            .collect();
 
         let compiled = compile_file(&mut allocator, runner, opts, program, &mut symbol_table)
             .expect("should compile");
@@ -921,7 +925,7 @@ impl Emu {
         let tmpname = tmpfile.path().to_str().unwrap().to_string();
         let symbols = Rc::new(symbol_table);
         let generator = Program::new(
-	    range_results,            
+            range_results,
             filename,
             &tmpname,
             Rc::new(compiled),

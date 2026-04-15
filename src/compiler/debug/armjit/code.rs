@@ -1334,7 +1334,9 @@ impl Program {
     }
 
     fn label_is_taken(&self, label: &str) -> bool {
-        self.labels_by_hash.values().any(|existing| existing == label)
+        self.labels_by_hash
+            .values()
+            .any(|existing| existing == label)
     }
 
     fn get_program_function_label(&self, sexp: Rc<SExp>) -> Option<String> {
@@ -2229,7 +2231,8 @@ impl Program {
         for (remap_hash, name, remap_sexp) in remap_hashes.into_iter() {
             let remap_hash_hex = hex::encode(&remap_hash);
             eprintln!("should remap hash {} to {name}", remap_hash_hex);
-            p.renamed_symbols.insert(remap_hash_hex.clone(), name.clone());
+            p.renamed_symbols
+                .insert(remap_hash_hex.clone(), name.clone());
             p.remap_locations
                 .insert(remap_hash_hex.clone(), remap_sexp.loc());
             p.add_sexp(&remap_sexp.loc(), &remap_hash, remap_sexp.clone());
