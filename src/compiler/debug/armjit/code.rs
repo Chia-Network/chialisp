@@ -1050,13 +1050,15 @@ impl DwarfBuilder {
             .expect("CFI CIE should be initialized for unwind info");
         self.frame_table.add_fde(cfi_cie_id, fde);
 
-        let (name, args) = if let Some(preferred_name) = preferred_name {
-            (preferred_name.to_string(), "ENV".to_string())
-        } else {
-            self.match_function(&label)
-                .map(|c| c.clone())
-                .unwrap_or_else(|| (label.to_string(), "ENV".to_string()))
-        };
+        let matched_signature = self.match_function(&label);
+        let name = preferred_name
+            .map(str::to_string)
+            .or_else(|| matched_signature.as_ref().map(|(name, _)| name.clone()))
+            .unwrap_or_else(|| label.to_string());
+        let args = matched_signature
+            .as_ref()
+            .map(|(_, args)| args.clone())
+            .unwrap_or_else(|| "ENV".to_string());
 
         // We'll make 3 subprograms to represent where the current arguments can be arrived
         // at from, then decorate all of them with the argument retriever below.
