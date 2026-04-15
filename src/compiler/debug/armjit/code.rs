@@ -901,8 +901,33 @@ impl DwarfBuilder {
     }
 
     fn match_function(&self, label: &str) -> Option<(String, String)> {
-        let mut stripped: Vec<u8> = label.bytes().skip(1).take_while(|b| *b != b'_').collect();
-        if let Some(name) = self.symbol_table.get(&decode_string(&stripped)).cloned() {
+        let symbol_hash = if let Some(stripped) = label.strip_prefix('_') {
+            let hash = stripped
+                .chars()
+                .take_while(|c| *c != '_')
+                .collect::<String>();
+            if self.symbol_table.contains_key(&hash) {
+                Some(hash)
+            } else {
+                None
+            }
+        } else {
+            self.symbol_table
+                .iter()
+                .find(|(hash, name)| {
+                    *name == label
+                        && hash.len() == 64
+                        && hash.as_bytes().iter().all(|b| b.is_ascii_hexdigit())
+                })
+                .map(|(hash, _)| hash.clone())
+        };
+        if let Some(symbol_hash) = symbol_hash {
+            let mut stripped = symbol_hash.as_bytes().to_vec();
+            let name = self
+                .symbol_table
+                .get(&symbol_hash)
+                .cloned()
+                .unwrap_or_else(|| label.to_string());
             let mut left_stripped = stripped.clone();
             left_stripped.append(&mut b"_left_env".to_vec());
             let left_env = if let Some(res) = self
