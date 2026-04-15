@@ -9,6 +9,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
 
+use sha2::Digest;
+use sha2::Sha256;
+
 use faerie::{ArtifactBuilder, Decl, Link, SectionKind};
 use gimli;
 use gimli::constants::{
@@ -1279,6 +1282,35 @@ pub fn swi_print(register: usize, label: usize) -> usize {
     SWI_PRINT_EXPR | register << 4 | label << 8
 }
 
+fn find_by_hash(hash: &[u8], sexp: Rc<SExp>) -> (Vec<u8>, Option<Rc<SExp>>) {
+    if let SExp::Cons(_, a, b) = &*sexp {
+        let (mut hash_a, found_a) = find_by_hash(hash, a.clone());
+        if let Some(ref fh) = found_a {
+            return (hash_a, found_a);
+        }
+        let (mut hash_b, found_b) = find_by_hash(hash, b.clone());
+        if let Some(ref fh) = found_b {
+            return (hash_b, found_b);
+        }
+        let mut hasher = Sha256::new();
+        hasher.update([2]);
+        hasher.update(&hash_a);
+        hasher.update(&hash_b);
+        let my_hash = hasher.finalize().to_vec();
+        if my_hash == hash {
+            return (my_hash, Some(sexp.clone()));
+        }
+        (my_hash, None)
+    } else {
+        let the_hash = sha256tree(sexp.clone());
+        if the_hash == hash {
+            (the_hash, Some(sexp.clone()))
+        } else {
+            (the_hash, None)
+        }
+    }
+}
+
 struct Function {
     left_env: bool,
     args: Rc<SExp>,
@@ -1631,7 +1663,22 @@ impl Program {
 
         // Note: get_code_label issues a fresh label for this hash every time.
         let body_label = self.get_code_label(&hash);
-        eprintln!("label {body_label} for {sexp}");
+        eprintln!("label {body_label} for {sexp} at {}", sexp.loc());
+
+        let body_label =
+            if let Some(new_name) = self.program.iter().find(|(name, loc)| {
+                loc.overlap(&sexp.loc())
+            }).map(|(name, _)| name.clone()) {
+                if !self.renamed_symbols.contains_key(&new_name) {
+                    self.renamed_symbols.insert(new_name.clone(), body_label.clone());
+                    new_name
+                } else {
+                    body_label
+                }
+            } else {
+                body_label
+            };
+
         self.waiting_programs
             .push((body_label.clone(), sexp.clone()));
         body_label
@@ -1653,6 +1700,7 @@ impl Program {
             //
             // Ensure we set the current symbol.
             self.current_symbol = Some(g.clone());
+
             instr
         } else {
             instr
@@ -2083,8 +2131,26 @@ impl Program {
         p.symbol_table = symbol_table;
         let loc = Srcloc::start("*env*");
         let envhash = sha256tree(env.clone());
-        p.first_label = p.add(sexp);
+        p.first_label = p.add(sexp.clone());
         p.start_insns();
+        let remap_hashes: Vec<_> = p.symbol_table.iter().filter_map(|(hash, name)| {
+            if name.contains(':') {
+                return None;
+            }
+
+            if let Ok(byte_hash) = hex::decode(&hash) {
+                if let (remap_hash, Some(sexp)) = find_by_hash(&byte_hash, sexp.clone()) {
+                    return Some((remap_hash, name.clone(), sexp.clone()));
+                }
+            }
+            None
+        }).collect();
+
+        for (remap_hash, name, sexp) in remap_hashes.into_iter() {
+            eprintln!("should remap hash {} to {name}", hex::encode(&remap_hash));
+            p.renamed_symbols.insert(hex::encode(&remap_hash), name.clone());
+            p.add_sexp(&sexp.loc(), &remap_hash, sexp.clone());
+        }
         p.env_label = p.add_sexp(&loc, &envhash, env);
         p.emit_waiting();
         p.finish_insns()?;
