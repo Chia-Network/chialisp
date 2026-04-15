@@ -655,7 +655,7 @@ fn match_op_name_4(pl: &[SExp]) -> Option<OpName4Match> {
     // a bit more forgiving when we're examining code that has round-tripped through traditional
     // clvm, which happens when modern tools such as use check are used on classic programs.
     // The modern frontend requires atom representation in positions 0 and 1 of helpers anyway.
-    match &pl[0].atomize() {
+    match &pl[0] {
         SExp::Atom(l, op_name) => {
             if pl.len() < 3 {
                 return Some(OpName4Match {
@@ -669,7 +669,7 @@ fn match_op_name_4(pl: &[SExp]) -> Option<OpName4Match> {
                 });
             }
 
-            match &pl[1].atomize() {
+            match &pl[1] {
                 SExp::Atom(ll, name) => {
                     let tail_idx = 3;
                     let mut tail_list = Vec::new();
