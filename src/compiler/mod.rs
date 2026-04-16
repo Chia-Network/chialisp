@@ -1,9 +1,36 @@
+//! Chialisp compiler and some associated tools, such as a more informative debugger.
+//!
+//! clvm -- a clvm runner which allows clvm to be executed one step at a time, returning control
+//! to the caller.
+//!
+//! cldb -- cldb debugging using the clvm step runner.  it produces source coordinates for the
+//!
+//! clvm code being executed at each step.
+//!
+//! comptypes -- datastructure for representing and manipulating chialisp programs.
+//!
+//! debug -- support for partly recovering debug information after passing clvm data through
+//! a less expressive data representation.
+//!
+//! evaluate -- an evaluator for the chialisp language itself which can also partially evaluate
+//! chialisp expressions.
+//!
+//! frontend -- process parsed clvm sexp into a representation of a chialisp program.
+//!
+//! gensym -- simple unique name generator.
+//!
+//! inline -- support for transforming inline function calls to the fully expanded expression.
+//!
+//! lambda -- support for callable lambda function as expressions.
+//!
+//! optimize -- support for some kinds of optimization.
+
 /// Chialisp debugging.
 pub mod cldb;
 pub mod cldb_hierarchy;
 /// CLVM running.
 pub mod clvm;
-mod codegen;
+pub mod codegen;
 /// CompilerOpts which is the main holder of toplevel compiler state.
 #[allow(clippy::module_inception)]
 pub mod compiler;
@@ -16,22 +43,43 @@ pub mod comptypes;
 pub mod debug;
 /// Utilities for chialisp dialect choice
 pub mod dialect;
+/// Evaluate and partially evaluate chialisp expressions
 pub mod evaluate;
+/// Turn chialisp programs expressed as parsed clvm into data structures describing a chialisp program.
 pub mod frontend;
+/// A generator which can expand clvm expressions randomly according to rules, allowing random
+/// programs and data structures to be generated.
 #[cfg(any(test, feature = "fuzz"))]
 pub mod fuzz;
+/// Gensym function which creates a new unused name.
 pub mod gensym;
+/// Support for inline functions.
 mod inline;
+/// Support for lambda functions with captures.
 mod lambda;
+/// Support for optimizing chialisp.
 pub mod optimize;
+/// A fully independent prepreocessor step for chialisp.
 pub mod preprocessor;
+/// Defined primitives which act as callable functions in the chialisp language.
 pub mod prims;
+/// Renaming support for making shadowed names in chialisp code unambiguous.
 pub mod rename;
+/// A repl using ```evaluate```.
 pub mod repl;
+/// A namespace resolver which uses (namespace ...) and (import ...) forms to assemble standard
+/// style compileforms from ones that use namespaces.  Helpers are retrieved from accessible
+/// namespaces and all references are rewritten to be fully qualified.
+pub mod resolve;
+/// Types related to running clvm code.
 pub mod runtypes;
+/// A flexible, full featured SExp object which preserves a source association and user intent.
 pub mod sexp;
+/// Support for preserving the association between clvm data and locations in the source code.
 pub mod srcloc;
+/// Support for limiting stack depth during evaluation.
 pub mod stackvisit;
+/// Support for determining whether program argument values will be used statically.
 pub mod usecheck;
 
 use clvmr::allocator::Allocator;

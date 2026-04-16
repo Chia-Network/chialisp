@@ -5,7 +5,7 @@ use std::rc::Rc;
 use crate::compiler::codegen::toposort_assign_bindings;
 use crate::compiler::comptypes::{
     map_m, map_m_reverse, Binding, BindingPattern, BodyForm, CompileErr, CompileForm, DefconstData,
-    DefmacData, DefunData, HelperForm, LambdaData, LetData, LetFormKind,
+    DefmacData, DefunData, HelperForm, LambdaData, LetData, LetFormKind, NamespaceData,
 };
 use crate::compiler::gensym::gensym;
 use crate::compiler::sexp::SExp;
@@ -420,6 +420,12 @@ fn rename_in_helperform(
                 ..*defun.clone()
             }),
         )),
+        // Defnamespace serves as a container for forms that are copied into the compileform when
+        // resolved.  It does not need renaming.
+        HelperForm::Defnamespace(_ns) => Ok(h.clone()),
+        // Defnsref is just a reference which doesn't contain locals.  Order was taken care of
+        // when we did module resolution.
+        HelperForm::Defnsref(_ns) => Ok(h.clone()),
     }
 }
 
@@ -469,6 +475,14 @@ pub fn rename_args_helperform(h: &HelperForm) -> Result<HelperForm, CompileErr> 
                 }),
             ))
         }
+        HelperForm::Defnamespace(ns) => {
+            let renamed = map_m(rename_args_helperform, &ns.helpers)?;
+            Ok(HelperForm::Defnamespace(Box::new(NamespaceData {
+                helpers: renamed,
+                ..*ns.clone()
+            })))
+        }
+        HelperForm::Defnsref(_) => Ok(h.clone()),
     }
 }
 
@@ -511,7 +525,7 @@ pub fn rename_args_compileform(c: &CompileForm) -> Result<CompileForm, CompileEr
     let local_renamed_arg = rename_in_cons(&local_namemap, c.args.clone(), true);
     let local_renamed_helpers: Vec<HelperForm> = map_m(&rename_args_helperform, &c.helpers)?;
     let local_renamed_body = rename_args_bodyform(c.exp.borrow())?;
-    Ok(CompileForm {
+    let renamed_cf = CompileForm {
         loc: c.loc(),
         args: local_renamed_arg,
         include_forms: c.include_forms.clone(),
@@ -523,5 +537,6 @@ pub fn rename_args_compileform(c: &CompileForm) -> Result<CompileForm, CompileEr
             &local_namemap,
             Rc::new(local_renamed_body),
         )?),
-    })
+    };
+    Ok(renamed_cf)
 }

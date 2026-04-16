@@ -1,0 +1,4 @@
+(include *standard-cl-23*)
+(import std.factorial)
+
+(export (X) (! X))

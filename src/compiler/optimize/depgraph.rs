@@ -7,16 +7,23 @@ use crate::compiler::sexp::enlist;
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::{BodyForm, CompileForm, DefunData, HelperForm, SExp};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DepgraphKind {
     UserNonInline,
     UserInline,
     Synthetic(SyntheticType),
 }
 
+#[derive(Debug, Clone)]
+pub enum DepgraphOrigin {
+    Function,
+    Constant,
+}
+
 pub struct FunctionDependencyEntry {
     pub loc: Srcloc,
     pub name: Vec<u8>,
+    pub origin: DepgraphOrigin,
     pub status: DepgraphKind,
     pub depends_on: HashSet<Vec<u8>>,
     pub is_depended_on_by: HashSet<Vec<u8>>,
@@ -58,20 +65,27 @@ impl FunctionDependencyEntry {
         ))
     }
 
-    pub fn new(name: &[u8], loc: Srcloc, status: DepgraphKind) -> Self {
+    pub fn new(name: &[u8], loc: Srcloc, status: DepgraphKind, origin: DepgraphOrigin) -> Self {
         FunctionDependencyEntry {
             loc,
             name: name.to_vec(),
             status,
+            origin,
             depends_on: HashSet::default(),
             is_depended_on_by: HashSet::default(),
         }
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct DepgraphOptions {
+    pub with_constants: bool,
+}
+
 pub struct FunctionDependencyGraph {
     pub loc: Srcloc,
     pub helpers: HashMap<Vec<u8>, FunctionDependencyEntry>,
+    pub options: DepgraphOptions,
 }
 
 fn status_from_defun(inline: bool, defun: &DefunData) -> DepgraphKind {
@@ -98,6 +112,22 @@ impl FunctionDependencyGraph {
             result_set.remove(helper);
             result_set
         })
+    }
+
+    pub fn get_depended_on_by(&self, helper_name: &[u8]) -> Option<HashSet<Vec<u8>>> {
+        if let Some(helper) = self.helpers.get(helper_name) {
+            return Some(helper.is_depended_on_by.clone());
+        }
+
+        None
+    }
+
+    pub fn get_depends_on(&self, helper_name: &[u8]) -> Option<HashSet<Vec<u8>>> {
+        if let Some(helper) = self.helpers.get(helper_name) {
+            return Some(helper.depends_on.clone());
+        }
+
+        None
     }
 
     pub fn get_full_depended_on_by(
@@ -175,19 +205,47 @@ impl FunctionDependencyGraph {
     }
 
     fn process_helper(&mut self, h: &HelperForm) {
-        if let HelperForm::Defun(_, defun) = h {
-            self.process_expr(&defun.name, defun.body.clone());
+        match h {
+            HelperForm::Defun(_, defun) => {
+                self.process_expr(&defun.name, defun.body.clone());
+            }
+            HelperForm::Defconstant(dc) => {
+                if self.options.with_constants {
+                    self.process_expr(&dc.name, dc.body.clone());
+                }
+            }
+            _ => {}
         }
     }
 
-    pub fn new(program: &CompileForm) -> Self {
+    pub fn new_with_options(program: &CompileForm, options: DepgraphOptions) -> Self {
         let mut helpers: HashMap<Vec<u8>, FunctionDependencyEntry> = HashMap::new();
 
         for h in program.helpers.iter() {
             if let HelperForm::Defun(inline, d) = h {
                 helpers.insert(
                     h.name().to_vec(),
-                    FunctionDependencyEntry::new(h.name(), h.loc(), status_from_defun(*inline, d)),
+                    FunctionDependencyEntry::new(
+                        h.name(),
+                        h.loc(),
+                        status_from_defun(*inline, d),
+                        DepgraphOrigin::Function,
+                    ),
+                );
+            }
+            if matches!(h, HelperForm::Defconstant(_)) {
+                if !options.with_constants {
+                    continue;
+                }
+
+                helpers.insert(
+                    h.name().to_vec(),
+                    FunctionDependencyEntry::new(
+                        h.name(),
+                        h.loc(),
+                        DepgraphKind::Synthetic(SyntheticType::NoInlinePreference),
+                        DepgraphOrigin::Constant,
+                    ),
                 );
             }
         }
@@ -195,6 +253,7 @@ impl FunctionDependencyGraph {
         let mut graph = FunctionDependencyGraph {
             loc: program.loc.clone(),
             helpers,
+            options,
         };
 
         for h in program.helpers.iter() {
@@ -202,6 +261,10 @@ impl FunctionDependencyGraph {
         }
 
         graph
+    }
+
+    pub fn new(program: &CompileForm) -> Self {
+        Self::new_with_options(program, DepgraphOptions::default())
     }
 
     pub fn to_sexp(&self) -> Rc<SExp> {

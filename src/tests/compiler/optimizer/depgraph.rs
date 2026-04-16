@@ -19,7 +19,7 @@ fn get_depgraph_for_program(prog: &str) -> FunctionDependencyGraph {
     });
     let compileform = frontend(opts.clone(), &forms).expect("should frontend");
 
-    FunctionDependencyGraph::new(&compileform)
+    FunctionDependencyGraph::new(&compileform.compileform())
 }
 
 #[test]

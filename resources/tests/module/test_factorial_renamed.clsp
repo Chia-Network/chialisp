@@ -1,0 +1,4 @@
+(include *standard-cl-23*)
+(import std.factorial exposing (! as factorial))
+
+(export (X) (factorial X))

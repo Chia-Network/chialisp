@@ -18,7 +18,7 @@ permissions:
 jobs:
   build_wheels:
     name: Build ARM64 Python Wheels
-    runs-on: [ARM64, Linux]
+    runs-on: ubuntu-24.04-arm
     container:
       image: ghcr.io/chia-network/build-images/centos-pypa-rust-aarch64:latest
 

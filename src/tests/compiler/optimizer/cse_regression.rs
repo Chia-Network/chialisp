@@ -145,6 +145,6 @@ fn test_cse_merge_regression() {
         let old_compiled = old_opts
             .compile_program(&mut old_context, program_sexp)
             .expect("should compile (old)");
-        assert_eq!(new_compiled, old_compiled);
+        assert_eq!(new_compiled.to_sexp(), old_compiled.to_sexp());
     }
 }

@@ -817,7 +817,7 @@ fn compile_call(
                         .map(|code| {
                             CompiledCode(
                                 call.loc.clone(),
-                                Rc::new(primquote(call.loc.clone(), Rc::new(code))),
+                                Rc::new(primquote(call.loc.clone(), Rc::new(code.to_sexp()))),
                             )
                         })
                 } else {
@@ -1102,7 +1102,11 @@ fn codegen_(
                 updated_opts
                     .compile_program(context, Rc::new(tocompile))
                     .and_then(|code| {
-                        context.post_codegen_function_optimize(opts.clone(), Some(h), Rc::new(code))
+                        context.post_codegen_function_optimize(
+                            opts.clone(),
+                            Some(h),
+                            Rc::new(code.to_sexp()),
+                        )
                     })
                     .and_then(|code| {
                         fail_if_present(defun.loc.clone(), &compiler.inlines, &defun.name, code)
@@ -1613,7 +1617,7 @@ fn start_codegen(
                         context.allocator(),
                         runner,
                         opts.prim_map(),
-                        Rc::new(code),
+                        Rc::new(code.to_sexp()),
                         Rc::new(SExp::Nil(defc.loc.clone())),
                         None,
                         Some(CONST_EVAL_LIMIT),
@@ -1686,7 +1690,7 @@ fn start_codegen(
                 let code = updated_opts.compile_program(context, macro_program)?;
 
                 let optimized_code =
-                    context.macro_optimization(opts.clone(), Rc::new(code.clone()))?;
+                    context.macro_optimization(opts.clone(), Rc::new(code.to_sexp()))?;
 
                 code_generator.add_macro(&mac.name, optimized_code)
             }

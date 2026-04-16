@@ -115,7 +115,7 @@ fn test_run_clvm_in_cldb() {
         run_clvm_in_cldb(
             program_name,
             Rc::new(program_lines),
-            Rc::new(program),
+            Rc::new(program.to_sexp()),
             symbols,
             args,
             &mut DoesntWatchCldb {},
@@ -208,7 +208,7 @@ fn compile_and_run_program_with_tree(
         input_file_name: Some(input_file.to_owned()),
         lines: program_lines,
         symbol_table: Rc::new(use_symbol_table),
-        prog: Rc::new(program),
+        prog: Rc::new(program.to_sexp()),
         args,
         flags,
     })

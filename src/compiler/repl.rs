@@ -118,7 +118,10 @@ impl Repl {
                 )),
             )),
         );
-        let start_program_fe = frontend(opts.clone(), &[starter_empty_program]).unwrap();
+        let start_program_fe = frontend(opts.clone(), &[starter_empty_program])
+            .unwrap()
+            .compileform()
+            .clone();
         let evaluator = Evaluator::new(opts.clone(), runner.clone(), start_program_fe.helpers);
 
         Repl {
@@ -191,12 +194,15 @@ impl Repl {
                     let prog0 = parsed_program[0].clone();
                     let name = second_of_alist(prog0.clone())?;
                     let built_program = program_with_helper(vec![name], prog0);
-                    let program = frontend(self.opts.clone(), &[built_program])?;
+                    let program = frontend(self.opts.clone(), &[built_program])?
+                        .compileform()
+                        .clone();
                     self.evaluator
                         .add_helper(&program.helpers[program.helpers.len() - 1]);
                     Ok(Some(Rc::new(BodyForm::Quoted(SExp::Nil(self.loc.clone())))))
                 } else {
                     frontend(self.opts.clone(), &parsed_program)
+                        .map(|p| p.compileform().clone())
                         .and_then(|program| {
                             self.evaluator.shrink_bodyform(
                                 context,

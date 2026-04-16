@@ -1,0 +1,8 @@
+(include *strict-cl-21*)
+(import std.assert exposing assert)
+
+(defun F (X) (assert (- X 1) ()))
+(defun G (X) (assert (= 6 (* X 2)) ()))
+
+(export G)
+(export F)

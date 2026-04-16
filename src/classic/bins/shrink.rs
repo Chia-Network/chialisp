@@ -39,6 +39,7 @@ fn main() {
     let _ = parse_sexp(loc, args[1].bytes())
         .err_into()
         .and_then(|parsed_program| frontend(opts.clone(), &parsed_program))
+        .map(|p| p.compileform().clone())
         .and_then(|program| {
             let e = Evaluator::new(opts.clone(), runner.clone(), program.helpers.clone());
             e.shrink_bodyform(

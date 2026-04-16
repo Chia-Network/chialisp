@@ -1,0 +1,4 @@
+(include *standard-cl-23*)
+(import qualified programs.p1 as P1)
+
+(export () (list P1.program_hash P1.program))

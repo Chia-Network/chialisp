@@ -1,0 +1,15 @@
+;; F and C should be consistent.
+(include *standard-cl-23*)
+(import std.shatree)
+
+(defun F (A B) (+ A B))
+
+(defconst C F)
+
+;; (defconst FHASH (shatree F))
+(defconst CHASH (shatree C))
+
+(export F)
+(export C)
+;; (export FHASH)
+(export CHASH)

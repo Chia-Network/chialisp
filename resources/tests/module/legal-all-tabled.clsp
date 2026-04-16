@@ -1,0 +1,7 @@
+(include *standard-cl-23*)
+
+(defconst X 1)
+(defconst Y (+ X 1))
+(defconst Z (+ Y 1))
+(defun F (E) (+ E Z))
+(export F)

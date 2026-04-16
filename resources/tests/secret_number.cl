@@ -1,0 +1,7 @@
+(mod (A)
+  (include *standard-cl-21*)
+  (include test_sub_include.cl)
+  (let ((X 19))
+    (+ A X)
+    )
+  )
