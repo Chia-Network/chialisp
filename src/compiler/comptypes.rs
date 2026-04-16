@@ -848,8 +848,8 @@ pub struct IncludeDesc {
     /// Kind of inclusion.  Determines whether dependencies are recursed and
     /// what operation is performed on the retrieved clvm form.
     pub kind: Option<IncludeProcessType>,
-    /// Fingerprint of input
-    pub fingerprint: Vec<u8>,
+    /// Fingerprint of input (SHA-256 tree hash of file bytes when known; otherwise zero).
+    pub fingerprint: [u8; 32],
 }
 
 impl IncludeDesc {
