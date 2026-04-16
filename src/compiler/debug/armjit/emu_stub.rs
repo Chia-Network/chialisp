@@ -193,7 +193,8 @@ pub fn run_stub(
 
     emu.cpu.reg_get(armv4t_emu::Mode::User, 0);
 
-    gdb.run_blocking::<EmuGdbEventLoop>(emu).map_err(|e| format!("Error: {e:?}"))?;
+    gdb.run_blocking::<EmuGdbEventLoop>(emu)
+        .map_err(|e| format!("Error: {e:?}"))?;
 
     Ok(())
 }
