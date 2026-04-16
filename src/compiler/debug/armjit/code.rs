@@ -1388,23 +1388,6 @@ impl Program {
             .any(|existing| existing == label)
     }
 
-    fn get_program_function_label(&self, sexp: Rc<SExp>) -> Option<String> {
-        let target_loc = sexp.loc();
-        let hash = sha256tree(sexp.clone());
-        let hash_hex = hex::encode(&hash);
-        if let Some(remap_loc) = self.remap_locations.get(&hash_hex) {
-            if remap_loc == &target_loc {
-                if let Some(name) = self.renamed_symbols.get(&hash_hex) {
-                    return Some(name.clone());
-                }
-            }
-        }
-        self.program
-            .iter()
-            .find(|(_name, loc)| loc.overlap(&target_loc))
-            .map(|(name, _loc)| name.clone())
-    }
-
     fn get_renamed_name_for_label(&self, label: &str) -> Option<String> {
         let hash = label.strip_prefix('_').and_then(|s| s.split('_').next())?;
         self.renamed_symbols.get(hash).cloned()
@@ -1756,7 +1739,6 @@ impl Program {
         let generated_body_label = self.get_code_label(&hash);
         let body_label = self
             .get_renamed_function_label(&hash)
-            .or_else(|| self.get_program_function_label(sexp.clone()))
             .filter(|label| !self.label_is_taken(label))
             .unwrap_or(generated_body_label);
         eprintln!("label {body_label} for {sexp} at {}", sexp.loc());
