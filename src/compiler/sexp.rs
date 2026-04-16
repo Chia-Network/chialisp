@@ -1229,10 +1229,8 @@ impl<const N: usize> SelectNode<Srcloc, (Srcloc, String)> for AtomValue<&[u8; N]
             SExp::QuotedString(l, _, n) if n == name => {
                 return Ok(l.clone());
             }
-            SExp::Integer(l, i) => {
-                if &u8_from_number(i.clone()) == name {
-                    return Ok(l.clone());
-                }
+            SExp::Integer(l, i) if &u8_from_number(i.clone()) == name => {
+                return Ok(l.clone());
             }
             _ => {}
         }
