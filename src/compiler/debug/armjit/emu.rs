@@ -920,7 +920,8 @@ impl Emu {
             .collect();
 
         let compiled = compile_file(&mut allocator, runner, opts, program, &mut symbol_table)
-            .expect("should compile").to_sexp();
+            .expect("should compile")
+            .to_sexp();
         build_symbol_table_mut(&mut symbol_table, &compiled);
         let tmpfile = NamedTempFile::new().expect("should be able to make a temp file");
         let tmpname = tmpfile.path().to_str().unwrap().to_string();
