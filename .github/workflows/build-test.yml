@@ -159,10 +159,6 @@ jobs:
         echo "START PWD:" $(pwd) && \
         PYO3_PYTHON=`which python` cargo build --release
 
-        # Ensure gdb-multiarch is installed
-        apt-get update
-        apt-get install -y gdb-multiarch
-
         # Grab chia_puzzles
         rm -rf chia_puzzles
         git clone https://github.com/Chia-Network/chia_puzzles
