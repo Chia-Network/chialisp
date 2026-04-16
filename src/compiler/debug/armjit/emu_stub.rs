@@ -188,39 +188,12 @@ pub fn start_stub(
 pub fn run_stub(
     connection: Box<dyn ConnectionExt<Error = std::io::Error>>,
     emu: &mut Emu,
-) -> DynResult<()> {
+) -> Result<(), String> {
     let gdb = GdbStub::new(connection);
 
-    match gdb.run_blocking::<EmuGdbEventLoop>(emu) {
-        Ok(disconnect_reason) => match disconnect_reason {
-            DisconnectReason::Disconnect => {
-                println!("GDB client has disconnected.");
-                return Ok(());
-            }
-            DisconnectReason::TargetExited(code) => {
-                println!("Target exited with code {}!", code)
-            }
-            DisconnectReason::TargetTerminated(sig) => {
-                println!("Target terminated with signal {}!", sig)
-            }
-            DisconnectReason::Kill => println!("GDB sent a kill command!"),
-        },
-        Err(e) => {
-            if e.is_target_error() {
-                println!(
-                    "target encountered a fatal error: {:?}",
-                    e.into_target_error().unwrap()
-                )
-            } else if e.is_connection_error() {
-                let (e, kind) = e.into_connection_error().unwrap();
-                println!("connection error: {:?} - {}", kind, e,)
-            } else {
-                println!("gdbstub encountered a fatal error: {:?}", e)
-            }
-        }
-    }
-
     emu.cpu.reg_get(armv4t_emu::Mode::User, 0);
+
+    gdb.run_blocking::<EmuGdbEventLoop>(emu).map_err(|e| format!("Error: {e:?}"))?;
 
     Ok(())
 }
