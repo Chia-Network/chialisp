@@ -607,6 +607,7 @@ struct DwarfBuilder {
     synthetic_source_path: String,
     synthetic_file_id: Option<FileId>,
     synthetic_source_lines: Vec<String>,
+    synthetic_expr_line_by_key: HashMap<Vec<u8>, u64>,
     pointer_type: UnitEntryId,
     u32_type: UnitEntryId,
 
@@ -619,6 +620,7 @@ struct DwarfBuilder {
     frame_table: FrameTable,
     cfi_cie_id: Option<CieId>,
     last_row_source: Option<(String, u64, u64)>,
+    last_statement_source_line: Option<(String, u64)>,
 }
 
 struct VariableLocationInfo<'a> {
@@ -764,6 +766,7 @@ impl DwarfBuilder {
             synthetic_source_path: format!("{elf_output}.clsp"),
             synthetic_file_id: None,
             synthetic_source_lines: Vec::new(),
+            synthetic_expr_line_by_key: HashMap::new(),
             pointer_type: type_id,
             u32_type: base_type_id,
             symbol_table,
@@ -771,6 +774,7 @@ impl DwarfBuilder {
             frame_table: FrameTable::default(),
             cfi_cie_id: None,
             last_row_source: None,
+            last_statement_source_line: None,
         };
         let cfi_encoding = Encoding {
             address_size: 4,
@@ -834,9 +838,38 @@ impl DwarfBuilder {
         self.add_file_having_dirid(dirid, &filename)
     }
 
-    fn add_synthetic_line(&mut self, source_sexp: &SExp) -> u64 {
-        self.synthetic_source_lines.push(source_sexp.to_string());
-        self.synthetic_source_lines.len() as u64
+    fn synthetic_expr_key(loc: &Srcloc, source_sexp: &SExp) -> Vec<u8> {
+        let mut hasher = Sha256::new();
+        hasher.update(loc.file.as_bytes());
+        hasher.update((loc.line as u64).to_le_bytes());
+        hasher.update((loc.col as u64).to_le_bytes());
+        if let Some(until) = loc.until.as_ref() {
+            hasher.update((until.line as u64).to_le_bytes());
+            hasher.update((until.col as u64).to_le_bytes());
+        }
+        hasher.update(source_sexp.to_string().as_bytes());
+        hasher.finalize().to_vec()
+    }
+
+    fn add_synthetic_line(&mut self, loc: &Srcloc, source_sexp: &SExp) -> u64 {
+        let synthetic_key = Self::synthetic_expr_key(loc, source_sexp);
+        if let Some(line) = self.synthetic_expr_line_by_key.get(&synthetic_key) {
+            return *line;
+        }
+
+        const MAX_SYNTHETIC_EXPR_CHARS: usize = 220;
+        let expression = source_sexp.to_string();
+        let truncated: String = expression.chars().take(MAX_SYNTHETIC_EXPR_CHARS).collect();
+        let display_expr = if expression.chars().count() > MAX_SYNTHETIC_EXPR_CHARS {
+            format!("{truncated}...")
+        } else {
+            truncated
+        };
+        self.synthetic_source_lines
+            .push(format!("{loc} => {display_expr}"));
+        let line = self.synthetic_source_lines.len() as u64;
+        self.synthetic_expr_line_by_key.insert(synthetic_key, line);
+        line
     }
 
     fn write_synthetic_source_file(&self) -> Result<(), String> {
@@ -860,24 +893,32 @@ impl DwarfBuilder {
         instr: Instr,
         begin_end_block: Option<BeginEndBlock>,
     ) {
-        let (file_id, line, col) = if loc.file.starts_with('*') {
-            let synthetic_file_id = self
-                .synthetic_file_id
-                .expect("synthetic source file registered");
+        if !self
+            .dwarf
+            .units
+            .get_mut(self.unit_id)
+            .line_program
+            .in_sequence()
+        {
+            return;
+        }
+        let source_file = loc.file.to_string();
+        let source_key = (source_file.clone(), loc.line as u64, loc.col as u64);
+        let source_line_key = (source_file, loc.line as u64);
+        let synthetic_file_id = self
+            .synthetic_file_id
+            .expect("synthetic source file registered");
+        let mut using_synthetic_file = loc.file.starts_with('*');
+        let (mut file_id, mut line, mut col) = if using_synthetic_file {
             (
                 synthetic_file_id,
-                self.add_synthetic_line(source_sexp),
+                self.add_synthetic_line(loc, source_sexp),
                 1_u64,
             )
         } else {
             let (_, file_id) = self.add_file(loc.file.as_str());
             (file_id, loc.line as u64, loc.col as u64)
         };
-        let unit = self.dwarf.units.get_mut(self.unit_id);
-        if !unit.line_program.in_sequence() {
-            return;
-        }
-        let source_key = (loc.file.to_string(), loc.line as u64, loc.col as u64);
         let source_changed = self
             .last_row_source
             .as_ref()
@@ -892,18 +933,43 @@ impl DwarfBuilder {
                 | Instr::Swi(_)
                 | Instr::SwiEq(_)
         );
+        let is_statement = addr == self.seq_addr_start
+            || begin_end_block == Some(BeginEndBlock::BeginBlock)
+            || source_changed
+            || control_flow_or_dispatch;
+        if is_statement && !using_synthetic_file {
+            let same_statement_source_line = self
+                .last_statement_source_line
+                .as_ref()
+                .map(|prev| prev == &source_line_key)
+                .unwrap_or(false);
+            // Keep the first statement point on a real source line, and map
+            // repeated statement boundaries on that line to the synthetic file.
+            if same_statement_source_line {
+                file_id = synthetic_file_id;
+                line = self.add_synthetic_line(loc, source_sexp);
+                col = 1;
+                using_synthetic_file = true;
+            }
+        }
+        let unit = self.dwarf.units.get_mut(self.unit_id);
         let row = unit.line_program.row();
         row.address_offset = (addr - self.seq_addr_start) as u64;
         row.file = file_id;
         row.line = line;
         row.column = col;
-        row.is_statement = addr == self.seq_addr_start
-            || begin_end_block == Some(BeginEndBlock::BeginBlock)
-            || source_changed
-            || control_flow_or_dispatch;
+        row.is_statement = is_statement;
         eprintln!("line row {} at {:?}", row.address_offset, loc);
         row.basic_block = begin_end_block == Some(BeginEndBlock::BeginBlock);
+        let emitted_statement = row.is_statement;
         unit.line_program.generate_row();
+        if emitted_statement {
+            if using_synthetic_file {
+                self.last_statement_source_line = None;
+            } else {
+                self.last_statement_source_line = Some(source_line_key);
+            }
+        }
         self.last_row_source = Some(source_key);
     }
 
@@ -911,6 +977,7 @@ impl DwarfBuilder {
         let unit = self.dwarf.units.get_mut(self.unit_id);
         self.seq_addr_start = addr;
         self.last_row_source = None;
+        self.last_statement_source_line = None;
         unit.line_program.begin_sequence(Some(Address::Constant(
             (addr + self.target_addr as usize) as u64,
         )));
