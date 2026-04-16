@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::sync::mpsc::channel;
 use std::thread;
 use subprocess::Exec;
+use tempfile::NamedTempFile;
 
 use crate::compiler::debug::armjit::cmd::{compile_to_arm_elf, Args};
 use crate::compiler::debug::armjit::code::TARGET_ADDR;
@@ -11,13 +12,13 @@ use crate::compiler::debug::armjit::emu::Emu;
 use crate::compiler::debug::armjit::emu_stub::run_stub;
 
 #[cfg(target_os = "linux")]
-#[test]
-fn test_smoke_arm_debug() {
+fn run_test_program_with_argument(file: &str, gdb_script: &str, env: &str) -> String {
+    let temp_output = NamedTempFile::with_suffix("elf").unwrap();
     let args = Args {
         include: vec![],
-        output: "sdc.elf".to_string(),
-        filename: "resources/tests/simple_deinline_case_23.clsp".to_string(),
-        env: "(5)".to_string(),
+        output: temp_output.path().to_string_lossy().to_string(),
+        filename: file.to_string(),
+        env: env.to_string(),
     };
     let (sender, receiver) = channel();
     let t = thread::spawn(move || {
@@ -39,13 +40,35 @@ fn test_smoke_arm_debug() {
     });
     let addr = receiver.recv().unwrap();
     eprintln!("connect gdb to {addr}");
-    let gdb_run_stdout = Exec::cmd(format!("./resources/tests/test_sdc_gdb.sh"))
+    let gdb_run_stdout = Exec::cmd(gdb_script)
         .args(&[addr.to_string()])
         .capture()
         .expect("should complete")
         .stdout_str();
     eprintln!(">> {gdb_run_stdout}");
     t.join().expect("should finish");
-    fs::remove_file("sdc.elf").expect("should work");
-    assert!(gdb_run_stdout.contains("CLVM: 6000030"));
+    fs::remove_file(temp_output.path()).expect("should work");
+    gdb_run_stdout
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_smoke_arm_debug() {
+    let gdb_run = run_test_program_with_argument(
+        "resources/tests/simple_deinline_case_23.clsp",
+        "./resources/tests/test_sdc_gdb.sh",
+        "(5)",
+    );
+    assert!(gdb_run.contains("CLVM: 6000030"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_smoke_arm_debug_exception() {
+    let gdb_run = run_test_program_with_argument(
+        "resources/tests/simple_deinline_case_23.clsp",
+        "./resources/tests/test_sdc_gdb.sh",
+        "()",
+    );
+    assert!(gdb_run.contains("SIGABRT"));
 }
