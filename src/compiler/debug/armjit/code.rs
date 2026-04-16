@@ -618,6 +618,7 @@ struct DwarfBuilder {
     dwarf: Dwarf,
     frame_table: FrameTable,
     cfi_cie_id: Option<CieId>,
+    last_row_source: Option<(String, u64, u64)>,
 }
 
 struct VariableLocationInfo<'a> {
@@ -769,6 +770,7 @@ impl DwarfBuilder {
             dwarf,
             frame_table: FrameTable::default(),
             cfi_cie_id: None,
+            last_row_source: None,
         };
         let cfi_encoding = Encoding {
             address_size: 4,
@@ -855,7 +857,7 @@ impl DwarfBuilder {
         addr: usize,
         loc: &Srcloc,
         source_sexp: &SExp,
-        _instr: Instr,
+        instr: Instr,
         begin_end_block: Option<BeginEndBlock>,
     ) {
         let (file_id, line, col) = if loc.file.starts_with('*') {
@@ -875,20 +877,40 @@ impl DwarfBuilder {
         if !unit.line_program.in_sequence() {
             return;
         }
+        let source_key = (loc.file.to_string(), loc.line as u64, loc.col as u64);
+        let source_changed = self
+            .last_row_source
+            .as_ref()
+            .map(|prev| prev != &source_key)
+            .unwrap_or(true);
+        let control_flow_or_dispatch = matches!(
+            instr,
+            Instr::B(_)
+                | Instr::Bl(_)
+                | Instr::Bx(_)
+                | Instr::Blx(_)
+                | Instr::Swi(_)
+                | Instr::SwiEq(_)
+        );
         let row = unit.line_program.row();
         row.address_offset = (addr - self.seq_addr_start) as u64;
         row.file = file_id;
         row.line = line;
         row.column = col;
-        row.is_statement = addr == self.seq_addr_start;
+        row.is_statement = addr == self.seq_addr_start
+            || begin_end_block == Some(BeginEndBlock::BeginBlock)
+            || source_changed
+            || control_flow_or_dispatch;
         eprintln!("line row {} at {:?}", row.address_offset, loc);
         row.basic_block = begin_end_block == Some(BeginEndBlock::BeginBlock);
         unit.line_program.generate_row();
+        self.last_row_source = Some(source_key);
     }
 
     fn start(&mut self, addr: usize) {
         let unit = self.dwarf.units.get_mut(self.unit_id);
         self.seq_addr_start = addr;
+        self.last_row_source = None;
         unit.line_program.begin_sequence(Some(Address::Constant(
             (addr + self.target_addr as usize) as u64,
         )));
