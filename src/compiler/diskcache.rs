@@ -7,7 +7,7 @@ use crate::compiler::sexp::decode_string;
 fn cache_key(cf: &CompileForm) -> String {
     let mut include_fingerprints = Vec::new();
     for include in cf.include_forms.iter() {
-        include_fingerprints.append(&mut include.fingerprint.clone());
+        include_fingerprints.extend_from_slice(&include.fingerprint);
     }
     hex::encode(sha256tree_from_atom(&include_fingerprints))
 }

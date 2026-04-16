@@ -630,7 +630,9 @@ fn add_main_fingerprint(cf: &mut CompileForm, forms: &[Rc<SExp>]) {
         nl: cf.loc(),
         name: b"main".to_vec(),
         kind: Some(IncludeProcessType::Compiled),
-        fingerprint: sha256tree(form_list),
+        fingerprint: sha256tree(form_list)
+            .try_into()
+            .expect("sha256tree digest is 32 bytes"),
     });
 }
 
