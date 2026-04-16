@@ -35,7 +35,7 @@ jobs:
       if: startsWith(matrix.os, 'ubuntu')
       run: |
         sudo apt-get update
-        sudo apt-get lcov gdb-multiarch -y
+        sudo apt-get install lcov gdb-multiarch -y
 
     - name: Set up rust
       uses: actions-rs/toolchain@v1
