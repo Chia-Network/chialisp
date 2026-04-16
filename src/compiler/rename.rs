@@ -94,12 +94,11 @@ pub fn rename_in_cons(
 /* Returns a list of pairs containing the old and new atom names */
 fn invent_new_names_sexp(body: Rc<SExp>) -> Vec<(Vec<u8>, Vec<u8>)> {
     match body.borrow() {
-        SExp::Atom(_, name) => {
-            if name != b"@" {
-                vec![(name.to_vec(), gensym(name.to_vec()))]
-            } else {
-                vec![]
-            }
+        SExp::Atom(_, name) if name != b"@" => {
+            vec![(name.to_vec(), gensym(name.to_vec()))]
+        }
+        SExp::Atom(_, _) => {
+            vec![]
         }
         SExp::Cons(_, head, tail) => {
             let mut head_list = invent_new_names_sexp(head.clone());

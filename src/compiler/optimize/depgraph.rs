@@ -209,10 +209,8 @@ impl FunctionDependencyGraph {
             HelperForm::Defun(_, defun) => {
                 self.process_expr(&defun.name, defun.body.clone());
             }
-            HelperForm::Defconstant(dc) => {
-                if self.options.with_constants {
-                    self.process_expr(&dc.name, dc.body.clone());
-                }
+            HelperForm::Defconstant(dc) if self.options.with_constants => {
+                self.process_expr(&dc.name, dc.body.clone());
             }
             _ => {}
         }

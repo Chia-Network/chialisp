@@ -45,13 +45,12 @@ fn match_number(body: Rc<SExp>) -> Result<MatchedNumber, CompileErr> {
         SExp::QuotedString(ql, b'x', b) => {
             return Ok(MatchedNumber::MatchedHex(ql.clone(), b.clone()));
         }
-        SExp::Atom(al, b) => {
+        SExp::Atom(al, b)
             // An atom with unprintable characters is rendered as an integer.
-            if !printable(b, false) {
+            if !printable(b, false) => {
                 let to_integer = number_from_u8(b);
                 return Ok(MatchedNumber::MatchedInt(al.clone(), to_integer));
             }
-        }
         SExp::Nil(il) => {
             return Ok(MatchedNumber::MatchedInt(il.clone(), bi_zero()));
         }
