@@ -15,8 +15,9 @@ use sha2::Sha256;
 use faerie::{ArtifactBuilder, Decl, Link, SectionKind};
 use gimli;
 use gimli::constants::{
-    DW_AT_byte_size, DW_AT_encoding, DW_AT_frame_base, DW_AT_high_pc, DW_AT_language,
-    DW_AT_location, DW_AT_low_pc, DW_AT_name, DW_AT_type, DW_TAG_base_type,
+    DW_AT_byte_size, DW_AT_decl_column, DW_AT_decl_file, DW_AT_decl_line, DW_AT_encoding,
+    DW_AT_frame_base, DW_AT_high_pc, DW_AT_language, DW_AT_location, DW_AT_low_pc, DW_AT_name,
+    DW_AT_type, DW_TAG_base_type,
     DW_TAG_formal_parameter, DW_TAG_pointer_type, DW_TAG_subprogram, DW_TAG_variable, DW_LANG_C99,
 };
 use gimli::write::{
@@ -1132,6 +1133,7 @@ impl DwarfBuilder {
         addr: usize,
         size: usize,
         preferred_name: Option<&str>,
+        decl_loc: &Srcloc,
     ) -> Option<String> {
         let mut fde = FrameDescriptionEntry::new(
             Address::Constant((self.target_addr as usize + addr) as u64),
@@ -1185,6 +1187,9 @@ impl DwarfBuilder {
             subprogram_names.push(label.to_string());
         }
         let subprogram_ids = {
+            let (_, decl_file_id) = self.add_file(decl_loc.file.as_str());
+            let decl_line = decl_loc.line as u64;
+            let decl_col = decl_loc.col as u64;
             let unit = self.dwarf.units.get_mut(self.unit_id);
             let mut subprogram_ids = Vec::with_capacity(subprogram_names.len());
             for subprogram_name in subprogram_names.iter() {
@@ -1222,6 +1227,12 @@ impl DwarfBuilder {
                     DW_AT_frame_base,
                     AttributeValue::LocationListRef(loc_list_id),
                 );
+                sub_ent.set(
+                    DW_AT_decl_file,
+                    AttributeValue::FileIndex(Some(decl_file_id)),
+                );
+                sub_ent.set(DW_AT_decl_line, AttributeValue::Udata(decl_line));
+                sub_ent.set(DW_AT_decl_column, AttributeValue::Udata(decl_col));
                 subprogram_ids.push(subprogram_id);
             }
             subprogram_ids
@@ -1856,11 +1867,13 @@ impl Program {
                     self.start_addr, self.current_addr
                 );
                 let preferred_name = self.current_symbol_name.clone();
+                let function_end_addr = self.current_addr + size;
                 if let Some(function_name) = self.dwarf_builder.decorate_function(
                     label,
                     self.start_addr,
-                    self.current_addr - self.start_addr,
+                    function_end_addr.saturating_sub(self.start_addr),
                     preferred_name.as_deref(),
+                    srcloc,
                 ) {
                     eprintln!("end block with function {function_name}");
                     self.function_symbols.insert(label.clone(), function_name);
