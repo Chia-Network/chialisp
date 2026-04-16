@@ -106,14 +106,15 @@ pub fn compile_to_arm_elf(args: &Args) -> Result<(Vec<u8>, HashMap<String, Strin
             .map_err(|e| format!("failed to compose frontend program"))?;
         let compiled = compile_file(&mut allocator, runner, opts, &argfile, &mut symbol_table)
             .map_err(|e| format!("failed to compile chialisp: {e:?}"))?;
-        build_symbol_table_mut(&mut symbol_table, &compiled);
-        eprintln!("compiled {compiled}");
+        build_symbol_table_mut(&mut symbol_table, &compiled.to_sexp());
+        eprintln!("compiled {}", compiled.to_sexp());
         let range_results: HashMap<String, Srcloc> = fe
+            .compileform()
             .helpers
             .iter()
             .map(|h| (decode_string(h.name()), h.loc()))
             .collect();
-        (range_results, Rc::new(compiled))
+        (range_results, Rc::new(compiled.to_sexp()))
     } else {
         let compile_invoke_code = run(&mut allocator);
         let assembled_sexp = assemble(&mut allocator, &argfile)

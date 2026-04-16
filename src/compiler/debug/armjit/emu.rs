@@ -913,13 +913,14 @@ impl Emu {
         let fe = frontend(opts.clone(), &parsed_program)
             .map_err(|e| format!("failed to compose frontend program"))?;
         let range_results: HashMap<String, Srcloc> = fe
+            .compileform()
             .helpers
             .iter()
             .map(|h| (decode_string(h.name()), h.loc()))
             .collect();
 
         let compiled = compile_file(&mut allocator, runner, opts, program, &mut symbol_table)
-            .expect("should compile");
+            .expect("should compile").to_sexp();
         build_symbol_table_mut(&mut symbol_table, &compiled);
         let tmpfile = NamedTempFile::new().expect("should be able to make a temp file");
         let tmpname = tmpfile.path().to_str().unwrap().to_string();
