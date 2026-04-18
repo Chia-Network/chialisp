@@ -41,7 +41,10 @@ jobs:
         components: rustfmt, clippy
 
     - name: install tools
-      run: apt-get install -y gdb-multiarch
+      run: |
+        apt-get update
+        apt-get install -y gdb-multiarch
+
     - name: fmt (stable)
       run: cargo +stable fmt -- --files-with-diff --check
     - name: clippy (stable)
