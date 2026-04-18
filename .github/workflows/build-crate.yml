@@ -29,9 +29,7 @@ jobs:
         fetch-depth: 0
 
     - name: install tools
-      run: |
-        apt-get update
-	apt-get install -y gdb-multiarch
+      run: apt-get update && apt-get install -y gdb-multiarch
 
     - name: Set up rusts
       uses: actions-rs/toolchain@v1
