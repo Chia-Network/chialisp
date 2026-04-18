@@ -162,13 +162,13 @@ dependencies = [
 
 [[package]]
 name = "chia-bls"
-version = "0.36.1"
+version = "0.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f02cbfd038d9050d45edbe8f38e09391c73479c0cca5b37925daf48c4d4fcd4"
+checksum = "8663dc7139234c60fccddc0babeb5b0a0a55b14943d74c73ac8aad130c5b79e3"
 dependencies = [
  "blst",
- "chia-sha2 0.36.1",
- "chia-traits 0.36.1",
+ "chia-sha2 0.42.0",
+ "chia-traits 0.42.0",
  "hex",
  "hkdf",
  "linked-hash-map",
@@ -187,9 +187,9 @@ dependencies = [
 
 [[package]]
 name = "chia-sha2"
-version = "0.36.1"
+version = "0.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0934b0d6b878f29ba6c958e56e4b7158f9e687c200ffdca141dbc408a5cce42e"
+checksum = "d6636ca8bba852fc516eacf01b2c3964b6b290359e7d1e89b950e6754e2a1082"
 dependencies = [
  "sha2",
 ]
@@ -207,12 +207,12 @@ dependencies = [
 
 [[package]]
 name = "chia-traits"
-version = "0.36.1"
+version = "0.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f4922b447b2d8418213948af1a448c3ca7b84e149b51b2c87a2e00e80bb19b0"
+checksum = "3517dcf2b743672c78339ef8d222fd4493ae48741c35dd5ffb2d9dba90417115"
 dependencies = [
- "chia-sha2 0.36.1",
- "chia_streamable_macro 0.36.1",
+ "chia-sha2 0.42.0",
+ "chia_streamable_macro 0.42.0",
  "thiserror",
 ]
 
@@ -230,9 +230,9 @@ dependencies = [
 
 [[package]]
 name = "chia_streamable_macro"
-version = "0.36.1"
+version = "0.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b60cefc5fe39f695816d42a327cbefad3d6d6a8ecadad1b58d7507067c25da8"
+checksum = "41f85fb91e5ddba8003c4c4ad13c7914b1ff733d92136805c6566de227321d49"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -247,7 +247,7 @@ dependencies = [
  "argh",
  "armv4t_emu",
  "binascii",
- "chia-bls 0.36.1",
+ "chia-bls 0.42.0",
  "clvmr",
  "do-notation",
  "elf_rs",
@@ -1362,9 +1362,9 @@ checksum = "301abaae475aa91687eb82514b328ab47a211a533026cb25fc3e519b86adfc3c"
 
 [[package]]
 name = "unicode-segmentation"
-version = "1.12.0"
+version = "1.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6ccf251212114b54433ec949fd6a7841275f9ada20dddd2f29e9ceea4501493"
+checksum = "9629274872b2bfaf8d66f5f15725007f635594914870f65218920345aa11aa8c"
 
 [[package]]
 name = "version_check"
