@@ -1349,7 +1349,6 @@ pub struct Program {
     current_symbol_name: Option<String>,
     function_symbols: HashMap<String, String>,
     renamed_symbols: HashMap<String, String>,
-    remap_locations: HashMap<String, Srcloc>,
     start_addr: usize,
     current_addr: usize,
     dwarf_builder: DwarfBuilder,
@@ -2310,7 +2309,6 @@ impl Program {
             symbol_table: Default::default(),
             function_symbols: Default::default(),
             renamed_symbols: Default::default(),
-            remap_locations: Default::default(),
             current_addr: 0,
             start_addr: 0,
             target_addr,
@@ -2327,8 +2325,6 @@ impl Program {
             eprintln!("should remap hash {} to {name}", remap_hash_hex);
             p.renamed_symbols
                 .insert(remap_hash_hex.clone(), name.clone());
-            p.remap_locations
-                .insert(remap_hash_hex.clone(), remap_sexp.loc());
             p.add_sexp(&remap_sexp.loc(), &remap_hash, remap_sexp.clone());
             let remap_label = p.add(remap_sexp);
             eprintln!("remap selected label {remap_label} for {name}");
