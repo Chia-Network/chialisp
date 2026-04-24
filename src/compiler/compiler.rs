@@ -21,7 +21,7 @@ use crate::compiler::codegen::{codegen, hoist_body_let_binding, process_helper_l
 use crate::compiler::comptypes::{
     BodyForm, CompileErr, CompileForm, CompileModuleComponent, CompileModuleOutput, CompilerOpts,
     CompilerOutput, DefunData, Export, FrontendOutput, HelperForm, ImportLongName, IncludeDesc,
-    IncludeProcessType, PrimaryCodegen, SyntheticType,
+    IncludeProcessType, ModulePhase, PrimaryCodegen, SyntheticType,
 };
 use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
 use crate::compiler::diskcache::{set_cache_element, try_element_from_cache};
@@ -107,6 +107,7 @@ pub struct DefaultCompilerOpts {
     pub prim_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>,
     pub diag_flags: Rc<HashSet<usize>>,
     pub dialect: AcceptedDialect,
+    pub module_phase: Option<ModulePhase>,
 }
 
 pub fn create_prim_map() -> Rc<HashMap<Vec<u8>, Rc<SExp>>> {
@@ -851,6 +852,9 @@ impl CompilerOpts for DefaultCompilerOpts {
     fn frontend_opt(&self) -> bool {
         self.frontend_opt
     }
+    fn module_phase(&self) -> Option<ModulePhase> {
+        self.module_phase.clone()
+    }
     fn frontend_check_live(&self) -> bool {
         self.frontend_check_live
     }
@@ -913,6 +917,11 @@ impl CompilerOpts for DefaultCompilerOpts {
     fn set_frontend_check_live(&self, check: bool) -> Rc<dyn CompilerOpts> {
         let mut copy = self.clone();
         copy.frontend_check_live = check;
+        Rc::new(copy)
+    }
+    fn set_module_phase(&self, module_phase: Option<ModulePhase>) -> Rc<dyn CompilerOpts> {
+        let mut copy = self.clone();
+        copy.module_phase = module_phase;
         Rc::new(copy)
     }
     fn set_code_generator(&self, new_code_generator: PrimaryCodegen) -> Rc<dyn CompilerOpts> {
@@ -1042,6 +1051,7 @@ impl DefaultCompilerOpts {
             dialect: AcceptedDialect::default(),
             prim_map: create_prim_map(),
             disassembly_ver: None,
+            module_phase: None,
             diag_flags: Rc::new(HashSet::default()),
         }
     }
