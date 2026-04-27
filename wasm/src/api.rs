@@ -21,7 +21,6 @@ use chialisp::classic::clvm::__type_compatibility__::{Bytes, Stream, Unvalidated
 use chialisp::classic::clvm::serialize::sexp_to_stream;
 use chialisp::classic::clvm_tools::clvmc::compile_clvm_inner;
 use chialisp::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
-use chialisp::compiler::CompileContextWrapper;
 use chialisp::compiler::cldb::{
     hex_to_modern_sexp, CldbOverrideBespokeCode, CldbRun, CldbRunEnv, CldbRunnable,
     CldbSingleBespokeOverride,
@@ -31,12 +30,14 @@ use chialisp::compiler::compiler::{
     extract_program_and_env, path_to_function, rewrite_in_program, DefaultCompilerOpts,
 };
 use chialisp::compiler::comptypes::{CompileErr, CompilerOpts};
+use chialisp::compiler::debug::armjit::cmd::{compile_to_arm_elf_from_source, Args as ArmElfArgs};
 use chialisp::compiler::optimize::get_optimizer;
 use chialisp::compiler::prims;
 use chialisp::compiler::repl::Repl;
 use chialisp::compiler::runtypes::RunFailure;
 use chialisp::compiler::sexp::SExp;
 use chialisp::compiler::srcloc::Srcloc;
+use chialisp::compiler::CompileContextWrapper;
 
 extern crate alloc;
 
@@ -325,6 +326,66 @@ pub fn compile(input_js: JsValue, filename_js: JsValue, search_paths_js: Vec<JsV
     }
 }
 
+// Compile a Chialisp program into an ARM ELF object with DWARF debug info.
+// Returns {"object_file": Uint8Array, "synthetic_source": "...", "symbols": {...}}
+// or {"error": ...}
+#[wasm_bindgen(js_name = compile_to_arm_elf)]
+pub fn compile_to_arm_elf_js(
+    input_js: JsValue,
+    filename_js: JsValue,
+    search_paths_js: Vec<JsValue>,
+    env_js: JsValue,
+) -> JsValue {
+    let input = input_js.as_string().unwrap();
+    let filename = filename_js.as_string().unwrap();
+    let env = env_js.as_string().unwrap();
+    let search_paths: Vec<String> = search_paths_js
+        .iter()
+        .map(|j| j.as_string().unwrap())
+        .collect();
+
+    let args = ArmElfArgs {
+        include: search_paths,
+        output: format!("{filename}.elf"),
+        filename,
+        env,
+    };
+
+    match compile_to_arm_elf_from_source(&args, input) {
+        Ok(result) => {
+            let array = js_sys::Array::new();
+            array.set(
+                0,
+                js_pair(
+                    JsValue::from_str("object_file"),
+                    js_sys::Uint8Array::from(result.object_file.as_slice()).into(),
+                ),
+            );
+            array.set(
+                1,
+                js_pair(
+                    JsValue::from_str("synthetic_source"),
+                    JsValue::from_str(&result.synthetic_source),
+                ),
+            );
+
+            let symbol_array = js_sys::Array::new();
+            for (idx, (k, v)) in result.symbol_table.iter().enumerate() {
+                symbol_array.set(
+                    idx as u32,
+                    js_pair(JsValue::from_str(k), JsValue::from_str(v)),
+                );
+            }
+            let symbol_object =
+                object_to_value(&js_sys::Object::from_entries(&symbol_array).unwrap());
+            array.set(2, js_pair(JsValue::from_str("symbols"), symbol_object));
+
+            object_to_value(&js_sys::Object::from_entries(&array).unwrap())
+        }
+        Err(e) => create_clvm_runner_err(e),
+    }
+}
+
 fn find_function_hash(symbol_table: &HashMap<String, String>, f: &String) -> Option<String> {
     for (k, v) in symbol_table.iter() {
         if v == f {
@@ -468,14 +529,11 @@ pub fn repl_run_string(repl_id: i32, input: String) -> JsValue {
                     a,
                     repl_container.runner.clone(),
                     &mut symbols,
-                    get_optimizer(&loc, repl_container.opts.clone())?
+                    get_optimizer(&loc, repl_container.opts.clone())?,
                 );
                 r.process_line(&mut wrapper.context, input)
             } else {
-                Err(CompileErr(
-                    loc,
-                    "no such repl".to_string(),
-                ))
+                Err(CompileErr(loc, "no such repl".to_string()))
             }
         })
         .map(|v| v.map(|v| js_object_from_sexp(v.to_sexp()).unwrap_or_else(|e| e)))

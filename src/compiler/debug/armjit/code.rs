@@ -2,8 +2,6 @@ use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::Formatter;
-use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom};
 use std::mem::swap;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -28,7 +26,6 @@ use gimli::write::{
 use gimli::Arm;
 use gimli::{DW_ATE_unsigned, DwAte, Encoding, Format, LineEncoding};
 use target_lexicon::triple;
-use tempfile::NamedTempFile;
 
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero, Bytes, BytesFromType};
 use crate::classic::clvm::casts::bigint_to_bytes_clvm;
@@ -48,6 +45,11 @@ pub const SWI_DISPATCH_INSTRUCTION: usize = 3;
 pub const SWI_PRINT_EXPR: usize = 4;
 
 pub const TARGET_ADDR: u32 = 0x1000;
+
+pub struct ElfObject {
+    pub object_file: Vec<u8>,
+    pub synthetic_source: String,
+}
 
 //
 // Compile each program to clvm, then decompose into arm assembly.
@@ -872,17 +874,12 @@ impl DwarfBuilder {
         line
     }
 
-    fn write_synthetic_source_file(&self) -> Result<(), String> {
+    fn synthetic_source(&self) -> String {
         let mut synthetic_source = self.synthetic_source_lines.join("\n");
         if !synthetic_source.is_empty() {
             synthetic_source.push('\n');
         }
-        fs::write(&self.synthetic_source_path, synthetic_source).map_err(|e| {
-            format!(
-                "write synthetic source {}: {e:?}",
-                self.synthetic_source_path
-            )
-        })
+        synthetic_source
     }
 
     fn add_instr(
@@ -2071,8 +2068,8 @@ impl Program {
         Ok(())
     }
 
-    pub fn to_elf(&self, output: &str) -> Result<Vec<u8>, String> {
-        self.dwarf_builder.write_synthetic_source_file()?;
+    pub fn to_elf(&self, output: &str) -> Result<ElfObject, String> {
+        let synthetic_source = self.dwarf_builder.synthetic_source();
         let mut sections = Vec::new();
         let mut obj = ArtifactBuilder::new(triple!("arm-unknown-unknown-unknown-elf"))
             .name(output.to_owned())
@@ -2218,23 +2215,7 @@ impl Program {
             .map_err(|e| format!("link {e:?}"))?;
         }
 
-        eprintln!("get temp file path");
-        let mut file = NamedTempFile::new().map_err(|e| format!("named temp {e:?}"))?;
-        let name = file.path().to_str().unwrap().to_string();
-        eprintln!("open reread");
-        let mut reread_file = File::open(&name).map_err(|e| format!("reopen {e:?}"))?;
-        eprintln!("writing to tmp file");
-        obj.write(file.into_file())
-            .map_err(|e| format!("obj write {e:?}"))?;
-        eprintln!("seek 0");
-        reread_file
-            .seek(SeekFrom::Start(0))
-            .map_err(|e| format!("seek {e:?}"))?;
-        let mut result_buf = Vec::new();
-        eprintln!("seek 0");
-        reread_file
-            .read_to_end(&mut result_buf)
-            .map_err(|e| format!("capture {e:?}"))?;
+        let mut result_buf = obj.emit().map_err(|e| format!("obj emit {e:?}"))?;
 
         // Patch up
         eprintln!("reload elf");
@@ -2253,7 +2234,10 @@ impl Program {
         }
 
         eprintln!("code succeeded");
-        Ok(result_buf)
+        Ok(ElfObject {
+            object_file: result_buf,
+            synthetic_source,
+        })
     }
 
     pub fn new(
