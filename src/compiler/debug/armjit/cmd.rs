@@ -16,7 +16,7 @@ use crate::classic::platform::argparse::ArgumentValue;
 use crate::compiler::clvm::convert_from_clvm_rs;
 use crate::compiler::compiler::{compile_file, DefaultCompilerOpts};
 use crate::compiler::comptypes::CompilerOpts;
-use crate::compiler::debug::armjit::code::{Program, TARGET_ADDR};
+use crate::compiler::debug::armjit::code::{ElfObject, Program, TARGET_ADDR};
 use crate::compiler::debug::armjit::emu::Emu;
 use crate::compiler::debug::armjit::emu_stub::{run_stub, start_stub};
 use crate::compiler::debug::build_symbol_table_mut;
@@ -58,9 +58,13 @@ pub fn spin_up_emulation(
     Ok(addr)
 }
 
-pub fn compile_to_arm_elf(args: &Args) -> Result<(Vec<u8>, HashMap<String, String>), String> {
-    let search_paths = args.include.clone();
+pub struct ArmElfCompileOutput {
+    pub object_file: Vec<u8>,
+    pub synthetic_source: String,
+    pub symbol_table: HashMap<String, String>,
+}
 
+pub fn compile_to_arm_elf(args: &Args) -> Result<ArmElfCompileOutput, String> {
     let argfile = if let Ok(res) = fs::read_to_string(&args.filename) {
         res
     } else {
@@ -68,8 +72,6 @@ pub fn compile_to_arm_elf(args: &Args) -> Result<(Vec<u8>, HashMap<String, Strin
         std::process::exit(1);
     };
 
-    let srcloc = Srcloc::start(&args.filename);
-    let mut allocator = Allocator::new();
     let runner: Rc<dyn TRunProgram> = Rc::new(DefaultProgramRunner::new());
     let mut symbol_table = HashMap::new();
 
@@ -153,9 +155,16 @@ pub fn compile_to_arm_elf(args: &Args) -> Result<(Vec<u8>, HashMap<String, Strin
     )
     .expect("should generate");
 
-    let output = program
+    let ElfObject {
+        object_file,
+        synthetic_source,
+    } = program
         .to_elf(&args.output)
         .map_err(|e| format!("failed to create elf output: {e:?}"))?;
 
-    Ok((output, symbol_table))
+    Ok(ArmElfCompileOutput {
+        object_file,
+        synthetic_source,
+        symbol_table,
+    })
 }

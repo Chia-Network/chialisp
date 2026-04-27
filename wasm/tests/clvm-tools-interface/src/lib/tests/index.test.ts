@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import { resolve } from 'path';
 import * as assert from 'assert';
 import * as bls_loader from 'bls-signatures';
-const {h, t, Program} = require('../../../../../pkg/clvm_tools_wasm.js');
+const {compile_to_arm_elf, h, t, Program} = require('../../../../../pkg/clvm_tools_wasm.js');
 
 it('Has BLS signatures support', async () => {
     const bls = await bls_loader.default();
@@ -17,6 +17,23 @@ it('Has BLS signatures support', async () => {
 it('Has the "h" function', async () => {
     const unhexed = h('21203031');
     assert.equal([0x21, 0x20, 0x30, 0x31].toString(), unhexed.toString());
+});
+
+it('Can compile chialisp to an ARM ELF object with DWARF symbols', async () => {
+    const program = '(mod (X) (+ X 7))';
+    const result = compile_to_arm_elf(program, 'wasm_arm_elf_test.clsp', [], '(5)');
+    const objectFile: Uint8Array = result.object_file;
+    const syntheticSource: string = result.synthetic_source;
+
+    assert.ok(objectFile instanceof Uint8Array);
+    assert.equal(Buffer.from(objectFile.subarray(0, 4)).toString('hex'), '7f454c46');
+
+    const objectText = Buffer.from(objectFile).toString('latin1');
+    assert.ok(objectText.includes('.debug_info'));
+    assert.ok(objectText.includes('.debug_line'));
+    assert.ok(objectText.includes('.debug_str'));
+    assert.ok(objectText.includes('wasm_arm_elf_test.clsp'));
+    assert.ok(syntheticSource.includes('=>'));
 });
 
 it('Converts uint8arrays', async () => {

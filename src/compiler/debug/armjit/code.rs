@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::Formatter;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::mem::swap;
 use std::path::PathBuf;
@@ -48,6 +48,11 @@ pub const SWI_DISPATCH_INSTRUCTION: usize = 3;
 pub const SWI_PRINT_EXPR: usize = 4;
 
 pub const TARGET_ADDR: u32 = 0x1000;
+
+pub struct ElfObject {
+    pub object_file: Vec<u8>,
+    pub synthetic_source: String,
+}
 
 //
 // Compile each program to clvm, then decompose into arm assembly.
@@ -872,17 +877,12 @@ impl DwarfBuilder {
         line
     }
 
-    fn write_synthetic_source_file(&self) -> Result<(), String> {
+    fn synthetic_source(&self) -> String {
         let mut synthetic_source = self.synthetic_source_lines.join("\n");
         if !synthetic_source.is_empty() {
             synthetic_source.push('\n');
         }
-        fs::write(&self.synthetic_source_path, synthetic_source).map_err(|e| {
-            format!(
-                "write synthetic source {}: {e:?}",
-                self.synthetic_source_path
-            )
-        })
+        synthetic_source
     }
 
     fn add_instr(
@@ -2071,8 +2071,8 @@ impl Program {
         Ok(())
     }
 
-    pub fn to_elf(&self, output: &str) -> Result<Vec<u8>, String> {
-        self.dwarf_builder.write_synthetic_source_file()?;
+    pub fn to_elf(&self, output: &str) -> Result<ElfObject, String> {
+        let synthetic_source = self.dwarf_builder.synthetic_source();
         let mut sections = Vec::new();
         let mut obj = ArtifactBuilder::new(triple!("arm-unknown-unknown-unknown-elf"))
             .name(output.to_owned())
@@ -2253,7 +2253,10 @@ impl Program {
         }
 
         eprintln!("code succeeded");
-        Ok(result_buf)
+        Ok(ElfObject {
+            object_file: result_buf,
+            synthetic_source,
+        })
     }
 
     pub fn new(

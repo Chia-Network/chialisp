@@ -937,7 +937,7 @@ impl Emu {
         )
         .expect("should be generatable");
         let elf_data = generator.to_elf(&tmpname).expect("should generate");
-        Emu::run_to_exit(&elf_data, TARGET_ADDR, symbols)
+        Emu::run_to_exit(&elf_data.object_file, TARGET_ADDR, symbols)
     }
 }
 

@@ -6,11 +6,16 @@ use chialisp::compiler::debug::armjit::cmd::{compile_to_arm_elf, spin_up_emulati
 fn run_arm_conversion() -> Result<(), String> {
     let args: Args = argh::from_env();
 
-    let (elf_out, symbol_table) = compile_to_arm_elf(&args)?;
+    let arm_elf = compile_to_arm_elf(&args)?;
 
     // copy all in-memory sections from the ELF file into system RAM
-    fs::write(&args.output, &elf_out).map_err(|e| format!("could not write elf file: {e:?}"))?;
-    spin_up_emulation(&elf_out, Rc::new(symbol_table), Some(9001))?;
+    fs::write(&args.output, &arm_elf.object_file)
+        .map_err(|e| format!("could not write elf file: {e:?}"))?;
+    spin_up_emulation(
+        &arm_elf.object_file,
+        Rc::new(arm_elf.symbol_table),
+        Some(9001),
+    )?;
     Ok(())
 }
 
