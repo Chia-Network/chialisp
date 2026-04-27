@@ -4,11 +4,15 @@ use gdbstub::common::Signal;
 use gdbstub::conn::Connection;
 use gdbstub::conn::ConnectionExt;
 use gdbstub::stub::run_blocking;
+use gdbstub::stub::state_machine::GdbStubStateMachine;
 use gdbstub::stub::DisconnectReason;
 use gdbstub::stub::GdbStub;
 use gdbstub::stub::SingleThreadStopReason;
 use gdbstub::target::Target;
+use std::collections::VecDeque;
+use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::rc::Rc;
 
 use crate::compiler::debug::armjit::emu::{DynResult, Emu, Event, RunEvent};
 
@@ -72,6 +76,28 @@ fn flush_pending_gdb_console_output<C: Connection<Error = std::io::Error>>(
         send_gdb_console_packet(conn, &message)?;
     }
     Ok(())
+}
+
+fn stop_reason_from_event(event: Event) -> SingleThreadStopReason<u32> {
+    use gdbstub::target::ext::breakpoints::WatchKind;
+
+    match event {
+        Event::Trap => SingleThreadStopReason::Signal(Signal::SIGABRT),
+        Event::DoneStep => SingleThreadStopReason::DoneStep,
+        Event::Halted => SingleThreadStopReason::Signal(Signal::SIGSTOP),
+        Event::Output => SingleThreadStopReason::Signal(Signal::SIGUSR1),
+        Event::Break => SingleThreadStopReason::SwBreak(()),
+        Event::WatchWrite(addr) => SingleThreadStopReason::Watch {
+            tid: (),
+            kind: WatchKind::Write,
+            addr,
+        },
+        Event::WatchRead(addr) => SingleThreadStopReason::Watch {
+            tid: (),
+            kind: WatchKind::Read,
+            addr,
+        },
+    }
 }
 
 fn print_run_event(event: &RunEvent) -> String {
@@ -138,28 +164,10 @@ impl run_blocking::BlockingEventLoop for EmuGdbEventLoop {
                 Ok(run_blocking::Event::IncomingData(byte))
             }
             RunEvent::Event(event) => {
-                use gdbstub::target::ext::breakpoints::WatchKind;
-
                 // translate emulator stop reason into GDB stop reason
-                let stop_reason = match event {
-                    Event::Trap => SingleThreadStopReason::Signal(Signal::SIGABRT),
-                    Event::DoneStep => SingleThreadStopReason::DoneStep,
-                    Event::Halted => SingleThreadStopReason::Signal(Signal::SIGSTOP),
-                    Event::Output => SingleThreadStopReason::Signal(Signal::SIGUSR1),
-                    Event::Break => SingleThreadStopReason::SwBreak(()),
-                    Event::WatchWrite(addr) => SingleThreadStopReason::Watch {
-                        tid: (),
-                        kind: WatchKind::Write,
-                        addr,
-                    },
-                    Event::WatchRead(addr) => SingleThreadStopReason::Watch {
-                        tid: (),
-                        kind: WatchKind::Read,
-                        addr,
-                    },
-                };
-
-                Ok(run_blocking::Event::TargetStopped(stop_reason))
+                Ok(run_blocking::Event::TargetStopped(stop_reason_from_event(
+                    event,
+                )))
             }
         }
     }
@@ -197,4 +205,144 @@ pub fn run_stub(
         .map_err(|e| format!("Error: {e:?}"))?;
 
     Ok(())
+}
+
+pub struct CallbackConnection {
+    output: Box<dyn FnMut(&[u8]) -> Result<(), io::Error>>,
+}
+
+impl CallbackConnection {
+    pub fn new(output: Box<dyn FnMut(&[u8]) -> Result<(), io::Error>>) -> Self {
+        CallbackConnection { output }
+    }
+}
+
+impl Connection for CallbackConnection {
+    type Error = io::Error;
+
+    fn write(&mut self, byte: u8) -> Result<(), Self::Error> {
+        (self.output)(&[byte])
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
+        (self.output)(buf)
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+type CallbackGdbState = GdbStubStateMachine<'static, Emu, CallbackConnection>;
+
+pub struct CallbackGdbStub {
+    emu: Emu,
+    input: VecDeque<u8>,
+    state: Option<CallbackGdbState>,
+    disconnected: Option<DisconnectReason>,
+}
+
+impl CallbackGdbStub {
+    pub fn new(
+        elf_bin: &[u8],
+        symbols: Rc<std::collections::HashMap<String, String>>,
+        output: Box<dyn FnMut(&[u8]) -> Result<(), io::Error>>,
+    ) -> Result<Self, String> {
+        let mut emu = Emu::new(
+            elf_bin,
+            crate::compiler::debug::armjit::code::TARGET_ADDR,
+            symbols,
+        )
+        .map_err(|e| format!("could not create emulator: {e:?}"))?;
+        let connection = CallbackConnection::new(output);
+        let gdb = GdbStub::new(connection);
+        let state = gdb
+            .run_state_machine(&mut emu)
+            .map_err(|e| format!("Error: {e:?}"))?;
+
+        Ok(CallbackGdbStub {
+            emu,
+            input: VecDeque::new(),
+            state: Some(state),
+            disconnected: None,
+        })
+    }
+
+    pub fn incoming_data(&mut self, data: &[u8]) -> Result<(), String> {
+        if let Some(reason) = self.disconnected {
+            return Err(format!("gdb stub is disconnected: {reason:?}"));
+        }
+
+        self.input.extend(data.iter().copied());
+        self.pump()
+    }
+
+    pub fn interrupt(&mut self) -> Result<(), String> {
+        self.incoming_data(&[0x03])
+    }
+
+    pub fn disconnected(&self) -> Option<DisconnectReason> {
+        self.disconnected
+    }
+
+    fn pump(&mut self) -> Result<(), String> {
+        while let Some(state) = self.state.take() {
+            match state {
+                GdbStubStateMachine::Idle(gdb) => {
+                    if let Some(byte) = self.input.pop_front() {
+                        let next = gdb
+                            .incoming_data(&mut self.emu, byte)
+                            .map_err(|e| format!("Error: {e:?}"))?;
+                        self.state = Some(next);
+                    } else {
+                        self.state = Some(GdbStubStateMachine::Idle(gdb));
+                        break;
+                    }
+                }
+                GdbStubStateMachine::Running(mut gdb) => {
+                    if let Some(byte) = self.input.pop_front() {
+                        let next = gdb
+                            .incoming_data(&mut self.emu, byte)
+                            .map_err(|e| format!("Error: {e:?}"))?;
+                        self.state = Some(next);
+                        continue;
+                    }
+
+                    let run_res = self.emu.run(|| false);
+                    flush_pending_gdb_console_output(&mut self.emu, gdb.borrow_conn())
+                        .map_err(|e| format!("Error: {e:?}"))?;
+                    eprintln!("GDB {}", print_run_event(&run_res));
+
+                    match run_res {
+                        RunEvent::IncomingData => {
+                            self.state = Some(GdbStubStateMachine::Running(gdb));
+                            break;
+                        }
+                        RunEvent::Event(event) => {
+                            let next = gdb
+                                .report_stop(&mut self.emu, stop_reason_from_event(event))
+                                .map_err(|e| format!("Error: {e:?}"))?;
+                            self.state = Some(next);
+                        }
+                    }
+                }
+                GdbStubStateMachine::CtrlCInterrupt(gdb) => {
+                    let next = gdb
+                        .interrupt_handled(
+                            &mut self.emu,
+                            Some(SingleThreadStopReason::Signal(Signal::SIGINT)),
+                        )
+                        .map_err(|e| format!("Error: {e:?}"))?;
+                    self.state = Some(next);
+                }
+                GdbStubStateMachine::Disconnected(gdb) => {
+                    self.disconnected = Some(gdb.get_reason());
+                    self.state = Some(GdbStubStateMachine::Disconnected(gdb));
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
