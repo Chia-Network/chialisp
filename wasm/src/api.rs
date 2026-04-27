@@ -21,7 +21,6 @@ use chialisp::classic::clvm::__type_compatibility__::{Bytes, Stream, Unvalidated
 use chialisp::classic::clvm::serialize::sexp_to_stream;
 use chialisp::classic::clvm_tools::clvmc::compile_clvm_inner;
 use chialisp::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
-use chialisp::compiler::CompileContextWrapper;
 use chialisp::compiler::cldb::{
     hex_to_modern_sexp, CldbOverrideBespokeCode, CldbRun, CldbRunEnv, CldbRunnable,
     CldbSingleBespokeOverride,
@@ -31,13 +30,14 @@ use chialisp::compiler::compiler::{
     extract_program_and_env, path_to_function, rewrite_in_program, DefaultCompilerOpts,
 };
 use chialisp::compiler::comptypes::{CompileErr, CompilerOpts};
-use chialisp::compiler::debug::armjit::cmd::compile_to_arm_elf_from_source;
+use chialisp::compiler::debug::armjit::cmd::{compile_to_arm_elf_from_source, Args as ArmElfArgs};
 use chialisp::compiler::optimize::get_optimizer;
 use chialisp::compiler::prims;
 use chialisp::compiler::repl::Repl;
 use chialisp::compiler::runtypes::RunFailure;
 use chialisp::compiler::sexp::SExp;
 use chialisp::compiler::srcloc::Srcloc;
+use chialisp::compiler::CompileContextWrapper;
 
 extern crate alloc;
 
@@ -344,13 +344,14 @@ pub fn compile_to_arm_elf_js(
         .map(|j| j.as_string().unwrap())
         .collect();
 
-    match compile_to_arm_elf_from_source(
-        input,
-        filename.clone(),
-        format!("{filename}.elf"),
+    let args = ArmElfArgs {
+        include: search_paths,
+        output: format!("{filename}.elf"),
+        filename,
         env,
-        search_paths,
-    ) {
+    };
+
+    match compile_to_arm_elf_from_source(&args, input) {
         Ok(result) => {
             let array = js_sys::Array::new();
             array.set(
@@ -528,14 +529,11 @@ pub fn repl_run_string(repl_id: i32, input: String) -> JsValue {
                     a,
                     repl_container.runner.clone(),
                     &mut symbols,
-                    get_optimizer(&loc, repl_container.opts.clone())?
+                    get_optimizer(&loc, repl_container.opts.clone())?,
                 );
                 r.process_line(&mut wrapper.context, input)
             } else {
-                Err(CompileErr(
-                    loc,
-                    "no such repl".to_string(),
-                ))
+                Err(CompileErr(loc, "no such repl".to_string()))
             }
         })
         .map(|v| v.map(|v| js_object_from_sexp(v.to_sexp()).unwrap_or_else(|e| e)))

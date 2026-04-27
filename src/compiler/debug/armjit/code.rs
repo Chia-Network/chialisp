@@ -2,8 +2,6 @@ use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::Formatter;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::mem::swap;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -28,7 +26,6 @@ use gimli::write::{
 use gimli::Arm;
 use gimli::{DW_ATE_unsigned, DwAte, Encoding, Format, LineEncoding};
 use target_lexicon::triple;
-use tempfile::NamedTempFile;
 
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero, Bytes, BytesFromType};
 use crate::classic::clvm::casts::bigint_to_bytes_clvm;
@@ -2218,23 +2215,7 @@ impl Program {
             .map_err(|e| format!("link {e:?}"))?;
         }
 
-        eprintln!("get temp file path");
-        let mut file = NamedTempFile::new().map_err(|e| format!("named temp {e:?}"))?;
-        let name = file.path().to_str().unwrap().to_string();
-        eprintln!("open reread");
-        let mut reread_file = File::open(&name).map_err(|e| format!("reopen {e:?}"))?;
-        eprintln!("writing to tmp file");
-        obj.write(file.into_file())
-            .map_err(|e| format!("obj write {e:?}"))?;
-        eprintln!("seek 0");
-        reread_file
-            .seek(SeekFrom::Start(0))
-            .map_err(|e| format!("seek {e:?}"))?;
-        let mut result_buf = Vec::new();
-        eprintln!("seek 0");
-        reread_file
-            .read_to_end(&mut result_buf)
-            .map_err(|e| format!("capture {e:?}"))?;
+        let mut result_buf = obj.emit().map_err(|e| format!("obj emit {e:?}"))?;
 
         // Patch up
         eprintln!("reload elf");
