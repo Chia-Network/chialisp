@@ -1,0 +1,7 @@
+(include *standard-cl-23*)
+
+(defconst A 10)
+(defconst C (* A 3))
+(defconst D (+ C 1))
+
+(export D)

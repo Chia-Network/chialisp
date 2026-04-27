@@ -1,3 +1,12 @@
+"""Coverage driver for CI and local runs.
+
+For ad-hoc reports on a subset of tests (e.g. module disk cache / funcache), you can run:
+
+  LLVM_PROFILE_FILE='chialisp-%p-%m.profraw' RUSTFLAGS='-Cinstrument-coverage' \\
+    cargo test --lib try_from_cache cache_key_stable funcache_without_dependency test_codegen_function_cache
+
+Then run grcov on the resulting ``*.profraw`` files (see the ``collect_coverage`` invocation below).
+"""
 import os
 import json
 import shutil
@@ -24,8 +33,8 @@ def delete_coverage_files():
     except:
         pass
 
-def run_coverage_test():
-    subprocess.check_call(['cargo','test'],env=env)
+def run_coverage_test(test_args):
+    subprocess.check_call(['cargo','test']+test_args,env=env)
 
 def is_my_code(desc):
     for path in ['.cargo','library/std','src/py','src/classic/bins','/rustc']:
@@ -51,10 +60,12 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--require-percent', help="required percentage to succeed", default=None)
+    parser.add_argument('--test-args', help="arguments to cargo test", default=[], type=str, action="append")
+
     args = parser.parse_args()
 
     delete_coverage_files()
-    run_coverage_test()
+    run_coverage_test(args.test_args)
     result = collect_coverage()
     print(json.dumps(result, indent=4))
 

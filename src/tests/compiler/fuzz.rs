@@ -96,7 +96,7 @@ pub fn perform_compile_of_file(
     let mut symbol_table = HashMap::new();
     let compiled = compile_file(allocator, runner.clone(), opts, &content, &mut symbol_table)?;
     Ok(PerformCompileResult {
-        compiled: Rc::new(compiled),
+        compiled: Rc::new(compiled.to_sexp()),
         source_opts,
     })
 }

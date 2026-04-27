@@ -1220,25 +1220,17 @@ impl<const N: usize> SelectNode<Srcloc, (Srcloc, String)> for AtomValue<&[u8; N]
     fn select_nodes(&self, s: Rc<SExp>) -> Result<Srcloc, (Srcloc, String)> {
         let AtomValue::Here(name) = self;
         match s.borrow() {
-            SExp::Nil(l) => {
-                if name.is_empty() {
-                    return Ok(l.clone());
-                }
+            SExp::Nil(l) if name.is_empty() => {
+                return Ok(l.clone());
             }
-            SExp::Atom(l, n) => {
-                if n == name {
-                    return Ok(l.clone());
-                }
+            SExp::Atom(l, n) if n == name => {
+                return Ok(l.clone());
             }
-            SExp::QuotedString(l, _, n) => {
-                if n == name {
-                    return Ok(l.clone());
-                }
+            SExp::QuotedString(l, _, n) if n == name => {
+                return Ok(l.clone());
             }
-            SExp::Integer(l, i) => {
-                if &u8_from_number(i.clone()) == name {
-                    return Ok(l.clone());
-                }
+            SExp::Integer(l, i) if &u8_from_number(i.clone()) == name => {
+                return Ok(l.clone());
             }
             _ => {}
         }

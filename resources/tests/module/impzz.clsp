@@ -1,0 +1,9 @@
+(import qualified programs.zerozero as Z)
+
+(include *standard-cl-23*)
+
+(defmac MAKE_ZZ () (qq 0x00))
+
+(export (A)
+  (list Z.ZZ Z.ZZ1 (a Z.ZF (list A)) (a Z.FZ (list A)) (MAKE_ZZ))
+  )

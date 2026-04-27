@@ -878,7 +878,7 @@ fn perform_preprocessing(
         _ => None,
     };
     let frontend = frontend(opts, &parsed)?;
-    let fe_sexp = frontend.to_sexp();
+    let fe_sexp = frontend.compileform().to_sexp();
     let with_stepping = if let Some(s) = stepping_form_text {
         let parsed_stepping_form = parse_sexp(srcloc.clone(), s.bytes())?;
         if let sexp::SExp::Cons(_, a, rest) = fe_sexp.borrow() {

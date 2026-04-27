@@ -1,0 +1,10 @@
+(include *standard-cl-23*)
+(import std.shatree)
+
+(defconst C 19191)
+(defun F (X) (+ C X))
+(defconst D (list C F (C_hash) (F_hash)))
+
+(export C)
+(export D)
+(export F)

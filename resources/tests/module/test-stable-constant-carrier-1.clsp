@@ -1,0 +1,29 @@
+(include *standard-cl-23*)
+(import qualified programs.test-stable-constant-1 as TC)
+
+(defun check-all (X)
+  (a (c #all X) @)
+  )
+
+(export ()
+  (assign
+    exported-hashes-equal (= (TC.F_hash) (TC.C_hash))
+    f-hash-correct (= (shatree TC.F) (TC.F_hash))
+    c-hash-correct (= (shatree TC.C) (TC.C_hash))
+    f-hash-consistent (= TC.FHASH (TC.F_hash))
+    c-hash-consistent (= TC.CHASH (TC.C_hash))
+    all-checks
+      (list
+        exported-hashes-equal
+        f-hash-correct
+        c-hash-correct
+        f-hash-consistent
+        c-hash-consistent
+        )
+        
+    (if (check-all all-checks)
+      1
+      (x all-checks)
+      )
+    )
+  )

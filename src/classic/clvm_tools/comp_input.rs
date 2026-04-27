@@ -13,7 +13,7 @@ use crate::classic::clvm_tools::ir::reader::read_ir;
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 
 use crate::compiler::compiler::{compile_file, DefaultCompilerOpts};
-use crate::compiler::comptypes::{CompileErr, CompilerOpts};
+use crate::compiler::comptypes::{CompileErr, CompilerOpts, CompilerOutput};
 use crate::compiler::debug::build_symbol_table_mut;
 use crate::compiler::dialect::{detect_modern, AcceptedDialect};
 use crate::compiler::optimize::maybe_finalize_program_via_classic_optimizer;
@@ -234,16 +234,18 @@ impl RunAndCompileInputData {
             self.opts.clone(),
             &self.program.content,
             symbol_table,
-        );
-        let res = unopt_res.and_then(|x| {
+        )?;
+        let res = if matches!(unopt_res, CompilerOutput::Module(_)) {
+            Rc::new(unopt_res.to_sexp())
+        } else {
             maybe_finalize_program_via_classic_optimizer(
                 allocator,
                 runner,
                 self.opts.clone(),
                 self.do_optimize,
-                &x,
-            )
-        })?;
+                &unopt_res.to_sexp(),
+            )?
+        };
 
         build_symbol_table_mut(symbol_table, &res);
 

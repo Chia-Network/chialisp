@@ -334,7 +334,7 @@ fn constant_fun_result(
                 let mut wrapper =
                     CompileContextWrapper::new(allocator, runner.clone(), &mut symbols, optimizer);
 
-                if let Ok(code) = codegen(&mut wrapper.context, opts.clone(), &to_compile) {
+                if let Ok(code) = codegen(&mut wrapper.context, opts.clone(), None, &to_compile) {
                     code
                 } else {
                     return None;

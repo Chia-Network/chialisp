@@ -1,0 +1,9 @@
+(include *strict-cl-21*)
+(import std.assert exposing assert)
+
+(export (X)
+  (assign
+    less-than-x (- X 13)
+    (assert less-than-x X)
+    )
+  )
