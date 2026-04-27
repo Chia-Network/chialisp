@@ -65,13 +65,16 @@ pub struct ArmElfCompileOutput {
 }
 
 pub fn compile_to_arm_elf(args: &Args) -> Result<ArmElfCompileOutput, String> {
-    let argfile = if let Ok(res) = fs::read_to_string(&args.filename) {
-        res
-    } else {
-        eprintln!("error reading {}", args.filename);
-        std::process::exit(1);
-    };
+    let argfile = fs::read_to_string(&args.filename)
+        .map_err(|_| format!("error reading {}", args.filename))?;
 
+    compile_to_arm_elf_from_source(args, argfile)
+}
+
+pub fn compile_to_arm_elf_from_source(
+    args: &Args,
+    argfile: String,
+) -> Result<ArmElfCompileOutput, String> {
     let runner: Rc<dyn TRunProgram> = Rc::new(DefaultProgramRunner::new());
     let mut symbol_table = HashMap::new();
 

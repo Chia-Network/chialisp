@@ -31,7 +31,7 @@ use chialisp::compiler::compiler::{
     extract_program_and_env, path_to_function, rewrite_in_program, DefaultCompilerOpts,
 };
 use chialisp::compiler::comptypes::{CompileErr, CompilerOpts};
-use chialisp::compiler::debug::armjit::cmd::{compile_to_arm_elf, Args as ArmElfArgs};
+use chialisp::compiler::debug::armjit::cmd::compile_to_arm_elf_from_source;
 use chialisp::compiler::optimize::get_optimizer;
 use chialisp::compiler::prims;
 use chialisp::compiler::repl::Repl;
@@ -344,15 +344,13 @@ pub fn compile_to_arm_elf_js(
         .map(|j| j.as_string().unwrap())
         .collect();
 
-    let args = ArmElfArgs {
-        include: search_paths,
-        output: format!("{filename}.elf"),
-        filename,
+    match compile_to_arm_elf_from_source(
+        input,
+        filename.clone(),
+        format!("{filename}.elf"),
         env,
-        input: Some(input),
-    };
-
-    match compile_to_arm_elf(&args) {
+        search_paths,
+    ) {
         Ok(result) => {
             let array = js_sys::Array::new();
             array.set(
