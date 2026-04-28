@@ -387,9 +387,12 @@ mod tests {
     fn debug_sexp_proper_list_returns_original_nodes() {
         let first = atom(b"a");
         let second = atom(b"b");
-        let list = enlist(Srcloc::start("*test*"), &[first.clone(), second.clone()]);
+        let list = Rc::new(enlist(
+            Srcloc::start("*test*"),
+            &[first.clone(), second.clone()],
+        ));
 
-        let proper = list.proper_list().expect("proper list");
+        let proper = DebugSExp::proper_list(&list).expect("proper list");
 
         assert_eq!(proper, vec![first, second]);
     }
@@ -413,7 +416,10 @@ mod tests {
     #[test]
     fn debug_treehash_search_finds_matching_subtrees() {
         let needle = atom(b"needle");
-        let haystack = enlist(Srcloc::start("*test*"), &[atom(b"left"), needle.clone()]);
+        let haystack = Rc::new(enlist(
+            Srcloc::start("*test*"),
+            &[atom(b"left"), needle.clone()],
+        ));
         let hash = debug_sha256tree(needle.clone());
 
         let matches = debug_find_all_by_hash(&hash, haystack);
