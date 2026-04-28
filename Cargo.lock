@@ -248,6 +248,7 @@ dependencies = [
  "pyo3-build-config 0.24.1",
  "rand 0.10.1",
  "rand_chacha 0.10.0",
+ "rand_core 0.10.1",
  "regex",
  "serde",
  "serde_json",

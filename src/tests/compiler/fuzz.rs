@@ -2,7 +2,7 @@ use num_bigint::ToBigInt;
 
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
-use rand::{Rng, SeedableRng};
+use rand::{Rng, RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use std::borrow::Borrow;
 use std::collections::{BTreeSet, HashMap};

@@ -47,6 +47,7 @@ optional = true
 [dev-dependencies]
 lfsr = "0.3.0"
 rand = "0.10.1"
+rand_core = "0.10.1"
 rand_chacha = "0.10.0"
 
 [lib]

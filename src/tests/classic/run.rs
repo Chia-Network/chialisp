@@ -731,7 +731,7 @@ impl Distribution<RandomClvmNumber> for StandardUniform {
 // Finally add property based testing in here.
 #[test]
 fn test_encoding_properties() {
-    let mut rng = ChaChaRng::from_os_rng();
+    let mut rng = ChaChaRng::from_rng(&mut rand::rng());
     for _ in 1..=200 {
         let number_spec: RandomClvmNumber = rng.random();
 
@@ -800,7 +800,7 @@ fn stringize(sexp: &sexp::SExp) -> sexp::SExp {
 
 #[test]
 fn test_check_tricky_arg_path_random() {
-    let mut rng = ChaChaRng::from_os_rng();
+    let mut rng = ChaChaRng::from_rng(&mut rand::rng());
     // Make a very deep random sexp and make a path table in it.
     let random_tree = Rc::new(stringize(&sexp::random_sexp(&mut rng, SEXP_RNG_HORIZON)));
     let mut deep_tree = random_tree.clone();
