@@ -1005,6 +1005,8 @@ pub trait CompilerOpts {
     /// Specifies flags that were passed down to various consumers.  This is
     /// open ended for various purposes, such as diagnostics.
     fn diag_flags(&self) -> Rc<HashSet<usize>>;
+    /// Maximum iterations for the constant generation convergence loop.
+    fn constant_generation_limit(&self) -> usize;
 
     /// Set main file, creating an opts that treats this file as its main file.
     fn set_filename(&self, new_file: &str) -> Rc<dyn CompilerOpts>;
@@ -1035,6 +1037,8 @@ pub trait CompilerOpts {
     fn set_prim_map(&self, new_map: Rc<HashMap<Vec<u8>, Rc<SExp>>>) -> Rc<dyn CompilerOpts>;
     /// Set the flags this CompilerOpts holds.  Consumers can examine these.
     fn set_diag_flags(&self, new_flags: Rc<HashSet<usize>>) -> Rc<dyn CompilerOpts>;
+    /// Set the maximum iterations for the constant generation convergence loop.
+    fn set_constant_generation_limit(&self, limit: usize) -> Rc<dyn CompilerOpts>;
 
     /// Using the search paths list we have, try to read a file by name,
     /// Returning the expanded path to the file and its content.
@@ -1117,6 +1121,9 @@ pub trait HasCompilerOptsDelegation {
     fn override_diag_flags(&self) -> Rc<HashSet<usize>> {
         self.compiler_opts().diag_flags()
     }
+    fn override_constant_generation_limit(&self) -> usize {
+        self.compiler_opts().constant_generation_limit()
+    }
 
     fn override_set_filename(&self, new_filename: &str) -> Rc<dyn CompilerOpts> {
         self.update_compiler_opts(|o| o.set_filename(new_filename))
@@ -1156,6 +1163,9 @@ pub trait HasCompilerOptsDelegation {
     }
     fn override_set_diag_flags(&self, flags: Rc<HashSet<usize>>) -> Rc<dyn CompilerOpts> {
         self.update_compiler_opts(|o| o.set_diag_flags(flags))
+    }
+    fn override_set_constant_generation_limit(&self, limit: usize) -> Rc<dyn CompilerOpts> {
+        self.update_compiler_opts(|o| o.set_constant_generation_limit(limit))
     }
     fn override_set_prim_map(
         &self,
@@ -1227,6 +1237,9 @@ impl<T: HasCompilerOptsDelegation> CompilerOpts for T {
     fn diag_flags(&self) -> Rc<HashSet<usize>> {
         self.override_diag_flags()
     }
+    fn constant_generation_limit(&self) -> usize {
+        self.override_constant_generation_limit()
+    }
 
     fn module_phase(&self) -> Option<ModulePhase> {
         self.override_module_phase()
@@ -1273,6 +1286,9 @@ impl<T: HasCompilerOptsDelegation> CompilerOpts for T {
     }
     fn set_diag_flags(&self, new_flags: Rc<HashSet<usize>>) -> Rc<dyn CompilerOpts> {
         self.override_set_diag_flags(new_flags)
+    }
+    fn set_constant_generation_limit(&self, limit: usize) -> Rc<dyn CompilerOpts> {
+        self.override_set_constant_generation_limit(limit)
     }
     fn write_new_file(&self, target: &str, content: &[u8]) -> Result<(), CompileErr> {
         self.override_write_new_file(target, content)

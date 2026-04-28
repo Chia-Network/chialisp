@@ -35,7 +35,7 @@ use crate::util::{toposort, u8_from_number, Number, TopoSortItem};
 
 const MACRO_TIME_LIMIT: usize = 1000000;
 pub const CONST_EVAL_LIMIT: usize = 1000000;
-const CONSTANT_GENERATIONS_ALLOWED: usize = 50;
+pub const CONSTANT_GENERATIONS_ALLOWED: usize = 50;
 
 // Tell what kind of lookup is being asked for.
 // ReferenceAsVariable means that references to defuns should appear wrapped so they can be
@@ -2793,8 +2793,9 @@ pub fn codegen(
         let mut prev_repr = Rc::new(SExp::Nil(code_generator.final_env.loc()));
         let mut this_repr = code_generator.final_env.clone();
         let mut steps = 0;
+        let generation_limit = opts.constant_generation_limit();
 
-        while prev_repr != this_repr && steps < CONSTANT_GENERATIONS_ALLOWED {
+        while prev_repr != this_repr && steps < generation_limit {
             // Regenerate constants.
             for h in to_process.iter() {
                 if matches!(h, HelperForm::Defconstant(_)) {
@@ -2826,7 +2827,7 @@ pub fn codegen(
             steps += 1;
         }
 
-        if steps == CONSTANT_GENERATIONS_ALLOWED {
+        if prev_repr != this_repr {
             return Err(CompileErr(
                 Srcloc::start(&opts.filename()),
                 "Constant generation didn't converge in allowed iteration limit".to_string(),

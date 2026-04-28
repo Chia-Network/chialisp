@@ -19,7 +19,9 @@ use crate::classic::clvm::__type_compatibility__::Stream;
 use crate::classic::clvm::sexp::sexp_as_bin;
 use crate::compiler::cldb::hex_to_modern_sexp;
 use crate::compiler::clvm::{convert_to_clvm_rs, run, sha256tree, NewStyleIntConversion};
-use crate::compiler::codegen::{codegen, hoist_body_let_binding, process_helper_let_bindings};
+use crate::compiler::codegen::{
+    codegen, hoist_body_let_binding, process_helper_let_bindings, CONSTANT_GENERATIONS_ALLOWED,
+};
 use crate::compiler::comptypes::{
     BodyForm, CompileErr, CompileForm, CompileModuleComponent, CompileModuleOutput, CompilerOpts,
     CompilerOutput, ConstantKind, DefunData, Export, FrontendOutput, HelperForm, ImportLongName,
@@ -111,6 +113,7 @@ pub struct DefaultCompilerOpts {
     pub diag_flags: Rc<HashSet<usize>>,
     pub dialect: AcceptedDialect,
     pub module_phase: Option<ModulePhase>,
+    pub constant_generation_limit: usize,
 }
 
 pub fn create_prim_map() -> Rc<HashMap<Vec<u8>, Rc<SExp>>> {
@@ -957,6 +960,9 @@ impl CompilerOpts for DefaultCompilerOpts {
     fn diag_flags(&self) -> Rc<HashSet<usize>> {
         self.diag_flags.clone()
     }
+    fn constant_generation_limit(&self) -> usize {
+        self.constant_generation_limit
+    }
 
     fn set_filename(&self, filename: &str) -> Rc<dyn CompilerOpts> {
         let mut copy = self.clone();
@@ -1026,6 +1032,11 @@ impl CompilerOpts for DefaultCompilerOpts {
     fn set_diag_flags(&self, flags: Rc<HashSet<usize>>) -> Rc<dyn CompilerOpts> {
         let mut copy = self.clone();
         copy.diag_flags = flags;
+        Rc::new(copy)
+    }
+    fn set_constant_generation_limit(&self, limit: usize) -> Rc<dyn CompilerOpts> {
+        let mut copy = self.clone();
+        copy.constant_generation_limit = limit;
         Rc::new(copy)
     }
 
@@ -1137,6 +1148,7 @@ impl DefaultCompilerOpts {
             disassembly_ver: None,
             module_phase: None,
             diag_flags: Rc::new(HashSet::default()),
+            constant_generation_limit: CONSTANT_GENERATIONS_ALLOWED,
         }
     }
 }

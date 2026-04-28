@@ -718,3 +718,22 @@ fn test_cl24_fix_always_present() {
         }],
     );
 }
+
+/// Regression: the convergence loop post-check `if steps == limit` cannot
+/// distinguish "converged on the last allowed iteration" from "did not converge".
+/// When convergence happens on exactly the last step, the check incorrectly
+/// returns an error. This test sets the limit to 1 so that any program
+/// converging in one iteration triggers the false positive.
+#[test]
+fn test_convergence_loop_boundary_does_not_false_positive() {
+    let filename = "resources/tests/module/test_staged_constants_multiple_iters.clsp";
+    let content = fs::read_to_string(filename).expect("file should exist");
+    let orig_opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename))
+        .set_search_paths(&["resources/tests/module".to_string()])
+        .set_constant_generation_limit(1);
+    let source_opts = TestModuleCompilerOpts::new(orig_opts);
+    let mut allocator = Allocator::new();
+    let runner = Rc::new(DefaultProgramRunner::new());
+    perform_compile_of_file(&mut allocator, runner, source_opts, filename, &content)
+        .expect("should compile when convergence happens on the last allowed iteration");
+}
