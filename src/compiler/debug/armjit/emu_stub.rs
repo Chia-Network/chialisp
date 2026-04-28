@@ -346,3 +346,117 @@ impl CallbackGdbStub {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        hex_ascii, print_run_event, send_gdb_console_packet, stop_reason_from_event,
+        CallbackConnection,
+    };
+    use crate::compiler::debug::armjit::emu::{Event, RunEvent};
+    use gdbstub::common::Signal;
+    use gdbstub::conn::Connection;
+    use gdbstub::stub::SingleThreadStopReason;
+    use std::cell::RefCell;
+    use std::io;
+    use std::rc::Rc;
+
+    #[test]
+    fn hex_ascii_encodes_nibbles() {
+        assert_eq!(hex_ascii(0), b'0');
+        assert_eq!(hex_ascii(9), b'9');
+        assert_eq!(hex_ascii(10), b'a');
+        assert_eq!(hex_ascii(15), b'f');
+        assert_eq!(hex_ascii(16), b'0');
+    }
+
+    #[test]
+    fn send_gdb_console_packet_encodes_output_packet() {
+        let written = Rc::new(RefCell::new(Vec::new()));
+        let written_clone = written.clone();
+        let mut conn = CallbackConnection::new(Box::new(move |bytes| {
+            written_clone.borrow_mut().extend_from_slice(bytes);
+            Ok(())
+        }));
+
+        send_gdb_console_packet(&mut conn, "hi").expect("packet writes");
+
+        assert_eq!(written.borrow().as_slice(), b"$O68690a#bd");
+    }
+
+    #[test]
+    fn callback_connection_forwards_writes() {
+        let written = Rc::new(RefCell::new(Vec::new()));
+        let written_clone = written.clone();
+        let mut conn = CallbackConnection::new(Box::new(move |bytes| {
+            written_clone.borrow_mut().extend_from_slice(bytes);
+            Ok(())
+        }));
+
+        conn.write(b'a').expect("single byte write");
+        conn.write_all(b"bc").expect("buffer write");
+        conn.flush().expect("flush");
+
+        assert_eq!(written.borrow().as_slice(), b"abc");
+    }
+
+    #[test]
+    fn callback_connection_propagates_write_errors() {
+        let mut conn =
+            CallbackConnection::new(Box::new(|_| Err(io::Error::other("expected failure"))));
+
+        assert_eq!(
+            conn.write(b'a')
+                .expect_err("single byte write fails")
+                .kind(),
+            io::ErrorKind::Other
+        );
+        assert_eq!(
+            conn.write_all(b"abc")
+                .expect_err("buffer write fails")
+                .kind(),
+            io::ErrorKind::Other
+        );
+    }
+
+    #[test]
+    fn stop_reason_maps_emulator_events() {
+        assert!(matches!(
+            stop_reason_from_event(Event::Trap),
+            SingleThreadStopReason::Signal(Signal::SIGABRT)
+        ));
+        assert!(matches!(
+            stop_reason_from_event(Event::DoneStep),
+            SingleThreadStopReason::DoneStep
+        ));
+        assert!(matches!(
+            stop_reason_from_event(Event::Halted),
+            SingleThreadStopReason::Signal(Signal::SIGSTOP)
+        ));
+        assert!(matches!(
+            stop_reason_from_event(Event::Output),
+            SingleThreadStopReason::Signal(Signal::SIGUSR1)
+        ));
+        assert!(matches!(
+            stop_reason_from_event(Event::Break),
+            SingleThreadStopReason::SwBreak(())
+        ));
+        assert!(matches!(
+            stop_reason_from_event(Event::WatchWrite(0x1234)),
+            SingleThreadStopReason::Watch { addr: 0x1234, .. }
+        ));
+        assert!(matches!(
+            stop_reason_from_event(Event::WatchRead(0x5678)),
+            SingleThreadStopReason::Watch { addr: 0x5678, .. }
+        ));
+    }
+
+    #[test]
+    fn print_run_event_formats_for_logs() {
+        assert_eq!(print_run_event(&RunEvent::IncomingData), "IncomingData");
+        assert_eq!(
+            print_run_event(&RunEvent::Event(Event::Trap)),
+            "Event(Trap)"
+        );
+    }
+}
