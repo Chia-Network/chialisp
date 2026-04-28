@@ -120,6 +120,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
+name = "chacha20"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f8d983286843e49675a4b7a2d174efe136dc93a18d69130dd18198a6c167601"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.0",
+ "rand_core 0.10.1",
+]
+
+[[package]]
+name = "chia-bls"
+version = "0.37.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e9211e9cddbfb74524ae4a5a3fa1bfc11d62c8e82f0b51294cf506d287d76be"
+dependencies = [
+ "blst",
+ "chia-sha2 0.37.0",
+ "chia-traits 0.37.0",
+ "hex",
+ "hkdf",
+ "linked-hash-map",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "chia-bls"
 version = "0.38.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -136,19 +163,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "chia-bls"
-version = "0.42.0"
+name = "chia-sha2"
+version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8663dc7139234c60fccddc0babeb5b0a0a55b14943d74c73ac8aad130c5b79e3"
+checksum = "7faea0293c04276e7727f0901c060c4bdbd3cd54ba43575dbd01c4db24e7a55d"
 dependencies = [
- "blst",
- "chia-sha2 0.42.0",
- "chia-traits 0.42.0",
- "hex",
- "hkdf",
- "linked-hash-map",
  "sha2 0.10.9",
- "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -161,12 +181,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "chia-sha2"
-version = "0.42.0"
+name = "chia-traits"
+version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6636ca8bba852fc516eacf01b2c3964b6b290359e7d1e89b950e6754e2a1082"
+checksum = "f48bb70b5fe6f903f3c88071ce990fb415f7c3cf01484e01cfd9e43f540c23d8"
 dependencies = [
- "sha2 0.10.9",
+ "chia-sha2 0.37.0",
+ "chia_streamable_macro 0.37.0",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -181,14 +203,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "chia-traits"
-version = "0.42.0"
+name = "chia_streamable_macro"
+version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3517dcf2b743672c78339ef8d222fd4493ae48741c35dd5ffb2d9dba90417115"
+checksum = "24c24c7ffe8b8b807e01d6c8271fbf3657aed8900c7ccf1ffdd291a5eb30bc74"
 dependencies = [
- "chia-sha2 0.42.0",
- "chia_streamable_macro 0.42.0",
- "thiserror 1.0.69",
+ "proc-macro-crate",
+ "proc-macro2 1.0.95",
+ "quote 1.0.40",
+ "syn 2.0.104",
 ]
 
 [[package]]
@@ -204,26 +227,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "chia_streamable_macro"
-version = "0.42.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41f85fb91e5ddba8003c4c4ad13c7914b1ff733d92136805c6566de227321d49"
-dependencies = [
- "proc-macro-crate",
- "proc-macro2 1.0.95",
- "quote 1.0.40",
- "syn 2.0.104",
-]
-
-[[package]]
 name = "chialisp"
 version = "0.4.3"
 dependencies = [
  "binascii",
- "chia-bls 0.42.0",
+ "chia-bls 0.37.0",
  "clvmr",
  "do-notation",
- "getrandom 0.2.15",
+ "getrandom 0.4.2",
  "hashlink",
  "hex",
  "indoc",
@@ -235,8 +246,8 @@ dependencies = [
  "num-traits",
  "pyo3",
  "pyo3-build-config 0.24.1",
- "rand",
- "rand_chacha",
+ "rand 0.10.1",
+ "rand_chacha 0.10.0",
  "regex",
  "serde",
  "serde_json",
@@ -267,7 +278,7 @@ dependencies = [
  "num-integer",
  "num-traits",
  "p256",
- "rand",
+ "rand 0.9.4",
  "sha1",
  "sha3",
  "thiserror 2.0.18",
@@ -500,26 +511,13 @@ dependencies = [
 
 [[package]]
 name = "getrandom"
-version = "0.2.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4567c8db10ae91089c99af84c68c38da3ec2f087c3f82960bcdbf3656b6f4d7"
-dependencies = [
- "cfg-if",
- "js-sys",
- "libc",
- "wasi 0.11.0+wasi-snapshot-preview1",
- "wasm-bindgen",
-]
-
-[[package]]
-name = "getrandom"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43a49c392881ce6d5c3b8cb70f98717b7c07aabbdff06687b9030dbfbe2725f8"
 dependencies = [
  "cfg-if",
  "libc",
- "wasi 0.13.3+wasi-0.2.2",
+ "wasi",
  "windows-targets",
 ]
 
@@ -1179,8 +1177,19 @@ version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "44c5af06bb1b7d3216d91932aed5265164bf384dc89cd6ba05cf59a35f5f76ea"
 dependencies = [
- "rand_chacha",
+ "rand_chacha 0.9.0",
  "rand_core 0.9.0",
+]
+
+[[package]]
+name = "rand"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2e8e8bcc7961af1fdac401278c6a831614941f6164ee3bf4ce61b7edb162207"
+dependencies = [
+ "chacha20",
+ "getrandom 0.4.2",
+ "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -1191,6 +1200,16 @@ checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
 dependencies = [
  "ppv-lite86",
  "rand_core 0.9.0",
+]
+
+[[package]]
+name = "rand_chacha"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e6af7f3e25ded52c41df4e0b1af2d047e45896c2f3281792ed68a1c243daedb"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -1470,12 +1489,12 @@ checksum = "e502f78cdbb8ba4718f566c418c52bc729126ffd16baee5baa718cf25dd5a69a"
 
 [[package]]
 name = "tempfile"
-version = "3.26.0"
+version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82a72c767771b47409d2345987fda8628641887d5466101319899796367354a0"
+checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.1",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix",
  "windows-sys",
@@ -1588,12 +1607,6 @@ name = "version_check"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
-
-[[package]]
-name = "wasi"
-version = "0.11.0+wasi-snapshot-preview1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c8d87e72b64a3b4db28d11ce29237c246188f4f51057d65a7eab63b7987e423"
 
 [[package]]
 name = "wasi"
