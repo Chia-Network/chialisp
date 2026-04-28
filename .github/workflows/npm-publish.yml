@@ -44,6 +44,11 @@ jobs:
       - name: install wasm-pack
         run: cargo install --version 0.13.1 wasm-pack
 
+      - name: Install gdb multiarch for debug tools test
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gdb-multiarch
+
       - name: wasm-pack build and pack
         run: wasm-pack build --release --target=nodejs wasm && wasm-pack pack wasm
 
