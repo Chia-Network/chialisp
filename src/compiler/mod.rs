@@ -324,6 +324,13 @@ impl<'a> CompileContextWrapper<'a> {
         let runner = context.runner();
         let optimizer = context.optimizer.duplicate();
         let bcc = BasicCompileContext::new(Allocator::new(), runner, HashMap::new(), optimizer);
+        // Subcompiles should not try to share the function cache here.
+        // Whenever we obtain a new context, it's because we're reaching across a boundary
+        // notionally between programs or within a context where the code being generated
+        // for only part of a program (such as a subcompile or to compute the body of a
+        // constant and then discard).  None of those situations would benefit from caching
+        // function bodies nor would we necessarily want the cached results (these often use
+        // different settings).
         let mut wrapper = CompileContextWrapper {
             allocator: &mut context.allocator,
             symbols,

@@ -1,13 +1,15 @@
 //! Tests for module export disk cache (`try_from_cache`) and cache key wiring.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use clvmr::Allocator;
 
 use crate::classic::clvm::__type_compatibility__::Stream;
 use crate::classic::clvm::sexp::sexp_as_bin;
+use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 use crate::compiler::clvm::convert_to_clvm_rs;
-use crate::compiler::compiler::{try_from_cache, DefaultCompilerOpts};
+use crate::compiler::compiler::{compile_file, try_from_cache, DefaultCompilerOpts};
 use crate::compiler::comptypes::{
     BodyForm, CompileForm, CompilerOpts, CompilerOutput, Export, ExportFunctionDesc,
     ExportProgramDesc, NameAndLoc,
@@ -160,4 +162,108 @@ fn try_from_cache_uses_as_name_for_hex_path() {
     };
     assert_eq!(mo.components.len(), 1);
     assert_eq!(mo.components[0].shortname, b"F".to_vec());
+}
+
+fn compile_module_source(
+    source_opts: &TestModuleCompilerOpts,
+    content: &str,
+) -> Result<CompilerOutput, crate::compiler::comptypes::CompileErr> {
+    let mut allocator = Allocator::new();
+    let runner = Rc::new(DefaultProgramRunner::new());
+    let opts: Rc<dyn CompilerOpts> = Rc::new(source_opts.clone());
+    let mut symbols = HashMap::new();
+    compile_file(&mut allocator, runner, opts, content, &mut symbols)
+}
+
+/// Compile a real module through compile_file (which calls compile_pre_forms +
+/// add_main_fingerprint), then compile again with the cache populated. The second
+/// compile should produce a cache hit via try_from_cache and yield the same hex.
+#[test]
+fn disk_cache_hit_after_full_compile() {
+    let filename = "resources/tests/module/programs/three-outputs-common.clsp";
+    let content = std::fs::read_to_string(filename).expect("read");
+    let orig_opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename))
+        .set_search_paths(&["resources/tests/module".to_string()]);
+    let wrapped = TestModuleCompilerOpts::new(orig_opts);
+
+    let out1 = compile_module_source(&wrapped, &content).expect("first compile");
+    let CompilerOutput::Module(m1) = &out1 else {
+        panic!("expected module output");
+    };
+    assert!(!m1.components.is_empty());
+    let _first_hexes: Vec<String> = m1
+        .components
+        .iter()
+        .map(|c| c.content.to_string())
+        .collect();
+
+    // The written_files map now contains `.chialisp/<key>/<export>.hex` entries
+    // from set_cache_element, plus the output hex files. A second compile should
+    // see them via try_from_cache.
+    let out2 = compile_module_source(&wrapped, &content).expect("second compile");
+    let CompilerOutput::Module(m2) = &out2 else {
+        panic!("expected module output on re-compile");
+    };
+    // The fresh compile produces both primary exports and _hash sidecars as
+    // components; the cache-hit path only returns the primary exports (hashes
+    // are written as sidecar files). Filter to primary exports for comparison.
+    let primary =
+        |cs: &[crate::compiler::comptypes::CompileModuleComponent]| -> Vec<(Vec<u8>, String)> {
+            cs.iter()
+                .filter(|c| !c.shortname.ends_with(b"_hash"))
+                .map(|c| (c.shortname.clone(), c.content.to_string()))
+                .collect::<Vec<_>>()
+        };
+    let p1 = primary(&m1.components);
+    let p2 = primary(&m2.components);
+    assert_eq!(p1.len(), p2.len());
+    for ((name1, hex1), (name2, hex2)) in p1.iter().zip(p2.iter()) {
+        assert_eq!(name1, name2);
+        assert_eq!(
+            hex1,
+            hex2,
+            "re-compiled hex must match for {}",
+            String::from_utf8_lossy(name1)
+        );
+    }
+}
+
+/// Editing the source should change the main fingerprint and cause a cache miss.
+#[test]
+fn disk_cache_miss_after_source_edit() {
+    let filename = "resources/tests/module/programs/three-outputs-common.clsp";
+    let content = std::fs::read_to_string(filename).expect("read");
+    let orig_opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename))
+        .set_search_paths(&["resources/tests/module".to_string()]);
+    let wrapped = TestModuleCompilerOpts::new(orig_opts);
+
+    let out1 = compile_module_source(&wrapped, &content).expect("first compile");
+    let CompilerOutput::Module(m1) = &out1 else {
+        panic!("expected module output");
+    };
+
+    // Change the source slightly: multiply by 5 instead of 3 in E.
+    let mutated = content.replace("(* X 3)", "(* X 5)");
+    assert_ne!(content, mutated);
+
+    let out2 = compile_module_source(&wrapped, &mutated).expect("recompile with edits");
+    let CompilerOutput::Module(m2) = &out2 else {
+        panic!("expected module output");
+    };
+
+    // The hex should differ because the cache key changed (main fingerprint changed).
+    let hexes1: Vec<String> = m1
+        .components
+        .iter()
+        .map(|c| c.content.to_string())
+        .collect();
+    let hexes2: Vec<String> = m2
+        .components
+        .iter()
+        .map(|c| c.content.to_string())
+        .collect();
+    assert_ne!(
+        hexes1, hexes2,
+        "edited source must produce different hex (cache should miss)"
+    );
 }

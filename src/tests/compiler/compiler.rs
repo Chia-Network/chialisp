@@ -478,6 +478,27 @@ fn run_test_at_form() {
 }
 
 #[test]
+fn run_test_at_two_arg_atom_integer() {
+    let result = run_string(
+        &"(mod (A B) (include *standard-cl-24*) (defun F (A B) (if (@ B 1) (+ A B) 99)) (F &rest (@ 3)))".to_string(),
+        &"(10 20)".to_string(),
+    )
+    .unwrap();
+    assert_eq!(result.to_string(), "30");
+}
+
+#[test]
+fn run_test_at_two_arg_non_integer_error() {
+    let result = run_string_strict(
+        &"(mod (a b) (include *standard-cl-24*) (defun F (A B) (@ A B)) (F a b))".to_string(),
+        &"(10 20)".to_string(),
+    );
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.unwrap_err().1);
+    assert!(err_msg.contains("@ form with two arguments requires argument and integer"));
+}
+
+#[test]
 fn run_test_intermediate_let_1() {
     let result = run_string(
         &indoc! {"

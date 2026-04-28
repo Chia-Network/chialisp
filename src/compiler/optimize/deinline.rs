@@ -36,7 +36,7 @@ fn find_roots(
     }
 }
 
-fn stepping_over_24(opts: Rc<dyn CompilerOpts>) -> bool {
+pub(crate) fn stepping_over_24(opts: Rc<dyn CompilerOpts>) -> bool {
     if let Some(s) = &opts.dialect().stepping {
         return *s > 24;
     }

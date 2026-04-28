@@ -879,21 +879,6 @@ fn compile_call(
                             format!("@ form with two arguments requires argument and integer, got (@ {} {})", tl[0].to_sexp(), tl[1].to_sexp()),
                         )),
                     }
-                } else if tl.len() == 2 {
-                    match (tl[0].borrow(), tl[1].borrow()) {
-                        (
-                            BodyForm::Value(SExp::Atom(_al, a)),
-                            BodyForm::Value(SExp::Integer(_il, i)),
-                        ) => produce_argument_check(compiler, opts, call.loc.clone(), a, i.clone()),
-                        (
-                            BodyForm::Value(SExp::Atom(_al, a)),
-                            BodyForm::Quoted(SExp::Integer(_il, i)),
-                        ) => produce_argument_check(compiler, opts, call.loc.clone(), a, i.clone()),
-                        _ => Err(CompileErr(
-                            al.clone(),
-                            "@ form with two arguments requires argument and integer".to_string(),
-                        )),
-                    }
                 } else {
                     Err(CompileErr(
                         al.clone(),
@@ -1251,7 +1236,27 @@ fn get_depended_on_forms(
     env_shape
 }
 
-fn get_function_cache_key(
+/// Compute a cache key for `helper`'s generated CLVM code inside `compiler`.
+///
+/// **Preimage contents** (hashed via `sha256tree`):
+///   `(helper.to_sexp() . depended_on_forms)`
+/// where `depended_on_forms` is the s-expression representation of every
+/// inline, constant, and tabled-constant body that `helper` transitively
+/// depends on (via the dependency graph), plus the env shape filtered to
+/// only the names in the dependency closure.
+///
+/// **Inputs NOT in the preimage** (callers must hold these constant for the
+/// lifetime of a single `Funcache` instance):
+///   - `opts.dialect()` (stepping, strict, int_fix)
+///   - `opts.module_phase()`
+///   - `compiler.parentfns`, `compiler.left_env`
+///   - Optimizer strategy
+///
+/// This is safe today because `Funcache` is created fresh inside each
+/// `deinline_opt` call, where all of the above are constant. If the cache is
+/// ever made longer-lived (e.g. across compilation units), those inputs must
+/// be added to the preimage.
+pub(crate) fn get_function_cache_key(
     compiler: &PrimaryCodegen,
     dependency_graph: &FunctionDependencyGraph,
     helper: &HelperForm,
@@ -1260,7 +1265,6 @@ fn get_function_cache_key(
     dependency_graph.get_full_depends_on(&mut depends_on_set, helper.name());
     let mut depends_on: Vec<_> = depends_on_set.into_iter().collect();
     depends_on.sort();
-    // Collect depended on function forms
     let filtered_env = filter_env(
         &depends_on,
         Rc::new(SExp::Nil(helper.loc())),
@@ -1311,7 +1315,9 @@ fn codegen_(
                         .as_ref()
                         .and_then(|c| c.function_outputs.get(key).map(|e| e.code.clone()))
                 }) {
-                    check_already_present(code.clone())?;
+                    if !allow_redef {
+                        check_already_present(code.clone())?;
+                    }
                     return Ok(compiler.add_defun(
                         &defun.name,
                         defun.orig_args.clone(),
@@ -1956,6 +1962,17 @@ fn find_satisfied_constants(
 // Output a viable order for constant and constant-time function generation which
 // allows the constants to observe a consistent, useful viewpoint on the program
 // and any functions that they depend on outside the main program.
+//
+// decide_constant_generation_order builds its own FunctionDependencyGraph from
+// `helpers` (the post-tree-shaking set via `code_generator.to_process`).  This
+// is intentionally separate from the dependency graph the deinliner passes
+// through `codegen(..., dependency_graph, ...)` for Funcache key computation,
+// because:
+//   - The deinliner's graph is built from the full pre-tree-shaking CompileForm.
+//   - This graph is built from the narrower post-tree-shaking helper set.
+//   - The deinliner's graph determines cache key dependencies (what affects a
+//     helper's output), while this graph determines generation ordering (which
+//     constants can be evaluated before others).
 fn decide_constant_generation_order(
     loc: &Srcloc,
     _compiler: &PrimaryCodegen,
