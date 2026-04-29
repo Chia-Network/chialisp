@@ -1,4 +1,3 @@
-use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::Formatter;
@@ -28,12 +27,14 @@ use gimli::{DW_ATE_unsigned, DwAte, Encoding, Format, LineEncoding};
 use target_lexicon::triple;
 
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero, Bytes, BytesFromType};
-use crate::classic::clvm::casts::bigint_to_bytes_clvm;
-use crate::compiler::clvm::{sha256tree, truthy};
-use crate::compiler::comptypes::CompileForm;
 use crate::compiler::debug::armjit::load::{write_u32, ElfLoader};
-use crate::compiler::sexp::{decode_string, parse_sexp, Atom, NodeSel, SExp, SelectNode, ThisNode};
-use crate::compiler::srcloc::Srcloc;
+use crate::compiler::debug::{
+    debug_decode_string as decode_string, debug_dequote as dequote,
+    debug_find_all_by_hash as find_all_by_hash, debug_is_atom as is_atom,
+    debug_is_wrapped_atom as is_wrapped_atom, debug_parse_sexp as parse_sexp,
+    debug_sha256tree as sha256tree, debug_start_loc, ConcreteSExp, DebugSExp, DebugSExpValue,
+    Srcloc,
+};
 use crate::util::Number;
 
 pub const NEXT_ALLOC_OFFSET: i32 = 0;
@@ -840,7 +841,7 @@ impl DwarfBuilder {
         self.add_file_having_dirid(dirid, &filename)
     }
 
-    fn synthetic_expr_key(loc: &Srcloc, source_sexp: &SExp) -> Vec<u8> {
+    fn synthetic_expr_key(loc: &Srcloc, source_sexp: &impl fmt::Display) -> Vec<u8> {
         let mut hasher = Sha256::new();
         hasher.update(loc.file.as_bytes());
         hasher.update((loc.line as u64).to_le_bytes());
@@ -853,7 +854,7 @@ impl DwarfBuilder {
         hasher.finalize().to_vec()
     }
 
-    fn add_synthetic_line(&mut self, loc: &Srcloc, source_sexp: &SExp) -> u64 {
+    fn add_synthetic_line(&mut self, loc: &Srcloc, source_sexp: &impl fmt::Display) -> u64 {
         let synthetic_key = Self::synthetic_expr_key(loc, source_sexp);
         if let Some(line) = self.synthetic_expr_line_by_key.get(&synthetic_key) {
             return *line;
@@ -886,7 +887,7 @@ impl DwarfBuilder {
         &mut self,
         addr: usize,
         loc: &Srcloc,
-        source_sexp: &SExp,
+        source_sexp: &impl fmt::Display,
         instr: Instr,
         begin_end_block: Option<BeginEndBlock>,
     ) {
@@ -1056,69 +1057,61 @@ impl DwarfBuilder {
         locations: &[VariableLocationInfo],
         here: Number,
         path: Number,
-        args: Rc<SExp>,
+        args: impl DebugSExp,
     ) {
         eprintln!("add_arguments {here} {path} {args}");
-        if let SExp::Cons(_, a, b) = args.borrow() {
-            self.add_arguments(
-                subprogram_id,
-                locations,
-                here.clone() << 1,
-                path.clone(),
-                a.clone(),
-            );
-            self.add_arguments(
-                subprogram_id,
-                locations,
-                here.clone() << 1,
-                path | here,
-                b.clone(),
-            );
-        } else if let SExp::Atom(_, a) = args.borrow() {
-            let argname = decode_string(a);
-            let unit = self.dwarf.units.get_mut(self.unit_id);
+        match args.explode() {
+            DebugSExpValue::Cons(_, a, b) => {
+                self.add_arguments(subprogram_id, locations, here.clone() << 1, path.clone(), a);
+                self.add_arguments(subprogram_id, locations, here.clone() << 1, path | here, b);
+            }
+            DebugSExpValue::Atom(_, a) => {
+                let argname = decode_string(&a);
+                let unit = self.dwarf.units.get_mut(self.unit_id);
 
-            let mut loclist = Vec::new();
+                let mut loclist = Vec::new();
 
-            for l in locations.iter() {
-                let mut expr = (l.start_expr)();
+                for l in locations.iter() {
+                    let mut expr = (l.start_expr)();
 
-                let mut i = bi_one();
-                while i < here {
-                    if (path.clone() & i.clone()) != bi_zero() {
-                        expr.op_plus_uconst(4);
+                    let mut i = bi_one();
+                    while i < here {
+                        if (path.clone() & i.clone()) != bi_zero() {
+                            expr.op_plus_uconst(4);
+                        }
+                        expr.op_deref();
+                        i <<= 1;
                     }
-                    expr.op_deref();
-                    i <<= 1;
+
+                    loclist.push(Location::StartEnd {
+                        begin: Address::Constant(l.beginning),
+                        end: Address::Constant(l.end),
+                        data: expr,
+                    });
                 }
 
-                loclist.push(Location::StartEnd {
-                    begin: Address::Constant(l.beginning),
-                    end: Address::Constant(l.end),
-                    data: expr,
-                });
+                let loc_list_id = unit.locations.add(LocationList(loclist));
+
+                let at_id = unit.add(subprogram_id, DW_TAG_formal_parameter);
+                let at_ent = unit.get_mut(at_id);
+                at_ent.set(
+                    DW_AT_name,
+                    AttributeValue::String(argname.as_bytes().to_vec()),
+                );
+                at_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
+                at_ent.set(DW_AT_location, AttributeValue::LocationListRef(loc_list_id));
+
+                /*
+                let at_id2 = unit.add(subprogram_id, DW_TAG_variable);
+                let at_ent = unit.get_mut(at_id2);
+                at_ent.set(
+                    DW_AT_name,
+                    AttributeValue::String(argname.as_bytes().to_vec()),
+                );
+                at_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
+                */
             }
-
-            let loc_list_id = unit.locations.add(LocationList(loclist));
-
-            let at_id = unit.add(subprogram_id, DW_TAG_formal_parameter);
-            let at_ent = unit.get_mut(at_id);
-            at_ent.set(
-                DW_AT_name,
-                AttributeValue::String(argname.as_bytes().to_vec()),
-            );
-            at_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
-            at_ent.set(DW_AT_location, AttributeValue::LocationListRef(loc_list_id));
-
-            /*
-            let at_id2 = unit.add(subprogram_id, DW_TAG_variable);
-            let at_ent = unit.get_mut(at_id2);
-            at_ent.set(
-                DW_AT_name,
-                AttributeValue::String(argname.as_bytes().to_vec()),
-            );
-            at_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
-            */
+            _ => {}
         }
     }
 
@@ -1224,7 +1217,7 @@ impl DwarfBuilder {
             subprogram_ids
         };
         eprintln!("about to parse args");
-        let srcloc = Srcloc::start("*args*");
+        let srcloc = debug_start_loc("*args*");
         if let Ok(parsed) = parse_sexp(srcloc.clone(), args.bytes()) {
             let self_u32_type = self.u32_type;
             let early_reg_closure = move || {
@@ -1330,7 +1323,7 @@ impl Constant {
     }
 }
 
-pub struct Program {
+pub struct Program<T: DebugSExp = ConcreteSExp> {
     program: HashMap<String, Srcloc>,
     target_addr: u32,
     finished_insns: Vec<Instr>,
@@ -1339,7 +1332,7 @@ pub struct Program {
     encounters_of_code: HashMap<Vec<u8>, usize>,
     labels_by_hash: HashMap<Vec<u8>, String>,
     done_programs: HashSet<String>,
-    waiting_programs: Vec<(String, Rc<SExp>)>,
+    waiting_programs: Vec<(String, T)>,
     constants: HashMap<Vec<u8>, Constant>,
     symbol_table: Rc<HashMap<String, String>>,
     current_symbol: Option<String>,
@@ -1351,7 +1344,7 @@ pub struct Program {
     dwarf_builder: DwarfBuilder,
 }
 
-impl fmt::Display for Program {
+impl<T: DebugSExp> fmt::Display for Program<T> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let write_vec = |f: &mut Formatter, v: &[Instr]| -> fmt::Result {
             for i in v.iter() {
@@ -1368,78 +1361,11 @@ fn hexify(v: &[u8]) -> String {
     Bytes::new(Some(BytesFromType::Raw(v.to_vec()))).hex()
 }
 
-fn is_atom(a: Rc<SExp>) -> Option<(Srcloc, Vec<u8>)> {
-    match a.borrow() {
-        SExp::Cons(_, _, _) => None,
-        SExp::Nil(l) => Some((l.clone(), Vec::new())),
-        SExp::Atom(l, a) => Some((l.clone(), a.clone())),
-        SExp::QuotedString(l, _, a) => Some((l.clone(), a.clone())),
-        SExp::Integer(l, i) => {
-            let bytes = bigint_to_bytes_clvm(&i);
-            Some((l.clone(), bytes.data().clone()))
-        }
-    }
-}
-
-fn is_wrapped_atom(a: Rc<SExp>) -> Option<(Srcloc, Vec<u8>)> {
-    if let Ok(NodeSel::Cons((l, a), n)) = NodeSel::Cons(Atom::Here(()), ThisNode).select_nodes(a) {
-        if truthy(n) {
-            return None;
-        }
-
-        return Some((l.clone(), a));
-    }
-
-    None
-}
-
-fn dequote(a: Rc<SExp>) -> Option<Rc<SExp>> {
-    if let Ok(NodeSel::Cons(_q, v)) = NodeSel::Cons(Atom::Here("\x01"), ThisNode).select_nodes(a) {
-        return Some(v.clone());
-    }
-
-    None
-}
-
 pub fn swi_print(register: usize, label: usize) -> usize {
     SWI_PRINT_EXPR | register << 4 | label << 8
 }
 
-fn collect_by_hash(hash: &[u8], sexp: Rc<SExp>, matches: &mut Vec<Rc<SExp>>) -> Vec<u8> {
-    if let SExp::Cons(_, a, b) = &*sexp {
-        let hash_a = collect_by_hash(hash, a.clone(), matches);
-        let hash_b = collect_by_hash(hash, b.clone(), matches);
-        let mut hasher = Sha256::new();
-        hasher.update([2]);
-        hasher.update(&hash_a);
-        hasher.update(&hash_b);
-        let my_hash = hasher.finalize().to_vec();
-        if my_hash == hash {
-            matches.push(sexp);
-        }
-        my_hash
-    } else {
-        let the_hash = sha256tree(sexp.clone());
-        if the_hash == hash {
-            matches.push(sexp);
-        }
-        the_hash
-    }
-}
-
-fn find_all_by_hash(hash: &[u8], sexp: Rc<SExp>) -> Vec<Rc<SExp>> {
-    let mut matches = Vec::new();
-    collect_by_hash(hash, sexp, &mut matches);
-    matches
-}
-
-struct Function {
-    left_env: bool,
-    args: Rc<SExp>,
-    name: String,
-}
-
-impl Program {
+impl<T: DebugSExp> Program<T> {
     fn get_renamed_function_label(&self, hash: &[u8]) -> Option<String> {
         let hash_string = hex::encode(hash);
         self.renamed_symbols.get(&hash_string).cloned()
@@ -1467,23 +1393,23 @@ impl Program {
         return format!("_{}_{n}", hexify(hash));
     }
 
-    fn do_throw(&mut self, source_sexp: Rc<SExp>, loc: &Srcloc, hash: &[u8]) {
+    fn do_throw(&mut self, source_sexp: T, loc: &Srcloc, hash: &[u8]) {
         self.load_atom(source_sexp.clone(), loc, hash, hash);
         self.push(source_sexp.clone(), loc, Instr::Swi(SWI_PRINT_EXPR));
         self.push(source_sexp, loc, Instr::Swi(SWI_THROW));
     }
 
-    fn add_sexp(&mut self, loc: &Srcloc, hash: &[u8], s: Rc<SExp>) -> String {
+    fn add_sexp(&mut self, loc: &Srcloc, hash: &[u8], s: T) -> String {
         if let Some(lbl) = self.constants.get(hash) {
             return lbl.label();
         }
 
-        match s.borrow() {
-            SExp::Cons(_l, a, b) => {
+        match s.explode() {
+            DebugSExpValue::Cons(_l, a, b) => {
                 let a_hash = sha256tree(a.clone());
                 let b_hash = sha256tree(b.clone());
-                let a_label = self.add_sexp(loc, &a_hash, a.clone());
-                let b_label = self.add_sexp(loc, &b_hash, b.clone());
+                let a_label = self.add_sexp(loc, &a_hash, a);
+                let b_label = self.add_sexp(loc, &b_hash, b);
                 let label = format!("_{}", hexify(hash));
                 self.constants.insert(
                     hash.to_vec(),
@@ -1491,34 +1417,26 @@ impl Program {
                 );
                 label
             }
-            SExp::Nil(_) => self.add_atom(hash, &[]),
-            SExp::Atom(_, a) => self.add_atom(hash, &a),
-            SExp::QuotedString(_, _, a) => self.add_atom(hash, &a),
-            SExp::Integer(_, i) => {
-                let v = bigint_to_bytes_clvm(&i).data().clone();
-                self.add_atom(hash, &v)
-            }
+            _ => self.add_atom(
+                hash,
+                &s.atom_bytes()
+                    .expect("non-cons debug sexp should atomize")
+                    .1,
+            ),
         }
     }
 
-    fn load_sexp(&mut self, source_sexp: Rc<SExp>, loc: &Srcloc, hash: &[u8], s: Rc<SExp>) {
+    fn load_sexp(&mut self, source_sexp: T, loc: &Srcloc, hash: &[u8], s: T) {
         let label = self.add_sexp(loc, hash, s);
         self.push(source_sexp, loc, Instr::Lea(Register::R(0), label));
     }
 
-    fn first_rest(
-        &mut self,
-        source_sexp: Rc<SExp>,
-        loc: &Srcloc,
-        hash: &[u8],
-        lst: &[SExp],
-        offset: i32,
-    ) {
+    fn first_rest(&mut self, source_sexp: T, loc: &Srcloc, hash: &[u8], lst: &[T], offset: i32) {
         if lst.len() != 1 {
             return self.do_throw(source_sexp, loc, hash);
         }
 
-        let subexp = self.add(Rc::new(lst[0].clone()));
+        let subexp = self.add(lst[0].clone());
         for i in &[
             Instr::Addi(Register::R(0), Register::R(7), 0),
             // Determine if the result is a cons.
@@ -1540,9 +1458,9 @@ impl Program {
         loc: &Srcloc,
         hash: &[u8],
         a: &[u8],
-        b: Rc<SExp>,
+        b: T,
         treat_as_quoted: bool,
-        source_sexp: Rc<SExp>,
+        source_sexp: T,
     ) {
         if treat_as_quoted {
             todo!();
@@ -1573,7 +1491,7 @@ impl Program {
                 return self.do_throw(source_sexp, loc, hash);
             }
 
-            let env_comp = self.add(Rc::new(lst[1].clone()));
+            let env_comp = self.add(lst[1].clone());
             for i in &[
                 Instr::Addi(Register::R(0), Register::R(7), 0),
                 Instr::Bl(env_comp),
@@ -1582,7 +1500,7 @@ impl Program {
                 self.push(source_sexp.clone(), loc, i.clone());
             }
 
-            if let Some(quoted_code) = dequote(Rc::new(lst[0].clone())) {
+            if let Some(quoted_code) = dequote(lst[0].clone()) {
                 // Short circuit by reading out the quoted code and running it.
                 let code_comp = self.add(quoted_code.clone());
 
@@ -1594,7 +1512,7 @@ impl Program {
                     self.push(source_sexp.clone(), loc, i.clone());
                 }
             } else {
-                let code_comp = self.add(Rc::new(lst[0].clone()));
+                let code_comp = self.add(lst[0].clone());
 
                 for i in &[
                     Instr::Addi(Register::R(0), Register::R(7), 0),
@@ -1620,9 +1538,9 @@ impl Program {
                 return self.do_throw(source_sexp, loc, hash);
             }
 
-            let else_clause = self.add(Rc::new(lst[2].clone()));
-            let then_clause = self.add(Rc::new(lst[1].clone()));
-            let cond_clause = self.add(Rc::new(lst[0].clone()));
+            let else_clause = self.add(lst[2].clone());
+            let then_clause = self.add(lst[1].clone());
+            let cond_clause = self.add(lst[0].clone());
 
             for i in &[
                 Instr::Addi(Register::R(0), Register::R(7), 0),
@@ -1649,8 +1567,8 @@ impl Program {
                 return self.do_throw(source_sexp, loc, hash);
             }
 
-            let rest_label = self.add(Rc::new(lst[1].clone()));
-            let first_label = self.add(Rc::new(lst[0].clone()));
+            let rest_label = self.add(lst[1].clone());
+            let first_label = self.add(lst[0].clone());
 
             for i in &[
                 Instr::Addi(Register::R(0), Register::R(7), 0),
@@ -1678,7 +1596,7 @@ impl Program {
             return self.first_rest(source_sexp, loc, hash, &lst, 4);
         } else {
             // Ensure we have this sexp loadable as data.
-            let operator_sexp = Rc::new(SExp::Atom(loc.clone(), a.to_vec()));
+            let operator_sexp = T::atom(loc.clone(), a);
             let atom_hash = sha256tree(operator_sexp.clone());
             let label = self.add_atom(&atom_hash, a);
             eprintln!("load {label} for general operator {operator_sexp}\n");
@@ -1691,7 +1609,7 @@ impl Program {
             // For each subexpression, call it and replace R4 with (cons R0 R4)
             for item in lst.iter().rev() {
                 eprintln!("load clause {item} for operator {operator_sexp}");
-                let clause_label = self.add(Rc::new(item.clone()));
+                let clause_label = self.add(item.clone());
                 for i in &[
                     // Load the allocator ptr into R0.
                     Instr::Ldr(Register::R(0), Register::R(5), NEXT_ALLOC_OFFSET),
@@ -1730,7 +1648,7 @@ impl Program {
     }
 
     // R0 = the address of the env block.
-    fn env_select(&mut self, source_sexp: Rc<SExp>, loc: &Srcloc, hash: &[u8], v: &[u8]) {
+    fn env_select(&mut self, source_sexp: T, loc: &Srcloc, hash: &[u8], v: &[u8]) {
         if v.is_empty() {
             self.load_atom(source_sexp, loc, hash, v);
             return;
@@ -1787,12 +1705,12 @@ impl Program {
         label
     }
 
-    fn load_atom(&mut self, source_sexp: Rc<SExp>, loc: &Srcloc, hash: &[u8], v: &[u8]) {
+    fn load_atom(&mut self, source_sexp: T, loc: &Srcloc, hash: &[u8], v: &[u8]) {
         let label = self.add_atom(hash, v);
         self.push(source_sexp, loc, Instr::Lea(Register::R(0), label));
     }
 
-    fn add(&mut self, sexp: Rc<SExp>) -> String {
+    fn add(&mut self, sexp: T) -> String {
         let hash = sha256tree(sexp.clone());
         if let Some(existing_label) = self.labels_by_hash.get(&hash) {
             return existing_label.clone();
@@ -1814,7 +1732,7 @@ impl Program {
 
     fn push_be(
         &mut self,
-        source_sexp: Rc<SExp>,
+        source_sexp: T,
         srcloc: &Srcloc,
         instr: Instr,
         begin_end_block: Option<BeginEndBlock>,
@@ -1871,7 +1789,7 @@ impl Program {
             self.dwarf_builder.add_instr(
                 self.current_addr,
                 srcloc,
-                source_sexp.as_ref(),
+                &source_sexp,
                 insert_instr,
                 begin_end_block,
             );
@@ -1879,7 +1797,7 @@ impl Program {
         }
     }
 
-    fn push(&mut self, source_sexp: Rc<SExp>, srcloc: &Srcloc, instr: Instr) {
+    fn push(&mut self, source_sexp: T, srcloc: &Srcloc, instr: Instr) {
         self.push_be(source_sexp, srcloc, instr, None);
     }
 
@@ -1912,8 +1830,8 @@ impl Program {
             }
 
             // Translate body.
-            match sexp.borrow() {
-                SExp::Cons(l, a, b) => {
+            match sexp.explode() {
+                DebugSExpValue::Cons(l, a, b) => {
                     if let Some((loc, a)) = is_atom(a.clone()) {
                         // do quoted operator
                         self.do_operator(&loc, &hash, &a, b.clone(), false, sexp.clone());
@@ -1925,26 +1843,27 @@ impl Program {
                         self.do_throw(sexp.clone(), &l, &hash);
                     }
                 }
-                SExp::Nil(l) => self.load_atom(sexp.clone(), l, &hash, &[]),
-                SExp::Atom(l, v) => {
+                DebugSExpValue::Nil(l) => self.load_atom(sexp.clone(), &l, &hash, &[]),
+                DebugSExpValue::Atom(l, v) => {
                     if v.is_empty() {
-                        return self.load_atom(sexp.clone(), l, &hash, &[]);
+                        return self.load_atom(sexp.clone(), &l, &hash, &[]);
                     }
-                    self.env_select(sexp.clone(), l, &hash, v);
+                    self.env_select(sexp.clone(), &l, &hash, &v);
                 }
-                SExp::QuotedString(l, _, v) => {
+                DebugSExpValue::QuotedString(l, _, v) => {
                     if v.is_empty() {
-                        return self.load_atom(sexp.clone(), l, &hash, &[]);
+                        return self.load_atom(sexp.clone(), &l, &hash, &[]);
                     }
-                    self.env_select(sexp.clone(), l, &hash, v);
+                    self.env_select(sexp.clone(), &l, &hash, &v);
                 }
-                SExp::Integer(l, i) => {
-                    let v = bigint_to_bytes_clvm(&i);
-                    let v_ref = v.data();
-                    if v_ref.is_empty() {
-                        return self.load_atom(sexp.clone(), l, &hash, &[]);
+                DebugSExpValue::Integer(_, _) => {
+                    let (l, v) = sexp
+                        .atom_bytes()
+                        .expect("non-cons debug sexp should atomize");
+                    if v.is_empty() {
+                        return self.load_atom(sexp.clone(), &l, &hash, &[]);
                     }
-                    self.env_select(sexp.clone(), l, &hash, v_ref);
+                    self.env_select(sexp.clone(), &l, &hash, &v);
                 }
             }
 
@@ -1970,8 +1889,8 @@ impl Program {
     }
 
     fn start_insns(&mut self) {
-        let srcloc = Srcloc::start("*prolog*");
-        let source_sexp = Rc::new(SExp::Atom(srcloc.clone(), b"prolog".to_vec()));
+        let srcloc = debug_start_loc("*prolog*");
+        let source_sexp = T::atom(srcloc.clone(), b"prolog");
         for i in &[
             Instr::Section(".text".to_string()),
             Instr::Align4,
@@ -1990,8 +1909,8 @@ impl Program {
     }
 
     fn finish_insns(&mut self) -> Result<(), String> {
-        let srcloc = Srcloc::start("*epilog*");
-        let source_sexp = Rc::new(SExp::Atom(srcloc.clone(), b"epilog".to_vec()));
+        let srcloc = debug_start_loc("*epilog*");
+        let source_sexp = T::atom(srcloc.clone(), b"epilog");
         let mut constants = HashMap::new();
         swap(&mut constants, &mut self.constants);
 
@@ -2244,8 +2163,8 @@ impl Program {
         program: HashMap<String, Srcloc>,
         filename: &str,
         elf_output: &str,
-        sexp: Rc<SExp>,
-        env: Rc<SExp>,
+        sexp: T,
+        env: T,
         target_addr: u32,
         symbol_table: Rc<HashMap<String, String>>,
     ) -> Result<Self, String> {
@@ -2280,7 +2199,7 @@ impl Program {
 
         let dwarf_builder =
             DwarfBuilder::new(filename, elf_output, target_addr, symbol_table.clone());
-        let mut p: Program = Program {
+        let mut p: Program<T> = Program {
             program,
             finished_insns: Vec::new(),
             first_label: Default::default(),
@@ -2302,7 +2221,7 @@ impl Program {
         };
 
         p.symbol_table = symbol_table;
-        let loc = Srcloc::start("*env*");
+        let loc = debug_start_loc("*env*");
         let envhash = sha256tree(env.clone());
         for (remap_hash, name, remap_sexp) in remap_hashes.into_iter() {
             let remap_hash_hex = hex::encode(&remap_hash);

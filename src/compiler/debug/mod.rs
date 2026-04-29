@@ -1,11 +1,17 @@
 use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::rc::Rc;
 
 use crate::classic::clvm::__type_compatibility__::{sha256, Bytes, BytesFromType};
 
-use crate::compiler::sexp::SExp;
-use crate::util::u8_from_number;
+use crate::classic::clvm::casts::bigint_to_bytes_clvm;
+
+use crate::compiler::sexp::{decode_string, parse_sexp, SExp};
+pub use crate::compiler::srcloc::Srcloc;
+use crate::util::{u8_from_number, Number};
+
+use sha2::{Digest, Sha256};
 
 pub mod armjit;
 
@@ -171,4 +177,255 @@ pub fn relabel(code_map: &HashMap<String, SExp>, code: &SExp) -> SExp {
         swap_table.insert(ent.1.clone(), ent.0.clone());
     }
     relabel_inner_(code_map, &swap_table, code)
+}
+
+// Traits for varying the type of CLVM expressions.
+#[derive(Clone, Debug)]
+pub enum DebugSExpValue<T> {
+    Nil(Srcloc),
+    Cons(Srcloc, T, T),
+    Integer(Srcloc, Number),
+    QuotedString(Srcloc, u8, Vec<u8>),
+    Atom(Srcloc, Vec<u8>),
+}
+
+pub trait DebugSExp: Clone + Display {
+    fn atom(loc: Srcloc, bytes: &[u8]) -> Self;
+    fn loc(&self) -> Srcloc;
+    fn atomize(&self) -> Self;
+    fn to_number(&self) -> Option<Number>;
+    fn proper_list(&self) -> Option<Vec<Self>>;
+    fn explode(&self) -> DebugSExpValue<Self>;
+
+    fn nilp(&self) -> bool {
+        matches!(self.atom_bytes(), Some((_, bytes)) if bytes.is_empty())
+    }
+
+    fn atom_bytes(&self) -> Option<(Srcloc, Vec<u8>)> {
+        match self.explode() {
+            DebugSExpValue::Cons(_, _, _) => None,
+            DebugSExpValue::Nil(loc) => Some((loc, Vec::new())),
+            DebugSExpValue::Atom(loc, bytes) => Some((loc, bytes)),
+            DebugSExpValue::QuotedString(loc, _, bytes) => Some((loc, bytes)),
+            DebugSExpValue::Integer(loc, number) => {
+                Some((loc, bigint_to_bytes_clvm(&number).data().clone()))
+            }
+        }
+    }
+}
+
+impl DebugSExp for Rc<SExp> {
+    fn atom(loc: Srcloc, bytes: &[u8]) -> Self {
+        Rc::new(SExp::Atom(loc, bytes.to_vec()))
+    }
+
+    fn loc(&self) -> Srcloc {
+        self.as_ref().loc()
+    }
+
+    fn atomize(&self) -> Self {
+        Rc::new(self.as_ref().atomize())
+    }
+
+    fn to_number(&self) -> Option<Number> {
+        self.as_ref().get_number().ok()
+    }
+
+    fn proper_list(&self) -> Option<Vec<Self>> {
+        let mut res = Vec::new();
+        let mut track = self.clone();
+
+        loop {
+            if track.nilp() {
+                return Some(res);
+            }
+
+            match track.explode() {
+                DebugSExpValue::Cons(_, left, right) => {
+                    res.push(left);
+                    track = right;
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    fn explode(&self) -> DebugSExpValue<Self> {
+        match self.as_ref() {
+            SExp::Nil(loc) => DebugSExpValue::Nil(loc.clone()),
+            SExp::Cons(loc, left, right) => {
+                DebugSExpValue::Cons(loc.clone(), left.clone(), right.clone())
+            }
+            SExp::Integer(loc, number) => DebugSExpValue::Integer(loc.clone(), number.clone()),
+            SExp::QuotedString(loc, quote, bytes) => {
+                DebugSExpValue::QuotedString(loc.clone(), *quote, bytes.clone())
+            }
+            SExp::Atom(loc, bytes) => DebugSExpValue::Atom(loc.clone(), bytes.clone()),
+        }
+    }
+}
+
+pub type ConcreteSExp = Rc<SExp>;
+
+pub fn debug_decode_string(v: &[u8]) -> String {
+    decode_string(v)
+}
+
+pub fn debug_parse_sexp<I>(start: Srcloc, input: I) -> Result<Vec<Rc<SExp>>, (Srcloc, String)>
+where
+    I: Iterator<Item = u8>,
+{
+    parse_sexp(start, input)
+}
+
+pub fn debug_start_loc(file: &str) -> Srcloc {
+    Srcloc::start(file)
+}
+
+pub fn debug_atom(loc: Srcloc, bytes: &[u8]) -> Rc<SExp> {
+    <Rc<SExp> as DebugSExp>::atom(loc, bytes)
+}
+
+pub fn debug_sha256tree<T: DebugSExp>(sexp: T) -> Vec<u8> {
+    match sexp.explode() {
+        DebugSExpValue::Cons(_, left, right) => {
+            let hash_left = debug_sha256tree(left);
+            let hash_right = debug_sha256tree(right);
+            let mut hasher = Sha256::new();
+            hasher.update([2]);
+            hasher.update(hash_left);
+            hasher.update(hash_right);
+            hasher.finalize().to_vec()
+        }
+        _ => {
+            let (_, bytes) = sexp
+                .atom_bytes()
+                .expect("non-cons debug sexp should atomize");
+            let mut hasher = Sha256::new();
+            hasher.update([1]);
+            hasher.update(bytes);
+            hasher.finalize().to_vec()
+        }
+    }
+}
+
+pub fn debug_truthy<T: DebugSExp>(sexp: T) -> bool {
+    !sexp.nilp()
+}
+
+pub fn debug_is_atom<T: DebugSExp>(sexp: T) -> Option<(Srcloc, Vec<u8>)> {
+    sexp.atom_bytes()
+}
+
+pub fn debug_is_wrapped_atom<T: DebugSExp>(sexp: T) -> Option<(Srcloc, Vec<u8>)> {
+    match sexp.explode() {
+        DebugSExpValue::Cons(_, left, right) => {
+            let (loc, atom) = match left.explode() {
+                DebugSExpValue::Atom(loc, atom) => (loc, atom),
+                _ => return None,
+            };
+            if debug_truthy(right) {
+                None
+            } else {
+                Some((loc, atom))
+            }
+        }
+        _ => None,
+    }
+}
+
+pub fn debug_dequote<T: DebugSExp>(sexp: T) -> Option<T> {
+    match sexp.explode() {
+        DebugSExpValue::Cons(_, left, right) => match left.explode() {
+            DebugSExpValue::Atom(_, atom) if atom == b"\x01" => Some(right),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn debug_collect_by_hash<T: DebugSExp>(hash: &[u8], sexp: T, matches: &mut Vec<T>) -> Vec<u8> {
+    if let DebugSExpValue::Cons(_, left, right) = sexp.explode() {
+        let hash_left = debug_collect_by_hash(hash, left, matches);
+        let hash_right = debug_collect_by_hash(hash, right, matches);
+        let mut hasher = Sha256::new();
+        hasher.update([2]);
+        hasher.update(hash_left);
+        hasher.update(hash_right);
+        let my_hash = hasher.finalize().to_vec();
+        if my_hash == hash {
+            matches.push(sexp);
+        }
+        my_hash
+    } else {
+        let the_hash = debug_sha256tree(sexp.clone());
+        if the_hash == hash {
+            matches.push(sexp);
+        }
+        the_hash
+    }
+}
+
+pub fn debug_find_all_by_hash<T: DebugSExp>(hash: &[u8], sexp: T) -> Vec<T> {
+    let mut matches = Vec::new();
+    debug_collect_by_hash(hash, sexp, &mut matches);
+    matches
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        debug_dequote, debug_find_all_by_hash, debug_is_wrapped_atom, debug_sha256tree, DebugSExp,
+    };
+    use crate::compiler::sexp::{enlist, SExp};
+    use crate::compiler::srcloc::Srcloc;
+    use std::rc::Rc;
+
+    fn atom(bytes: &[u8]) -> Rc<SExp> {
+        Rc::new(SExp::Atom(Srcloc::start("*test*"), bytes.to_vec()))
+    }
+
+    #[test]
+    fn debug_sexp_proper_list_returns_original_nodes() {
+        let first = atom(b"a");
+        let second = atom(b"b");
+        let list = Rc::new(enlist(
+            Srcloc::start("*test*"),
+            &[first.clone(), second.clone()],
+        ));
+
+        let proper = DebugSExp::proper_list(&list).expect("proper list");
+
+        assert_eq!(proper, vec![first, second]);
+    }
+
+    #[test]
+    fn debug_sexp_helpers_match_expected_clvm_shapes() {
+        let quoted = Rc::new(SExp::Cons(
+            Srcloc::start("*test*"),
+            atom(&[1]),
+            atom(b"value"),
+        ));
+        assert_eq!(debug_dequote(quoted.clone()), Some(atom(b"value")));
+
+        let wrapped_atom = Rc::new(SExp::Cons(Srcloc::start("*test*"), atom(b"op"), atom(&[])));
+        assert_eq!(
+            debug_is_wrapped_atom(wrapped_atom),
+            Some((Srcloc::start("*test*"), b"op".to_vec()))
+        );
+    }
+
+    #[test]
+    fn debug_treehash_search_finds_matching_subtrees() {
+        let needle = atom(b"needle");
+        let haystack = Rc::new(enlist(
+            Srcloc::start("*test*"),
+            &[atom(b"left"), needle.clone()],
+        ));
+        let hash = debug_sha256tree(needle.clone());
+
+        let matches = debug_find_all_by_hash(&hash, haystack);
+
+        assert_eq!(matches, vec![needle]);
+    }
 }
