@@ -43,6 +43,8 @@ pub mod comptypes;
 pub mod debug;
 /// Utilities for chialisp dialect choice
 pub mod dialect;
+/// An on-disk cache for compiled modules
+pub mod diskcache;
 /// Evaluate and partially evaluate chialisp expressions
 pub mod evaluate;
 /// Turn chialisp programs expressed as parsed clvm into data structures describing a chialisp program.
@@ -94,6 +96,17 @@ use crate::compiler::comptypes::{
 use crate::compiler::optimize::Optimization;
 use crate::compiler::sexp::SExp;
 
+#[derive(Clone)]
+pub struct FunctionEntry {
+    pub name: Vec<u8>,
+    pub code: Rc<SExp>,
+}
+
+#[derive(Default)]
+pub struct Funcache {
+    pub function_outputs: HashMap<Vec<u8>, FunctionEntry>,
+}
+
 /// An object which represents the standard set of mutable items passed down the
 /// stack when compiling chialisp.
 pub struct BasicCompileContext {
@@ -101,6 +114,12 @@ pub struct BasicCompileContext {
     pub runner: Rc<dyn TRunProgram>,
     pub symbols: HashMap<String, String>,
     pub optimizer: Box<dyn Optimization>,
+    /// Given the operative environment and a serialization of the helper, this is the generated
+    /// code from that helper.
+    ///
+    /// Since this is for speeding up optimization-time work, generation of the dependency graph
+    /// must follow desugaring.
+    pub funcache: Option<Funcache>,
 }
 
 impl BasicCompileContext {
@@ -248,6 +267,7 @@ impl BasicCompileContext {
             runner,
             symbols,
             optimizer,
+            funcache: None,
         }
     }
 }

@@ -57,7 +57,7 @@ pub fn deinline_opt(
     let depgraph = FunctionDependencyGraph::new(&compileform);
 
     let mut best_compileform = compileform.clone();
-    let generated_program = codegen(context, opts.clone(), &best_compileform)?;
+    let generated_program = codegen(context, opts.clone(), Some(&depgraph), &best_compileform)?;
     let mut metric = sexp_scale(&generated_program);
     let flip_helper = |h: &mut HelperForm| {
         if let HelperForm::Defun(inline, defun) = h {
@@ -231,7 +231,8 @@ pub fn deinline_opt(
                     continue;
                 }
 
-                let maybe_smaller_program = codegen(context, opts.clone(), &compileform)?;
+                let maybe_smaller_program =
+                    codegen(context, opts.clone(), Some(&depgraph), &compileform)?;
                 let new_metric = sexp_scale(&maybe_smaller_program);
 
                 // Don't keep this change if it made things worse.

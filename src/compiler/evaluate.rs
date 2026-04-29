@@ -1497,7 +1497,12 @@ impl<'info> Evaluator {
                     &mut symbols,
                     optimizer,
                 );
-                let code = codegen(&mut context_wrapper.context, self.opts.clone(), program)?;
+                let code = codegen(
+                    &mut context_wrapper.context,
+                    self.opts.clone(),
+                    None,
+                    program,
+                )?;
                 Ok(Rc::new(BodyForm::Quoted(code)))
             }
             BodyForm::Lambda(ldata) => self.enrich_lambda_site_info(

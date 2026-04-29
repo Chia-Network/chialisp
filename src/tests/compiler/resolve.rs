@@ -41,13 +41,13 @@ fn compile_program_get_result(
     let loc = Srcloc::start("*resolve-test*");
     let resolved = do_program_module_resolution(opts.clone(), loc.clone(), test_program)?;
     let desugared = do_desugar(&resolved)?;
-    let mut context = BasicCompileContext {
-        allocator: Allocator::new(),
-        runner: Rc::new(DefaultProgramRunner::new()),
-        symbols: HashMap::new(),
-        optimizer: get_optimizer(&loc, opts.clone())?,
-    };
-    let generated = codegen(&mut context, opts.clone(), &desugared)?;
+    let mut context = BasicCompileContext::new(
+        Allocator::new(),
+        Rc::new(DefaultProgramRunner::new()),
+        HashMap::new(),
+        get_optimizer(&loc, opts.clone())?,
+    );
+    let generated = codegen(&mut context, opts.clone(), None, &desugared)?;
     run(
         &mut context.allocator,
         context.runner.clone(),

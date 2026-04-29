@@ -1,3 +1,12 @@
+"""Coverage driver for CI and local runs.
+
+For ad-hoc reports on a subset of tests (e.g. module disk cache / funcache), you can run:
+
+  LLVM_PROFILE_FILE='chialisp-%p-%m.profraw' RUSTFLAGS='-Cinstrument-coverage' \\
+    cargo test --lib try_from_cache cache_key_stable funcache_without_dependency test_codegen_function_cache
+
+Then run grcov on the resulting ``*.profraw`` files (see the ``collect_coverage`` invocation below).
+"""
 import os
 import json
 import shutil

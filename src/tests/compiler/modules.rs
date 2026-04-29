@@ -48,6 +48,18 @@ impl TestModuleCompilerOpts {
         let files: &HashMap<String, Vec<u8>> = &files_ref.borrow();
         files.get(name).map(|f| f.to_vec())
     }
+
+    pub fn list_written_files<'a>(&'a self) -> Vec<String> {
+        let files_ref: &RefCell<HashMap<String, Vec<u8>>> = self.written_files.borrow();
+        let files: &HashMap<String, Vec<u8>> = &files_ref.borrow();
+        files.keys().cloned().collect()
+    }
+
+    pub fn set_file_content<'a>(&'a self, name: String, content: Vec<u8>) {
+        let wf_refcell: &RefCell<HashMap<String, Vec<u8>>> = self.written_files.borrow();
+        let wf_ref: &mut HashMap<String, Vec<u8>> = &mut wf_refcell.borrow_mut();
+        wf_ref.insert(name, content);
+    }
 }
 
 impl HasCompilerOptsDelegation for TestModuleCompilerOpts {
@@ -64,6 +76,19 @@ impl HasCompilerOptsDelegation for TestModuleCompilerOpts {
             written_files: self.written_files.clone(),
             opts: new_opts,
         })
+    }
+
+    fn override_read_new_file(
+        &self,
+        inc_from: String,
+        filename: String,
+    ) -> Result<(String, Vec<u8>), CompileErr> {
+        let rfcell: &RefCell<HashMap<String, Vec<u8>>> = self.written_files.borrow();
+        let rf: &HashMap<String, Vec<u8>> = &rfcell.borrow();
+        if let Some(content) = rf.get(&filename) {
+            return Ok((filename, content.clone()));
+        }
+        self.opts.read_new_file(inc_from, filename)
     }
 
     fn override_write_new_file(&self, target: &str, content: &[u8]) -> Result<(), CompileErr> {
@@ -87,6 +112,7 @@ pub struct PerformCompileResult {
 pub fn perform_compile_of_file(
     allocator: &mut Allocator,
     runner: Rc<dyn TRunProgram>,
+    source_opts: TestModuleCompilerOpts,
     filename: &str,
     content: &str,
 ) -> Result<PerformCompileResult, CompileErr> {
@@ -95,11 +121,7 @@ pub fn perform_compile_of_file(
     let listed = Rc::new(enlist(loc.clone(), &parsed));
     let nodeptr = convert_to_clvm_rs(allocator, listed.clone()).expect("should convert");
     let dialect = detect_modern(allocator, nodeptr);
-    let orig_opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename))
-        .set_dialect(dialect)
-        .set_search_paths(&["resources/tests/module".to_string()]);
-    let source_opts = TestModuleCompilerOpts::new(orig_opts);
-    let opts: Rc<dyn CompilerOpts> = Rc::new(source_opts.clone());
+    let opts: Rc<dyn CompilerOpts> = Rc::new(source_opts.clone()).set_dialect(dialect);
     let mut symbol_table = HashMap::new();
     let compiled = compile_file(allocator, runner.clone(), opts, &content, &mut symbol_table)?;
     Ok(PerformCompileResult {
@@ -124,18 +146,25 @@ pub fn hex_to_clvm(allocator: &mut Allocator, hex_data: &[u8]) -> clvmr::allocat
     .1
 }
 
-fn test_compile_and_run_program_with_modules(
+fn test_compile_and_run_program_with_modules_and_fs(
+    source_opts: TestModuleCompilerOpts,
     filename: &str,
     content: &str,
     runs: &[HexArgumentOutcome],
-) {
+) -> Option<TestModuleCompilerOpts> {
     let mut allocator = Allocator::new();
     let runner = Rc::new(DefaultProgramRunner::new());
-    let compile_result = perform_compile_of_file(&mut allocator, runner.clone(), filename, content);
+    let compile_result = perform_compile_of_file(
+        &mut allocator,
+        runner.clone(),
+        source_opts,
+        filename,
+        content,
+    );
 
     let compile_result = if runs.is_empty() {
         assert!(compile_result.is_err());
-        return;
+        return None;
     } else {
         compile_result.expect("Was expected to compile")
     };
@@ -165,6 +194,19 @@ fn test_compile_and_run_program_with_modules(
             assert!(run_result.is_err());
         }
     }
+
+    Some(compile_result.source_opts)
+}
+
+fn test_compile_and_run_program_with_modules(
+    filename: &str,
+    content: &str,
+    runs: &[HexArgumentOutcome],
+) -> Option<TestModuleCompilerOpts> {
+    let orig_opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename))
+        .set_search_paths(&["resources/tests/module".to_string()]);
+    let source_opts = TestModuleCompilerOpts::new(orig_opts);
+    test_compile_and_run_program_with_modules_and_fs(source_opts, filename, content, runs)
 }
 
 #[test]
@@ -516,32 +558,6 @@ fn test_program_exporting_constant_from_program() {
     );
 }
 
-/*
-#[test]
-fn test_program_export_constant_and_function() {
-    let filename = "resources/tests/module/test-export-constant-and-function.clsp";
-    let content = fs::read_to_string(filename).expect("file should exist");
-    let d_hex_filename = "resources/tests/module/test-export-constant-and-function_D.hex";
-    let f_hex_filename = "resources/tests/module/test-export-constant-and-function_F.hex";
-    test_compile_and_run_program_with_modules(
-        filename,
-        &content,
-        &[
-            HexArgumentOutcome {
-                hexfile: d_hex_filename,
-                argument: "(19191 (a (q 16 (q . 19191) 5) (c (q (+ (q . 19191) 5)) 1)) 0x3e6c399d8b10babad835468467a4b837036357ddfb8c320ba39a914c63152967 0xda99392a41a05d70cc42102af36ba888e964e57b587016e14e5e3faf66807dff)",
-                outcome: ContentEquals,
-            },
-            HexArgumentOutcome {
-                hexfile: f_hex_filename,
-                argument: "(a (q 16 (q . 19191) 5) (c (q (+ (q . 19191) 5)) 1))",
-                outcome: ContentEquals,
-            },
-        ]
-    );
-}
-*/
-
 #[test]
 fn test_detect_illegal_constant_arrangement() {
     let filename = "resources/tests/module/illegal-constant-arrangement-1.clsp";
@@ -577,6 +593,54 @@ fn test_constant_single_round() {
             hexfile: hex_file,
             argument: "31",
             outcome: ContentEquals,
+        }],
+    );
+}
+
+#[test]
+fn test_cache_reuses_cache_data() {
+    let filename = "resources/tests/module/p1s_host.clsp";
+    let content = fs::read_to_string(filename).expect("file should exist");
+    let hex_file = "resources/tests/module/p1s_host.hex";
+    let orig_opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename))
+        .set_search_paths(&["resources/tests/module".to_string()]);
+    let source_opts = TestModuleCompilerOpts::new(orig_opts);
+    let source_opts = test_compile_and_run_program_with_modules_and_fs(
+        source_opts,
+        filename,
+        &content,
+        &[HexArgumentOutcome {
+            hexfile: hex_file,
+            argument: "(3)",
+            outcome: Run("20400"),
+        }],
+    )
+    .unwrap();
+    let new_content = indoc! {"
+(include *standard-cl-23*)
+
+(import programs.p1s exposing (program as P1S))
+(import programs.p1t exposing (program as P1T))
+
+(export (X) (+ (a P1S (list X)) (a P1T (list X))))
+"};
+
+    let file_list = source_opts.list_written_files();
+    for f in file_list.iter().filter(|f| f.ends_with("p1t.hex")) {
+        // We've set p1t to () and changed the main program so it will also recompile.  If the cache
+        // is used to retrieve p1t.clsp (since the source file is the same as during the previous
+        // compilation), then (a P1T (list X)) will yield 0.
+        source_opts.set_file_content(f.clone(), b"80".to_vec());
+    }
+
+    test_compile_and_run_program_with_modules_and_fs(
+        source_opts,
+        filename,
+        new_content,
+        &[HexArgumentOutcome {
+            hexfile: hex_file,
+            argument: "(3)",
+            outcome: Run("10200"),
         }],
     );
 }

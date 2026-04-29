@@ -2,7 +2,8 @@ use num_bigint::ToBigInt;
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::UNIX_EPOCH;
 
@@ -14,20 +15,22 @@ use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 
 use crate::classic::clvm::__type_compatibility__::Stream;
 use crate::classic::clvm::sexp::sexp_as_bin;
+use crate::compiler::cldb::hex_to_modern_sexp;
 use crate::compiler::clvm::{convert_to_clvm_rs, run, sha256tree, NewStyleIntConversion};
 use crate::compiler::codegen::{codegen, hoist_body_let_binding, process_helper_let_bindings};
 use crate::compiler::comptypes::{
     BodyForm, CompileErr, CompileForm, CompileModuleComponent, CompileModuleOutput, CompilerOpts,
-    CompilerOutput, DefunData, Export, FrontendOutput, HelperForm, ImportLongName, PrimaryCodegen,
-    SyntheticType,
+    CompilerOutput, DefunData, Export, FrontendOutput, HelperForm, ImportLongName, IncludeDesc,
+    IncludeProcessType, PrimaryCodegen, SyntheticType,
 };
 use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
+use crate::compiler::diskcache::{set_cache_element, try_element_from_cache};
 use crate::compiler::frontend::frontend;
 use crate::compiler::optimize::depgraph::{DepgraphOptions, FunctionDependencyGraph};
 use crate::compiler::optimize::get_optimizer;
 use crate::compiler::prims;
 use crate::compiler::resolve::{find_helper_target, resolve_namespaces};
-use crate::compiler::sexp::{decode_string, parse_sexp_flags, SExp};
+use crate::compiler::sexp::{decode_string, enlist, parse_sexp_flags, SExp};
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::{BasicCompileContext, CompileContextWrapper};
 use crate::util::Number;
@@ -147,7 +150,7 @@ pub fn finish_compilation(
     let p3 = context.post_desugar_optimization(opts.clone(), p2)?;
 
     // generate code from AST, optionally with optimization
-    let generated = codegen(context, opts.clone(), &p3)?;
+    let generated = codegen(context, opts.clone(), None, &p3)?;
 
     let g2 = context.post_codegen_output_optimize(opts, generated)?;
 
@@ -197,6 +200,24 @@ pub fn find_exported_helper(
         find_helper_target(opts.clone(), &program.helpers, None, fun_name, &parsed_name)?
             .map(|(_, result)| result.clone()),
     )
+}
+
+fn get_hex_name_of_export(
+    opts: Rc<dyn CompilerOpts>,
+    loc: &Srcloc,
+    export: &Export,
+) -> Result<String, CompileErr> {
+    match export {
+        Export::MainProgram(_) => {
+            let mut output_path = PathBuf::from(&opts.filename());
+            output_path.set_extension("hex");
+            Ok(output_path.into_os_string().to_string_lossy().to_string())
+        }
+        Export::Function(desc) => {
+            let use_name = decode_string(&desc.as_name.as_ref().unwrap_or(&desc.name).value);
+            create_hex_output_path(loc.clone(), &opts.filename(), &use_name)
+        }
+    }
 }
 
 fn form_module_program_common_body(
@@ -354,15 +375,25 @@ pub fn compile_module(
             let output_path_str = output_path.into_os_string().to_string_lossy().to_string();
             let mut stream = Stream::new(None);
             stream.write(sexp_as_bin(context.allocator(), converted));
-            opts.write_new_file(&output_path_str, stream.get_value().hex().as_bytes())?;
+            let hex_data = stream.get_value().hex();
+            set_cache_element(opts.clone(), &program, &output_path_str, &hex_data);
+            opts.write_new_file(&output_path_str, hex_data.as_bytes())?;
+
+            let (hash, summary) = compute_export_summary(
+                loc.clone(),
+                Rc::new(SExp::Nil(loc.clone())),
+                b"program",
+                output.clone(),
+            );
+
             return Ok(CompileModuleOutput {
-                summary: Rc::new(SExp::Nil(loc.clone())),
+                summary,
                 includes: program.include_forms.clone(),
                 components: vec![CompileModuleComponent {
                     shortname: b"program".to_vec(),
                     filename: output_path_str,
                     content: output.clone(),
-                    hash: sha256tree(output),
+                    hash,
                 }],
             });
         }
@@ -502,7 +533,9 @@ pub fn compile_module(
         let mut stream = Stream::new(None);
         let converted_func = convert_to_clvm_rs(context.allocator(), m.content.clone())?;
         stream.write(sexp_as_bin(context.allocator(), converted_func));
-        opts.write_new_file(&output_path, stream.get_value().hex().as_bytes())?;
+        let hex_data = stream.get_value().hex();
+        set_cache_element(opts.clone(), &program, &output_path, &hex_data);
+        opts.write_new_file(&output_path, hex_data.as_bytes())?;
 
         components.push(m);
     }
@@ -512,6 +545,111 @@ pub fn compile_module(
         includes: program.include_forms.clone(),
         components,
     })
+}
+
+fn compute_export_summary(
+    loc: Srcloc,
+    list_tail: Rc<SExp>,
+    shortname: &[u8],
+    program_code: Rc<SExp>,
+) -> (Vec<u8>, Rc<SExp>) {
+    let hash = sha256tree(program_code);
+    (
+        hash.clone(),
+        Rc::new(SExp::Cons(
+            loc.clone(),
+            Rc::new(SExp::Cons(
+                loc.clone(),
+                Rc::new(SExp::Atom(loc.clone(), shortname.to_vec())),
+                Rc::new(SExp::QuotedString(loc, b'x', hash)),
+            )),
+            list_tail,
+        )),
+    )
+}
+
+pub fn try_from_cache(
+    opts: Rc<dyn CompilerOpts>,
+    cf: &CompileForm,
+    exports: &[Export],
+) -> Result<Option<CompilerOutput>, CompileErr> {
+    let mut allocator = Allocator::new();
+    let mut components = Vec::new();
+    let mut summary = Rc::new(SExp::Nil(cf.loc.clone()));
+    let mut data_to_write = Vec::new();
+
+    for e in exports.iter() {
+        let hex_file_name = get_hex_name_of_export(opts.clone(), &cf.loc(), e)?;
+        let hex_data = if let Some(hd) = try_element_from_cache(opts.clone(), cf, &hex_file_name) {
+            hd
+        } else {
+            return Ok(None);
+        };
+
+        let loaded_hex_data =
+            // Don't fail on failure to load cache.  We can compile and regenerate.
+            if let Ok(lh) = hex_to_modern_sexp(&mut allocator, &HashMap::new(), cf.loc.clone(), &hex_data) {
+                lh
+            } else {
+                return Ok(None);
+            };
+
+        data_to_write.push((hex_file_name.clone(), hex_data.clone()));
+
+        let shortname = if let Export::Function(desc) = e {
+            desc.name.value.clone()
+        } else {
+            b"program".to_vec()
+        };
+
+        let (hash, new_summary) =
+            compute_export_summary(cf.loc(), summary, &shortname, loaded_hex_data.clone());
+        summary = new_summary;
+
+        components.push(CompileModuleComponent {
+            shortname,
+            filename: hex_file_name,
+            content: loaded_hex_data,
+            hash,
+        });
+    }
+
+    // if we got here, then we loaded all exports.
+    // write (or rewrite) any hex files that were outputs of the elided build steps.
+    let mut allocator = Allocator::new();
+    let empty_symbols = HashMap::new();
+    for (hex_file_name, hex_data) in data_to_write.into_iter() {
+        opts.write_new_file(&hex_file_name, hex_data.as_bytes())?;
+        // Write a hash file alongside.
+        if !hex_file_name.ends_with(".hex") {
+            continue;
+        }
+
+        let decoded_hex = hex_to_modern_sexp(&mut allocator, &empty_symbols, cf.loc(), &hex_data)?;
+        let treehash = sha256tree(decoded_hex);
+        let hash_file_name = format!("{}_hash.hex", &hex_file_name[0..hex_file_name.len() - 4]);
+        let treehash_hex = hex::encode(&treehash);
+        opts.write_new_file(&hash_file_name, treehash_hex.as_bytes())?;
+    }
+
+    Ok(Some(CompilerOutput::Module(CompileModuleOutput {
+        summary,
+        components,
+        includes: cf.include_forms.clone(),
+    })))
+}
+
+fn add_main_fingerprint(cf: &mut CompileForm, forms: &[Rc<SExp>]) {
+    let form_list = Rc::new(enlist(cf.loc(), forms));
+    cf.include_forms.push(IncludeDesc {
+        kw: cf.loc(),
+        nl: cf.loc(),
+        name: b"main".to_vec(),
+        kind: Some(IncludeProcessType::Compiled),
+        fingerprint: sha256tree(form_list)
+            .try_into()
+            .expect("sha256tree returns 32 bytes"),
+    });
 }
 
 fn form_hash_expression(inner_exp: Rc<BodyForm>) -> Rc<BodyForm> {
@@ -610,7 +748,14 @@ pub fn compile_pre_forms(
             p0.include_forms.clone(),
             compile_from_compileform(context, opts, p0)?,
         )),
-        FrontendOutput::Module(cf, exports) => {
+        FrontendOutput::Module(mut cf, exports) => {
+            add_main_fingerprint(&mut cf, pre_forms);
+            // If we can read from cache, use that.  We'll use the actual form of the compileform
+            // and opts (the dialect) to determine a cache hit.
+            if let Some(result) = try_from_cache(opts.clone(), &cf, &exports)? {
+                return Ok(result);
+            }
+
             // cl23 always reflects optimization.
             let dialect = opts.dialect();
             let opts = if let Some(stepping) = dialect.stepping.as_ref() {
@@ -641,13 +786,14 @@ pub fn compile_pre_forms(
                 &cf.helpers,
                 &exports,
             );
-            Ok(CompilerOutput::Module(compile_module(
+            let result_form = CompilerOutput::Module(compile_module(
                 context,
-                opts,
+                opts.clone(),
                 &standalone_constants,
-                cf,
+                cf.clone(),
                 &exports,
-            )?))
+            )?);
+            Ok(result_form)
         }
     }
 }
@@ -842,17 +988,25 @@ impl CompilerOpts for DefaultCompilerOpts {
     }
 
     fn write_new_file(&self, target: &str, content: &[u8]) -> Result<(), CompileErr> {
-        fs::write(target, content).map_err(|_| {
+        let path = Path::new(target);
+        let parent_dir = path.parent();
+        (|| {
+            if let Some(p) = parent_dir {
+                fs::create_dir_all(p)?;
+            }
+            fs::write(target, content)?;
+            Ok(())
+        })()
+        .map_err(|e: io::Error| {
             CompileErr(
                 Srcloc::start(&self.filename()),
                 format!(
-                    "could not write output file {} for {}",
+                    "could not write output file {} for {}, error {e:?}",
                     target,
                     self.filename()
                 ),
             )
-        })?;
-        Ok(())
+        })
     }
 
     fn compile_program(
