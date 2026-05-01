@@ -1169,7 +1169,7 @@ impl DwarfBuilder {
 
         eprintln!("get subprogram");
         let mut subprogram_names = vec![name.clone()];
-        if name != label && preferred_name.is_none() {
+        if name != label && preferred_name.is_none() && matched_signature.is_none() {
             // Keep a typed DIE for both the colloquial and emitted symbol names so
             // either one resolves to the same pointer return type in debuggers.
             subprogram_names.push(label.to_string());
