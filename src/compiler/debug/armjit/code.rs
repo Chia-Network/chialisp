@@ -1202,7 +1202,12 @@ impl DwarfBuilder {
                         (self.target_addr as usize + addr) as u64,
                     )),
                 );
-                sub_ent.set(DW_AT_high_pc, AttributeValue::Udata(size as u64));
+                sub_ent.set(
+                    DW_AT_high_pc,
+                    AttributeValue::Address(Address::Constant(
+                        (self.target_addr as usize + addr + size) as u64,
+                    )),
+                );
                 sub_ent.set(
                     DW_AT_frame_base,
                     AttributeValue::LocationListRef(loc_list_id),
