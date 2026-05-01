@@ -113,6 +113,7 @@ struct DebugLowerer<'d, 'a, 'g> {
     graph: &'g DependencyGraph,
     lir_locs: &'a mut HashMap<LirId, Srcloc>,
     function_body_lirs: &'a mut HashMap<SymbolId, LirId>,
+    function_argument_trees: &'a mut HashMap<SymbolId, String>,
     inline_symbols: Vec<HashMap<SymbolId, HirId>>,
     options: rue_options::CompilerOptions,
     main: SymbolId,
@@ -128,6 +129,7 @@ impl<'d, 'a, 'g> DebugLowerer<'d, 'a, 'g> {
         graph: &'g DependencyGraph,
         lir_locs: &'a mut HashMap<LirId, Srcloc>,
         function_body_lirs: &'a mut HashMap<SymbolId, LirId>,
+        function_argument_trees: &'a mut HashMap<SymbolId, String>,
         options: rue_options::CompilerOptions,
         main: SymbolId,
         base_path: PathBuf,
@@ -140,6 +142,7 @@ impl<'d, 'a, 'g> DebugLowerer<'d, 'a, 'g> {
             graph,
             lir_locs,
             function_body_lirs,
+            function_argument_trees,
             inline_symbols: Vec::new(),
             options,
             main,
@@ -234,6 +237,10 @@ impl<'d, 'a, 'g> DebugLowerer<'d, 'a, 'g> {
         for group in &capture_groups {
             function_env = Self::apply_group(function_env, group, true);
         }
+        self.function_argument_trees.insert(
+            symbol,
+            argument_tree_expression(&function_env, &function.parameters),
+        );
 
         let mut expr = self.lower_hir(&function_env, function.body);
 
@@ -1445,16 +1452,38 @@ fn parameter_expression(names: &[String]) -> String {
     }
 }
 
+fn argument_tree_expression(env: &Environment, parameters: &IndexMap<String, SymbolId>) -> String {
+    match env {
+        Environment::Nil => "()".to_string(),
+        Environment::Leaf(symbol) => parameters
+            .iter()
+            .find_map(|(name, parameter)| {
+                if parameter == symbol {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "()".to_string()),
+        Environment::Pair(first, rest) => {
+            format!(
+                "({} . {})",
+                argument_tree_expression(first, parameters),
+                argument_tree_expression(rest, parameters)
+            )
+        }
+    }
+}
+
 fn add_function_symbol_metadata(
     symbol_table: &mut HashMap<String, String>,
     hash: String,
     name: &str,
-    function: &FunctionSymbol,
+    arguments: &str,
 ) {
     symbol_table.insert(hash.clone(), name.to_string());
-    let arguments = function.parameters.keys().cloned().collect::<Vec<_>>();
     let mut key = debug_decode_string(format!("{hash}_arguments").as_bytes());
-    symbol_table.insert(key, parameter_expression(&arguments));
+    symbol_table.insert(key, arguments.to_string());
     key = debug_decode_string(format!("{hash}_left_env").as_bytes());
     symbol_table.insert(key, "0".to_string());
 }
@@ -1471,6 +1500,7 @@ fn compile_main(
     let mut arena = Arena::new();
     let mut lir_locs = HashMap::new();
     let mut function_body_lirs = HashMap::new();
+    let mut function_argument_trees = HashMap::new();
     let fallback_loc = tree
         .all_files()
         .first()
@@ -1483,6 +1513,7 @@ fn compile_main(
             &graph,
             &mut lir_locs,
             &mut function_body_lirs,
+            &mut function_argument_trees,
             options,
             main,
             base_path,
@@ -1515,9 +1546,15 @@ fn compile_main(
         let Some(body_lir) = function_body_lirs.get(&symbol).copied() else {
             continue;
         };
+        let arguments = function_argument_trees
+            .get(&symbol)
+            .cloned()
+            .unwrap_or_else(|| {
+                parameter_expression(&function.parameters.keys().cloned().collect::<Vec<_>>())
+            });
         let function_sexp = codegen_debug(&arena, &lir_locs, body_lir);
         let function_hash = hex::encode(crate::compiler::debug::debug_sha256tree(function_sexp));
-        add_function_symbol_metadata(&mut symbol_table, function_hash, &name, &function);
+        add_function_symbol_metadata(&mut symbol_table, function_hash, &name, &arguments);
     }
 
     Ok((compiled, symbol_table, program_locations))
