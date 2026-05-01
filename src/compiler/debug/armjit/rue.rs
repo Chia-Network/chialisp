@@ -112,6 +112,7 @@ struct DebugLowerer<'d, 'a, 'g> {
     arena: &'a mut Arena<Lir>,
     graph: &'g DependencyGraph,
     lir_locs: &'a mut HashMap<LirId, Srcloc>,
+    function_body_lirs: &'a mut HashMap<SymbolId, LirId>,
     inline_symbols: Vec<HashMap<SymbolId, HirId>>,
     options: rue_options::CompilerOptions,
     main: SymbolId,
@@ -126,6 +127,7 @@ impl<'d, 'a, 'g> DebugLowerer<'d, 'a, 'g> {
         arena: &'a mut Arena<Lir>,
         graph: &'g DependencyGraph,
         lir_locs: &'a mut HashMap<LirId, Srcloc>,
+        function_body_lirs: &'a mut HashMap<SymbolId, LirId>,
         options: rue_options::CompilerOptions,
         main: SymbolId,
         base_path: PathBuf,
@@ -137,6 +139,7 @@ impl<'d, 'a, 'g> DebugLowerer<'d, 'a, 'g> {
             arena,
             graph,
             lir_locs,
+            function_body_lirs,
             inline_symbols: Vec::new(),
             options,
             main,
@@ -271,8 +274,10 @@ impl<'d, 'a, 'g> DebugLowerer<'d, 'a, 'g> {
                 expr = self.alloc_here(Lir::Run(expr, group_env));
             }
 
+            self.function_body_lirs.insert(symbol, expr);
             expr
         } else {
+            self.function_body_lirs.insert(symbol, expr);
             self.alloc_here(Lir::Quote(expr))
         }
     }
@@ -1465,6 +1470,7 @@ fn compile_main(
     let graph = DependencyGraph::build(ctx, main, options);
     let mut arena = Arena::new();
     let mut lir_locs = HashMap::new();
+    let mut function_body_lirs = HashMap::new();
     let fallback_loc = tree
         .all_files()
         .first()
@@ -1476,6 +1482,7 @@ fn compile_main(
             &mut arena,
             &graph,
             &mut lir_locs,
+            &mut function_body_lirs,
             options,
             main,
             base_path,
@@ -1505,32 +1512,10 @@ fn compile_main(
             program_locations.insert(name.clone(), loc);
         }
 
-        let mut body_arena = Arena::new();
-        let mut body_locs = HashMap::new();
-        let body_lir = {
-            let mut lowerer = DebugLowerer::new(
-                ctx,
-                &mut body_arena,
-                &graph,
-                &mut body_locs,
-                options,
-                main,
-                PathBuf::from("."),
-                symbol_locs,
-                symbol_locs
-                    .get(&symbol)
-                    .cloned()
-                    .unwrap_or_else(|| Srcloc::start("*rue*")),
-            );
-            lowerer.lower_symbol_value(&Environment::default(), symbol)
+        let Some(body_lir) = function_body_lirs.get(&symbol).copied() else {
+            continue;
         };
-        let body_for_hash = match &body_arena[body_lir] {
-            // Non-main rue functions are carried through the environment as
-            // quoted bodies; the JIT executes the dequoted body.
-            Lir::Quote(body) => *body,
-            _ => body_lir,
-        };
-        let function_sexp = codegen_debug(&body_arena, &body_locs, body_for_hash);
+        let function_sexp = codegen_debug(&arena, &lir_locs, body_lir);
         let function_hash = hex::encode(crate::compiler::debug::debug_sha256tree(function_sexp));
         add_function_symbol_metadata(&mut symbol_table, function_hash, &name, &function);
     }
