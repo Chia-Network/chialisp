@@ -1777,7 +1777,9 @@ impl<T: DebugSExp> Program<T> {
                     preferred_name.as_deref(),
                 ) {
                     eprintln!("end block with function {function_name}");
-                    self.function_symbols.insert(label.clone(), function_name);
+                    if label == &function_name || !self.label_is_taken(&function_name) {
+                        self.function_symbols.insert(label.clone(), function_name);
+                    }
                 }
                 self.current_symbol = None;
                 self.current_symbol_name = None;
