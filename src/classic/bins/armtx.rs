@@ -17,7 +17,7 @@ fn run_arm_conversion() -> Result<(), String> {
     // copy all in-memory sections from the ELF file into system RAM
     (|| {
         fs::write(&args.output, &arm_elf.object_file)?;
-        fs::write(&format!("{}.clsp", args.output), &arm_elf.synthetic_source)
+        fs::write(format!("{}.clsp", args.output), &arm_elf.synthetic_source)
     })()
     .map_err(|e| format!("could not write elf file: {e:?}"))?;
 
