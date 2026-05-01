@@ -1507,7 +1507,7 @@ impl<T: DebugSExp> Program<T> {
                 for i in &[
                     Instr::Addi(Register::R(7), Register::R(4), 0),
                     Instr::Addi(Register::R(0), Register::R(7), 0),
-                    Instr::Bl(quoted_code.to_string()),
+                    Instr::Bl(code_comp),
                 ] {
                     self.push(source_sexp.clone(), loc, i.clone());
                 }
