@@ -54,6 +54,9 @@ rue-options = { git = "https://github.com/xch-dev/rue.git", version = "0.8.4" }
 rue-diagnostic = { git = "https://github.com/xch-dev/rue.git", version = "0.8.4" }
 rowan = "0.16.1"
 
+[patch."https://github.com/xch-dev/rue.git"]
+rue-ast = { path = "vendor/rue-ast" }
+
 [dependencies.pyo3]
 version = "0.25.1"
 features = ["abi3-py310", "extension-module"]
