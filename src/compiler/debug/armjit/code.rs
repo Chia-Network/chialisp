@@ -2040,13 +2040,6 @@ impl<T: DebugSExp> Program<T> {
             })
             .collect();
 
-        // Declare functions as imports and later link the labels they belong to.
-        for (label, funname) in self.function_symbols.iter() {
-            if label != funname && !self.label_is_taken(funname) {
-                decls.push((funname.clone(), Decl::function().into()));
-            }
-        }
-
         // Declare .debug_aranges
         decls.push((
             ".debug_aranges".to_string(),
@@ -2061,34 +2054,12 @@ impl<T: DebugSExp> Program<T> {
         let mut in_function = None;
 
         let mut produced_code = 0;
-        let mut defined_colloquial_names = HashSet::new();
-        let emitted_labels: HashSet<String> = self
-            .finished_insns
-            .iter()
-            .filter_map(|i| {
-                if let Instr::Globl(name) = i {
-                    Some(name.clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
         let mut handle_def_end = |target_addr: u32,
-                                  defined_colloquial_names: &mut HashSet<String>,
                                   function_body: &mut Vec<u8>,
                                   in_function: &mut Option<String>|
          -> Result<(), String> {
             if let Some(defname) = in_function.as_ref() {
                 if !function_body.is_empty() {
-                    if let Some(funname) = self.function_symbols.get(defname) {
-                        if funname != defname
-                            && !emitted_labels.contains(funname)
-                            && !defined_colloquial_names.contains(funname)
-                        {
-                            obj.define(funname, vec![]).map_err(|e| format!("{e:?}"))?;
-                            defined_colloquial_names.insert(funname.clone());
-                        }
-                    }
                     eprintln!("obj define {defname}");
                     produced_code += function_body.len();
                     obj.define(defname, function_body.clone())
@@ -2102,12 +2073,7 @@ impl<T: DebugSExp> Program<T> {
 
         for i in self.finished_insns.iter() {
             if let Instr::Globl(name) = i {
-                handle_def_end(
-                    self.target_addr,
-                    &mut defined_colloquial_names,
-                    &mut function_body,
-                    &mut in_function,
-                )?;
+                handle_def_end(self.target_addr, &mut function_body, &mut in_function)?;
                 in_function = Some(name.to_string());
             }
 
@@ -2116,12 +2082,7 @@ impl<T: DebugSExp> Program<T> {
             }
         }
 
-        handle_def_end(
-            self.target_addr,
-            &mut defined_colloquial_names,
-            &mut function_body,
-            &mut in_function,
-        )?;
+        handle_def_end(self.target_addr, &mut function_body, &mut in_function)?;
         // Create .debug_aranges
         let mut debug_aranges: Vec<u8> = (0..0x20).map(|_| 0).collect();
         write_u32(&mut debug_aranges, 0, 0x1c);
