@@ -2042,7 +2042,7 @@ impl<T: DebugSExp> Program<T> {
 
         // Declare functions as imports and later link the labels they belong to.
         for (label, funname) in self.function_symbols.iter() {
-            if label != funname {
+            if label != funname && !self.label_is_taken(funname) {
                 decls.push((funname.clone(), Decl::function().into()));
             }
         }
