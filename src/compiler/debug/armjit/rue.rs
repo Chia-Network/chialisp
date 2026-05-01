@@ -1521,20 +1521,15 @@ fn compile_main(
             );
             lowerer.lower_symbol_value(&Environment::default(), symbol)
         };
-        let function_sexp = codegen_debug(&body_arena, &body_locs, body_lir);
+        let body_for_hash = match &body_arena[body_lir] {
+            // Non-main rue functions are carried through the environment as
+            // quoted bodies; the JIT executes the dequoted body.
+            Lir::Quote(body) => *body,
+            _ => body_lir,
+        };
+        let function_sexp = codegen_debug(&body_arena, &body_locs, body_for_hash);
         let function_hash = hex::encode(crate::compiler::debug::debug_sha256tree(function_sexp));
         add_function_symbol_metadata(&mut symbol_table, function_hash, &name, &function);
-
-        // Non-main rue functions are represented as quoted CLVM bodies in the
-        // environment; map the dequoted body too so the JIT can name that block.
-        if let Some(body) = match &body_arena[body_lir] {
-            Lir::Quote(body) => Some(*body),
-            _ => None,
-        } {
-            let body_sexp = codegen_debug(&body_arena, &body_locs, body);
-            let body_hash = hex::encode(crate::compiler::debug::debug_sha256tree(body_sexp));
-            add_function_symbol_metadata(&mut symbol_table, body_hash, &name, &function);
-        }
     }
 
     Ok((compiled, symbol_table, program_locations))
