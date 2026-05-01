@@ -1,12 +1,18 @@
 use std::fs;
 use std::rc::Rc;
 
-use chialisp::compiler::debug::armjit::cmd::{compile_to_arm_elf, spin_up_emulation, Args};
+use chialisp::compiler::debug::armjit::cmd::{
+    compile_rue_to_arm_elf, compile_to_arm_elf, spin_up_emulation, Args,
+};
 
 fn run_arm_conversion() -> Result<(), String> {
     let args: Args = argh::from_env();
 
-    let arm_elf = compile_to_arm_elf(&args)?;
+    let arm_elf = if args.filename.ends_with(".rue") {
+        compile_rue_to_arm_elf(&args)?
+    } else {
+        compile_to_arm_elf(&args)?
+    };
 
     // copy all in-memory sections from the ELF file into system RAM
     (|| {
