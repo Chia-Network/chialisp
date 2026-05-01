@@ -1430,6 +1430,9 @@ fn build_symbol_locs(ctx: &Compiler, tree: &FileTree) -> HashMap<SymbolId, Srclo
 }
 
 fn parameter_expression(names: &[String]) -> String {
+    if std::env::var_os("ARMTX_RUE_FORCE_ENV_ARGS").is_some() {
+        return "ENV".to_string();
+    }
     match names {
         [] => "()".to_string(),
         [name] => name.clone(),
