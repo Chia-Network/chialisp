@@ -1501,6 +1501,10 @@ fn compile_main(
             continue;
         };
 
+        if let Some(loc) = symbol_locs.get(&symbol).cloned() {
+            program_locations.insert(name.clone(), loc);
+        }
+
         let mut body_arena = Arena::new();
         let mut body_locs = HashMap::new();
         let body_lir = {
