@@ -2062,6 +2062,17 @@ impl<T: DebugSExp> Program<T> {
 
         let mut produced_code = 0;
         let mut defined_colloquial_names = HashSet::new();
+        let emitted_labels: HashSet<String> = self
+            .finished_insns
+            .iter()
+            .filter_map(|i| {
+                if let Instr::Globl(name) = i {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
         let mut handle_def_end = |target_addr: u32,
                                   defined_colloquial_names: &mut HashSet<String>,
                                   function_body: &mut Vec<u8>,
@@ -2070,7 +2081,10 @@ impl<T: DebugSExp> Program<T> {
             if let Some(defname) = in_function.as_ref() {
                 if !function_body.is_empty() {
                     if let Some(funname) = self.function_symbols.get(defname) {
-                        if funname != defname && !defined_colloquial_names.contains(funname) {
+                        if funname != defname
+                            && !emitted_labels.contains(funname)
+                            && !defined_colloquial_names.contains(funname)
+                        {
                             obj.define(funname, vec![]).map_err(|e| format!("{e:?}"))?;
                             defined_colloquial_names.insert(funname.clone());
                         }
