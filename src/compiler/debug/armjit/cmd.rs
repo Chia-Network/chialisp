@@ -19,6 +19,7 @@ use crate::compiler::comptypes::CompilerOpts;
 use crate::compiler::debug::armjit::code::{ElfObject, Program, TARGET_ADDR};
 use crate::compiler::debug::armjit::emu::Emu;
 use crate::compiler::debug::armjit::emu_stub::{run_stub, start_stub};
+use crate::compiler::debug::armjit::rue::compile_rue_to_arm_elf as compile_rue_to_arm_elf_impl;
 use crate::compiler::debug::build_symbol_table_mut;
 use crate::compiler::dialect::AcceptedDialect;
 use crate::compiler::frontend::frontend;
@@ -69,6 +70,10 @@ pub fn compile_to_arm_elf(args: &Args) -> Result<ArmElfCompileOutput, String> {
         .map_err(|_| format!("error reading {}", args.filename))?;
 
     compile_to_arm_elf_from_source(args, argfile)
+}
+
+pub fn compile_rue_to_arm_elf(args: &Args) -> Result<ArmElfCompileOutput, String> {
+    compile_rue_to_arm_elf_impl(args)
 }
 
 pub fn compile_to_arm_elf_from_source(

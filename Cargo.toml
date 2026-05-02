@@ -45,6 +45,17 @@ sha2 = "0.10.9"
 tempfile = "3.26.0"
 unicode-segmentation = "1.13.2"
 yaml-rust2 = "0.11.0"
+indexmap = "2.14.0"
+id-arena = "2.3.0"
+rue-compiler = { git = "https://github.com/xch-dev/rue.git", version = "0.8.4" }
+rue-hir = { git = "https://github.com/xch-dev/rue.git", version = "0.8.4" }
+rue-lir = { git = "https://github.com/xch-dev/rue.git", version = "0.8.4" }
+rue-options = { git = "https://github.com/xch-dev/rue.git", version = "0.8.4" }
+rue-diagnostic = { git = "https://github.com/xch-dev/rue.git", version = "0.8.4" }
+rowan = "0.16.1"
+
+[patch."https://github.com/xch-dev/rue.git"]
+rue-ast = { path = "vendor/rue-ast" }
 
 [dependencies.pyo3]
 version = "0.25.1"

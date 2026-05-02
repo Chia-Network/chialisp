@@ -1069,6 +1069,14 @@ impl DwarfBuilder {
                 let argname = decode_string(&a);
                 let unit = self.dwarf.units.get_mut(self.unit_id);
 
+                let at_id = unit.add(subprogram_id, DW_TAG_formal_parameter);
+                let at_ent = unit.get_mut(at_id);
+                at_ent.set(
+                    DW_AT_name,
+                    AttributeValue::String(argname.as_bytes().to_vec()),
+                );
+                at_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
+
                 let mut loclist = Vec::new();
 
                 for l in locations.iter() {
@@ -1091,14 +1099,7 @@ impl DwarfBuilder {
                 }
 
                 let loc_list_id = unit.locations.add(LocationList(loclist));
-
-                let at_id = unit.add(subprogram_id, DW_TAG_formal_parameter);
                 let at_ent = unit.get_mut(at_id);
-                at_ent.set(
-                    DW_AT_name,
-                    AttributeValue::String(argname.as_bytes().to_vec()),
-                );
-                at_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
                 at_ent.set(DW_AT_location, AttributeValue::LocationListRef(loc_list_id));
 
                 /*
@@ -1169,7 +1170,7 @@ impl DwarfBuilder {
 
         eprintln!("get subprogram");
         let mut subprogram_names = vec![name.clone()];
-        if name != label {
+        if name != label && preferred_name.is_none() && matched_signature.is_none() {
             // Keep a typed DIE for both the colloquial and emitted symbol names so
             // either one resolves to the same pointer return type in debuggers.
             subprogram_names.push(label.to_string());
@@ -1361,6 +1362,114 @@ fn hexify(v: &[u8]) -> String {
     Bytes::new(Some(BytesFromType::Raw(v.to_vec()))).hex()
 }
 
+fn write_u16_le(buf: &mut [u8], offset: usize, value: u16) {
+    buf[offset] = (value & 0xff) as u8;
+    buf[offset + 1] = (value >> 8) as u8;
+}
+
+fn read_u32_le(buf: &[u8], offset: usize) -> u32 {
+    (buf[offset] as u32)
+        | ((buf[offset + 1] as u32) << 8)
+        | ((buf[offset + 2] as u32) << 16)
+        | ((buf[offset + 3] as u32) << 24)
+}
+
+fn mark_elf_executable(buf: &mut [u8], entry: u32) -> Result<(), String> {
+    const ELF_MAGIC: &[u8] = b"\x7fELF";
+    const EI_CLASS: usize = 4;
+    const EI_DATA: usize = 5;
+    const ELFCLASS32: u8 = 1;
+    const ELFDATA2LSB: u8 = 1;
+    const E_TYPE: usize = 16;
+    const E_ENTRY: usize = 24;
+    const ET_EXEC: u16 = 2;
+
+    if buf.len() < 52
+        || &buf[..ELF_MAGIC.len()] != ELF_MAGIC
+        || buf[EI_CLASS] != ELFCLASS32
+        || buf[EI_DATA] != ELFDATA2LSB
+    {
+        return Err("expected 32-bit little-endian ELF output".to_string());
+    }
+
+    write_u16_le(buf, E_TYPE, ET_EXEC);
+    write_u32(buf, E_ENTRY, entry);
+    Ok(())
+}
+
+fn add_elf_load_segment(buf: &mut Vec<u8>) -> Result<(), String> {
+    const E_PHOFF: usize = 28;
+    const E_SHOFF: usize = 32;
+    const E_PHENTSIZE: usize = 42;
+    const E_PHNUM: usize = 44;
+    const E_SHENTSIZE: usize = 46;
+    const E_SHNUM: usize = 48;
+    const SH_ADDR: usize = 12;
+    const SH_OFFSET: usize = 16;
+    const SH_SIZE: usize = 20;
+    const SH_FLAGS: usize = 8;
+    const SHF_ALLOC: u32 = 2;
+    const PT_LOAD: u32 = 1;
+    const PF_X: u32 = 1;
+    const PF_W: u32 = 2;
+    const PF_R: u32 = 4;
+
+    if buf.len() < 52 {
+        return Err("ELF header too short".to_string());
+    }
+
+    let shoff = read_u32_le(buf, E_SHOFF) as usize;
+    let shentsize = u16::from_le_bytes([buf[E_SHENTSIZE], buf[E_SHENTSIZE + 1]]) as usize;
+    let shnum = u16::from_le_bytes([buf[E_SHNUM], buf[E_SHNUM + 1]]) as usize;
+    let phentsize = u16::from_le_bytes([buf[E_PHENTSIZE], buf[E_PHENTSIZE + 1]]) as usize;
+    if phentsize != 32 {
+        return Err(format!(
+            "expected ELF32 program header size 32, got {phentsize}"
+        ));
+    }
+
+    let mut min_addr = u32::MAX;
+    let mut max_addr = 0_u32;
+    let mut min_offset = u32::MAX;
+    let mut max_offset = 0_u32;
+    for section_idx in 0..shnum {
+        let section = shoff + section_idx * shentsize;
+        if section + SH_SIZE + 4 > buf.len() {
+            return Err("section header table extends past ELF buffer".to_string());
+        }
+        let flags = read_u32_le(buf, section + SH_FLAGS);
+        if flags & SHF_ALLOC == 0 {
+            continue;
+        }
+
+        let addr = read_u32_le(buf, section + SH_ADDR);
+        let offset = read_u32_le(buf, section + SH_OFFSET);
+        let size = read_u32_le(buf, section + SH_SIZE);
+        min_addr = min_addr.min(addr);
+        max_addr = max_addr.max(addr + size);
+        min_offset = min_offset.min(offset);
+        max_offset = max_offset.max(offset + size);
+    }
+
+    if min_addr == u32::MAX {
+        return Err("no allocatable sections found for PT_LOAD".to_string());
+    }
+
+    let phoff = buf.len();
+    buf.resize(phoff + phentsize, 0);
+    write_u32(buf, phoff, PT_LOAD);
+    write_u32(buf, phoff + 4, min_offset);
+    write_u32(buf, phoff + 8, min_addr);
+    write_u32(buf, phoff + 12, min_addr);
+    write_u32(buf, phoff + 16, max_offset - min_offset);
+    write_u32(buf, phoff + 20, max_addr - min_addr);
+    write_u32(buf, phoff + 24, PF_R | PF_W | PF_X);
+    write_u32(buf, phoff + 28, 0x1000);
+    write_u32(buf, E_PHOFF, phoff as u32);
+    write_u16_le(buf, E_PHNUM, 1);
+    Ok(())
+}
+
 pub fn swi_print(register: usize, label: usize) -> usize {
     SWI_PRINT_EXPR | register << 4 | label << 8
 }
@@ -1507,7 +1616,7 @@ impl<T: DebugSExp> Program<T> {
                 for i in &[
                     Instr::Addi(Register::R(7), Register::R(4), 0),
                     Instr::Addi(Register::R(0), Register::R(7), 0),
-                    Instr::Bl(quoted_code.to_string()),
+                    Instr::Bl(code_comp),
                 ] {
                     self.push(source_sexp.clone(), loc, i.clone());
                 }
@@ -1777,7 +1886,9 @@ impl<T: DebugSExp> Program<T> {
                     preferred_name.as_deref(),
                 ) {
                     eprintln!("end block with function {function_name}");
-                    self.function_symbols.insert(label.clone(), function_name);
+                    if label == &function_name || !self.label_is_taken(&function_name) {
+                        self.function_symbols.insert(label.clone(), function_name);
+                    }
                 }
                 self.current_symbol = None;
                 self.current_symbol_name = None;
@@ -2038,13 +2149,6 @@ impl<T: DebugSExp> Program<T> {
             })
             .collect();
 
-        // Declare functions as imports and later link the labels they belong to.
-        for (label, funname) in self.function_symbols.iter() {
-            if label != funname {
-                decls.push((funname.clone(), Decl::function().into()));
-            }
-        }
-
         // Declare .debug_aranges
         decls.push((
             ".debug_aranges".to_string(),
@@ -2059,20 +2163,12 @@ impl<T: DebugSExp> Program<T> {
         let mut in_function = None;
 
         let mut produced_code = 0;
-        let mut defined_colloquial_names = HashSet::new();
         let mut handle_def_end = |target_addr: u32,
-                                  defined_colloquial_names: &mut HashSet<String>,
                                   function_body: &mut Vec<u8>,
                                   in_function: &mut Option<String>|
          -> Result<(), String> {
             if let Some(defname) = in_function.as_ref() {
                 if !function_body.is_empty() {
-                    if let Some(funname) = self.function_symbols.get(defname) {
-                        if funname != defname && !defined_colloquial_names.contains(funname) {
-                            obj.define(funname, vec![]).map_err(|e| format!("{e:?}"))?;
-                            defined_colloquial_names.insert(funname.clone());
-                        }
-                    }
                     eprintln!("obj define {defname}");
                     produced_code += function_body.len();
                     obj.define(defname, function_body.clone())
@@ -2086,12 +2182,7 @@ impl<T: DebugSExp> Program<T> {
 
         for i in self.finished_insns.iter() {
             if let Instr::Globl(name) = i {
-                handle_def_end(
-                    self.target_addr,
-                    &mut defined_colloquial_names,
-                    &mut function_body,
-                    &mut in_function,
-                )?;
+                handle_def_end(self.target_addr, &mut function_body, &mut in_function)?;
                 in_function = Some(name.to_string());
             }
 
@@ -2100,12 +2191,7 @@ impl<T: DebugSExp> Program<T> {
             }
         }
 
-        handle_def_end(
-            self.target_addr,
-            &mut defined_colloquial_names,
-            &mut function_body,
-            &mut in_function,
-        )?;
+        handle_def_end(self.target_addr, &mut function_body, &mut in_function)?;
         // Create .debug_aranges
         let mut debug_aranges: Vec<u8> = (0..0x20).map(|_| 0).collect();
         write_u32(&mut debug_aranges, 0, 0x1c);
@@ -2135,6 +2221,7 @@ impl<T: DebugSExp> Program<T> {
         }
 
         let mut result_buf = obj.emit().map_err(|e| format!("obj emit {e:?}"))?;
+        mark_elf_executable(&mut result_buf, self.target_addr)?;
 
         // Patch up
         eprintln!("reload elf");
@@ -2151,6 +2238,7 @@ impl<T: DebugSExp> Program<T> {
             eprintln!("section {i} target {target:x} value {value:x}");
             write_u32(&mut result_buf, target, value);
         }
+        add_elf_load_segment(&mut result_buf)?;
 
         eprintln!("code succeeded");
         Ok(ElfObject {

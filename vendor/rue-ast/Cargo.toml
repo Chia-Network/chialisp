@@ -1,0 +1,15 @@
+[package]
+name = "rue-ast"
+version = "0.8.4"
+edition = "2024"
+license = "Apache-2.0"
+description = "An implementation of the Abstract Syntax Tree for the Rue compiler."
+authors = ["Brandon Haggstrom <me@rigidnetwork.com>"]
+homepage = "https://github.com/xch-dev/rue"
+repository = "https://github.com/xch-dev/rue"
+readme = "README.md"
+keywords = ["chia", "blockchain", "crypto"]
+categories = ["cryptography::cryptocurrencies", "development-tools"]
+
+[dependencies]
+rue-parser = { git = "https://github.com/xch-dev/rue.git", version = "0.8.4" }
