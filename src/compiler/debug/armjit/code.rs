@@ -1069,6 +1069,14 @@ impl DwarfBuilder {
                 let argname = decode_string(&a);
                 let unit = self.dwarf.units.get_mut(self.unit_id);
 
+                let at_id = unit.add(subprogram_id, DW_TAG_formal_parameter);
+                let at_ent = unit.get_mut(at_id);
+                at_ent.set(
+                    DW_AT_name,
+                    AttributeValue::String(argname.as_bytes().to_vec()),
+                );
+                at_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
+
                 let mut loclist = Vec::new();
 
                 for l in locations.iter() {
@@ -1091,14 +1099,7 @@ impl DwarfBuilder {
                 }
 
                 let loc_list_id = unit.locations.add(LocationList(loclist));
-
-                let at_id = unit.add(subprogram_id, DW_TAG_formal_parameter);
                 let at_ent = unit.get_mut(at_id);
-                at_ent.set(
-                    DW_AT_name,
-                    AttributeValue::String(argname.as_bytes().to_vec()),
-                );
-                at_ent.set(DW_AT_type, AttributeValue::UnitRef(self.pointer_type));
                 at_ent.set(DW_AT_location, AttributeValue::LocationListRef(loc_list_id));
 
                 /*
@@ -1202,7 +1203,12 @@ impl DwarfBuilder {
                         (self.target_addr as usize + addr) as u64,
                     )),
                 );
-                sub_ent.set(DW_AT_high_pc, AttributeValue::Udata(size as u64));
+                sub_ent.set(
+                    DW_AT_high_pc,
+                    AttributeValue::Address(Address::Constant(
+                        (self.target_addr as usize + addr + size) as u64,
+                    )),
+                );
                 sub_ent.set(
                     DW_AT_frame_base,
                     AttributeValue::LocationListRef(loc_list_id),

@@ -89,29 +89,3 @@ def lookup_type(val):
     return None
 
 gdb.pretty_printers.append(lookup_type)
-
-def clvm_path(value, path):
-    path = int(path)
-    ops = []
-    while path > 1:
-        ops.append(path & 1)
-        path >>= 1
-    for op in reversed(ops):
-        if not value.is_cons():
-            raise gdb.GdbError("CLVM path reached atom before target")
-        value = value.cons[1 if op else 0]
-    return value
-
-class PrintClvmPath(gdb.Command):
-    def __init__(self):
-        super(PrintClvmPath, self).__init__("print_clvm_path", gdb.COMMAND_DATA)
-
-    def invoke(self, arg, from_tty):
-        argv = gdb.string_to_argv(arg)
-        if len(argv) != 2:
-            raise gdb.GdbError("usage: print_clvm_path ADDRESS PATH")
-        address = int(gdb.parse_and_eval(argv[0]))
-        path = int(argv[1], 0)
-        print(clvm_path(value(address), path).to_string())
-
-PrintClvmPath()

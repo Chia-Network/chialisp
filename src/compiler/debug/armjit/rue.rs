@@ -1539,10 +1539,6 @@ fn compile_main(
             continue;
         };
 
-        if let Some(loc) = symbol_locs.get(&symbol).cloned() {
-            program_locations.insert(name.clone(), loc);
-        }
-
         let Some(body_lir) = function_body_lirs.get(&symbol).copied() else {
             continue;
         };
