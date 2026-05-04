@@ -4,6 +4,10 @@ use crate::compiler::clvm::sha256tree_from_atom;
 use crate::compiler::comptypes::{CompileErr, CompileForm, CompilerOpts};
 use crate::compiler::sexp::decode_string;
 
+pub fn hash_file_name(hex_file_name: &str) -> String {
+    format!("{}.hash", &hex_file_name)
+}
+
 fn cache_key(cf: &CompileForm) -> String {
     let mut include_fingerprints = Vec::new();
     for include in cf.include_forms.iter() {

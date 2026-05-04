@@ -14,6 +14,7 @@ use crate::compiler::comptypes::{
     BodyForm, CompileForm, CompilerOpts, CompilerOutput, Export, ExportFunctionDesc,
     ExportProgramDesc, NameAndLoc,
 };
+use crate::compiler::diskcache::hash_file_name;
 use crate::compiler::diskcache::module_cache_key_hex;
 use crate::compiler::sexp::{parse_sexp, SExp};
 use crate::compiler::srcloc::Srcloc;
@@ -134,7 +135,7 @@ fn try_from_cache_hits_when_main_program_hex_present() {
         TEST_CLSP.replace(".clsp", ".hex")
     );
 
-    let hash_path = format!("{}_hash.hex", TEST_CLSP.trim_end_matches(".clsp"));
+    let hash_path = hex_file_name(TEST_CLSP);
     assert!(
         wrapped.get_written_file(&hash_path).is_some(),
         "expected treehash sidecar {hash_path}, got {:?}",
