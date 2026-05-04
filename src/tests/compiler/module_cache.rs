@@ -82,7 +82,7 @@ fn try_hash_clsp_and_hex_test_values_differ() {
 
 #[test]
 fn try_clsp_hash_and_hex_hash_filenames_differ() {
-    assert(hash_filename(TEST_CLSP_FILENAME) != hash_filename(TEST_HEX_FILENAME))
+    assert!(hash_file_name(TEST_CLSP_FILENAME) != hash_file_name(TEST_HEX_FILENAME))
 }
 
 #[test]
@@ -149,10 +149,10 @@ fn try_from_cache_hits_when_main_program_hex_present() {
         TEST_CLSP_FILENAME.replace(".clsp", ".hex")
     );
 
-    let hex_hash_path = hex_file_name(TEST_CLSP_FILENAME.replace(".clsp", ".hex"));
+    let hex_hash_path = hash_file_name(TEST_HEX_FILENAME);
     assert!(
         wrapped.get_written_file(&hex_hash_path).is_some(),
-        "expected treehash sidecar {hash_path}, got {:?}",
+        "expected treehash sidecar {hex_hash_path}, got {:?}",
         wrapped.list_written_files()
     );
 }
