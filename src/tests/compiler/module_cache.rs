@@ -75,9 +75,8 @@ fn cache_dir_for(cf: &CompileForm) -> String {
 
 #[test]
 fn try_hash_clsp_and_hex_test_values_differ() {
-    let hex_bytes = sample_program_hex().as_bytes();
-    let program_bytes = TEST_CLSP_SOURCE.bytes();
-    assert!(hex_bytes != program_bytes);
+    let hex_bytes = sample_program_hex();
+    assert!(hex_bytes.as_bytes() != TEST_CLSP_SOURCE.as_bytes());
 }
 
 #[test]
