@@ -146,7 +146,7 @@ fn try_from_cache_hits_when_main_program_hex_present() {
     assert_eq!(mo.components[0].shortname, b"program".to_vec());
     assert_eq!(
         mo.components[0].filename,
-        TEST_CLSP_FILENAME.replace(".clsp", ".clsp.hex")
+        TEST_CLSP_FILENAME.replace(".clsp", ".hex")
     );
 
     let hex_hash_path = hex_file_name(TEST_CLSP_FILENAME.replace(".clsp", ".hex"));
