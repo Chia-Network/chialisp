@@ -442,7 +442,7 @@ pub fn optimize_expr(
                     // A function is constant if its body is a constant
                     // expression or all its arguments are constant and
                     // its body doesn't include an environment reference.
-                    Callable::CallDefun(l, _target) => {
+                    Callable::CallDefun(l, _target, _) => {
                         if let Some(constant_invocation) = constant_fun_result(
                             allocator,
                             opts.clone(),

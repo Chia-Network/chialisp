@@ -517,7 +517,14 @@ pub fn get_callable(
                 }
                 (_, _, Ok(defun), _, _, _) => {
                     let defun_clone: &SExp = defun.borrow();
-                    Ok(Callable::CallDefun(l.clone(), defun_clone.clone()))
+                    Ok(Callable::CallDefun(
+                        l.clone(),
+                        defun_clone.clone(),
+                        matches!(
+                            is_defun_or_constant_in_codegen(compiler, name),
+                            Some(EnvDefinitionStatus::IsDefun)
+                        ),
+                    ))
                 }
                 (_, _, _, Some(prim), _, _) => {
                     let prim_clone: &SExp = prim.borrow();
@@ -794,7 +801,7 @@ fn compile_call(
                 call.tail.clone(),
             ),
 
-            Callable::CallDefun(l, lookup) => generate_args_code(
+            Callable::CallDefun(l, lookup, expects_left_env) => generate_args_code(
                 context,
                 opts.clone(),
                 compiler,
@@ -809,9 +816,16 @@ fn compile_call(
                 },
                 true,
             )
-            .and_then(|args| {
-                process_defun_call(opts.clone(), compiler, l.clone(), args, Rc::new(lookup))
-            }),
+            .map(|args| {
+                if expects_left_env {
+                    process_defun_call(opts.clone(), compiler, l.clone(), args, Rc::new(lookup))
+                } else {
+                    Ok(CompiledCode(
+                        l.clone(),
+                        Rc::new(primapply(l, Rc::new(lookup), args)),
+                    ))
+                }
+            })?,
 
             Callable::CallPrim(l, p) => generate_args_code(
                 context,
@@ -1038,6 +1052,11 @@ pub fn generate_expr_code(
                         )
                         .map(|f| Ok(CompiledCode(l.clone(), f)))
                         .unwrap_or_else(|_| {
+                            if let Some(res) = compiler.tabled_constants.get(atom) {
+                                let quoted = primquote(l.clone(), res.clone());
+                                return Ok(CompiledCode(l.clone(), Rc::new(quoted)));
+                            }
+
                             if opts.dialect().strict && printable(atom, false) {
                                 // Finally enable strictness for variable names.
                                 // This is possible because the modern macro system

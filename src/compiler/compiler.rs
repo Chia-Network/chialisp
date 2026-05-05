@@ -231,6 +231,27 @@ fn modernize_constants(helpers: &mut [HelperForm], standalone_constants: &HashSe
     }
 }
 
+fn force_constants_inline(helpers: &mut [HelperForm], inline_constants: &HashSet<Vec<u8>>) {
+    for h in helpers.iter_mut() {
+        match h {
+            HelperForm::Defconstant(d) => {
+                if inline_constants.contains(&d.name) {
+                    d.tabled = false;
+                }
+            }
+            HelperForm::Defnamespace(ns) => {
+                force_constants_inline(&mut ns.helpers, inline_constants);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn force_constant_inline(helpers: &mut [HelperForm], name: &[u8]) {
+    let inline_constants = HashSet::from([name.to_vec()]);
+    force_constants_inline(helpers, &inline_constants);
+}
+
 fn capture_standalone_constants(
     standalone_constants: &mut HashSet<Vec<u8>>,
     depgraph: &FunctionDependencyGraph,
@@ -601,7 +622,7 @@ pub fn compile_module(
             &mut constant_culled_second_stage_program.helpers,
             standalone_constants,
         );
-
+        force_constant_inline(&mut constant_culled_second_stage_program.helpers, &fun_name);
         let compiled_result = Rc::new(compile_from_compileform(
             context,
             second_stage_opts.clone(),

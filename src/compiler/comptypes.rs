@@ -63,8 +63,9 @@ impl InlineFunction {
 pub enum Callable {
     /// The expression is a macro expansion (list, if etc.)
     CallMacro(Srcloc, SExp),
-    /// The expression invokes an env defun.
-    CallDefun(Srcloc, SExp),
+    /// The expression invokes an env defun or a constant containing a standalone program.
+    /// The bool indicates whether the target expects the caller's left env.
+    CallDefun(Srcloc, SExp, bool),
     /// The expression expands and inline function.
     CallInline(Srcloc, InlineFunction),
     /// The expression addresses a clvm primitive (such as a, c, f, =)
