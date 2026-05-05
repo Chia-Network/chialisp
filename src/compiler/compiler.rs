@@ -217,11 +217,9 @@ pub fn find_exported_helper(
 fn modernize_constants(helpers: &mut [HelperForm], standalone_constants: &HashSet<Vec<u8>>) {
     for h in helpers.iter_mut() {
         match h {
-            HelperForm::Defconstant(d) => {
+            HelperForm::Defconstant(d) if standalone_constants.contains(&d.name) => {
                 // Ensure that we upgrade the constant type.
-                if standalone_constants.contains(&d.name) {
-                    d.kind = ConstantKind::Module;
-                }
+                d.kind = ConstantKind::Module;
             }
             HelperForm::Defnamespace(ns) => {
                 modernize_constants(&mut ns.helpers, standalone_constants);
@@ -234,10 +232,8 @@ fn modernize_constants(helpers: &mut [HelperForm], standalone_constants: &HashSe
 fn force_constants_inline(helpers: &mut [HelperForm], inline_constants: &HashSet<Vec<u8>>) {
     for h in helpers.iter_mut() {
         match h {
-            HelperForm::Defconstant(d) => {
-                if inline_constants.contains(&d.name) {
-                    d.tabled = false;
-                }
+            HelperForm::Defconstant(d) if inline_constants.contains(&d.name) => {
+                d.tabled = false;
             }
             HelperForm::Defnamespace(ns) => {
                 force_constants_inline(&mut ns.helpers, inline_constants);
