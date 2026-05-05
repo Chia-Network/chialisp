@@ -1,6 +1,7 @@
 use js_sys;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::io;
 use std::mem::swap;
 use std::ops::DerefMut;
 use std::rc::Rc;
@@ -30,6 +31,8 @@ use chialisp::compiler::compiler::{
     extract_program_and_env, path_to_function, rewrite_in_program, DefaultCompilerOpts,
 };
 use chialisp::compiler::comptypes::{CompileErr, CompilerOpts};
+use chialisp::compiler::debug::armjit::cmd::{compile_to_arm_elf_from_source, Args as ArmElfArgs};
+use chialisp::compiler::debug::armjit::emu_stub::CallbackGdbStub;
 use chialisp::compiler::optimize::get_optimizer;
 use chialisp::compiler::prims;
 use chialisp::compiler::repl::Repl;
@@ -59,10 +62,15 @@ struct JsRepl {
     repl: RefCell<Repl>,
 }
 
+struct JsGdbStub {
+    stub: CallbackGdbStub,
+}
+
 thread_local! {
     static NEXT_ID: AtomicUsize = const { AtomicUsize::new(0) };
     static RUNNERS: RefCell<HashMap<i32, JsRunStep>> = RefCell::new(HashMap::new());
     static REPLS: RefCell<HashMap<i32, JsRepl>> = RefCell::new(HashMap::new());
+    static GDB_STUBS: RefCell<HashMap<i32, JsGdbStub>> = RefCell::new(HashMap::new());
 }
 
 pub fn get_next_id() -> i32 {
@@ -102,6 +110,46 @@ where
             swap(coll, &mut work_collection);
             if let Some(r_ref) = work_collection.get_mut(&this_id) {
                 result = f(r_ref);
+            }
+            work_collection
+        });
+    });
+    result
+}
+
+fn insert_gdb_stub(this_id: i32, stub: JsGdbStub) {
+    GDB_STUBS.with(|stubcell| {
+        stubcell.replace_with(|coll| {
+            let mut work_collection = HashMap::new();
+            swap(coll, &mut work_collection);
+            work_collection.insert(this_id, stub);
+            work_collection
+        });
+    });
+}
+
+fn remove_gdb_stub(this_id: i32) {
+    GDB_STUBS.with(|stubcell| {
+        stubcell.replace_with(|coll| {
+            let mut work_collection = HashMap::new();
+            swap(coll, &mut work_collection);
+            work_collection.remove(&this_id);
+            work_collection
+        });
+    });
+}
+
+fn with_gdb_stub<F, V>(this_id: i32, f: F) -> Option<V>
+where
+    F: FnOnce(&mut JsGdbStub) -> V,
+{
+    let mut result = None;
+    GDB_STUBS.with(|stubcell| {
+        stubcell.replace_with(|coll| {
+            let mut work_collection = HashMap::new();
+            swap(coll, &mut work_collection);
+            if let Some(stub_ref) = work_collection.get_mut(&this_id) {
+                result = Some(f(stub_ref));
             }
             work_collection
         });
@@ -323,6 +371,121 @@ pub fn compile(input_js: JsValue, filename_js: JsValue, search_paths_js: Vec<JsV
         Ok(_) => make_compile_output(&result_stream, &symbol_table),
         Err(e) => create_clvm_runner_err(e),
     }
+}
+
+// Compile a Chialisp program into an ARM ELF object with DWARF debug info.
+// Returns {"object_file": Uint8Array, "synthetic_source": "...", "symbols": {...}}
+// or {"error": ...}
+#[wasm_bindgen(js_name = compile_to_arm_elf)]
+pub fn compile_to_arm_elf_js(
+    input_js: JsValue,
+    filename_js: JsValue,
+    search_paths_js: Vec<JsValue>,
+    env_js: JsValue,
+) -> JsValue {
+    let input = input_js.as_string().unwrap();
+    let filename = filename_js.as_string().unwrap();
+    let env = env_js.as_string().unwrap();
+    let search_paths: Vec<String> = search_paths_js
+        .iter()
+        .map(|j| j.as_string().unwrap())
+        .collect();
+
+    let args = ArmElfArgs {
+        include: search_paths,
+        output: format!("{filename}.elf"),
+        filename,
+        env,
+    };
+
+    match compile_to_arm_elf_from_source(&args, input) {
+        Ok(result) => {
+            let array = js_sys::Array::new();
+            array.set(
+                0,
+                js_pair(
+                    JsValue::from_str("object_file"),
+                    js_sys::Uint8Array::from(result.object_file.as_slice()).into(),
+                ),
+            );
+            array.set(
+                1,
+                js_pair(
+                    JsValue::from_str("synthetic_source"),
+                    JsValue::from_str(&result.synthetic_source),
+                ),
+            );
+
+            let symbol_array = js_sys::Array::new();
+            for (idx, (k, v)) in result.symbol_table.iter().enumerate() {
+                symbol_array.set(
+                    idx as u32,
+                    js_pair(JsValue::from_str(k), JsValue::from_str(v)),
+                );
+            }
+            let symbol_object =
+                object_to_value(&js_sys::Object::from_entries(&symbol_array).unwrap());
+            array.set(2, js_pair(JsValue::from_str("symbols"), symbol_object));
+
+            object_to_value(&js_sys::Object::from_entries(&array).unwrap())
+        }
+        Err(e) => create_clvm_runner_err(e),
+    }
+}
+
+// Create a GDB remote stub for an ARM ELF object. The output callback receives
+// Uint8Array chunks that should be delivered to the GDB client.
+#[wasm_bindgen(js_name = create_gdb_stub)]
+pub fn create_gdb_stub_js(
+    object_file: Vec<u8>,
+    symbols: &js_sys::Object,
+    output_callback: &js_sys::Function,
+) -> JsValue {
+    let symbol_table = match read_string_to_string_map(symbols) {
+        Ok(s) => s,
+        Err(e) => {
+            return create_clvm_runner_err(format!("failed to read symbol table: {e}"));
+        }
+    };
+    let output_callback = output_callback.clone();
+    let output = Box::new(move |data: &[u8]| -> Result<(), io::Error> {
+        let args = js_sys::Array::new();
+        args.set(0, js_sys::Uint8Array::from(data).into());
+        output_callback
+            .apply(&JsValue::null(), &args)
+            .map(|_| ())
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{e:?}")))
+    });
+
+    match CallbackGdbStub::new(&object_file, Rc::new(symbol_table), output) {
+        Ok(stub) => {
+            let this_id = get_next_id();
+            insert_gdb_stub(this_id, JsGdbStub { stub });
+            JsValue::from(this_id)
+        }
+        Err(e) => create_clvm_runner_err(e),
+    }
+}
+
+#[wasm_bindgen(js_name = destroy_gdb_stub)]
+pub fn destroy_gdb_stub_js(stub_id: i32) {
+    remove_gdb_stub(stub_id);
+}
+
+#[wasm_bindgen(js_name = gdb_stub_incoming_data)]
+pub fn gdb_stub_incoming_data_js(stub_id: i32, data: Vec<u8>) -> JsValue {
+    with_gdb_stub(stub_id, |stub| stub.stub.incoming_data(&data))
+        .unwrap_or_else(|| Err("no such gdb stub".to_string()))
+        .map(|_| JsValue::null())
+        .unwrap_or_else(create_clvm_runner_err)
+}
+
+#[wasm_bindgen(js_name = gdb_stub_interrupt)]
+pub fn gdb_stub_interrupt_js(stub_id: i32) -> JsValue {
+    with_gdb_stub(stub_id, |stub| stub.stub.interrupt())
+        .unwrap_or_else(|| Err("no such gdb stub".to_string()))
+        .map(|_| JsValue::null())
+        .unwrap_or_else(create_clvm_runner_err)
 }
 
 fn find_function_hash(symbol_table: &HashMap<String, String>, f: &String) -> Option<String> {

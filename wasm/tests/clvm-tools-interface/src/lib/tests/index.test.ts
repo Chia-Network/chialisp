@@ -1,11 +1,22 @@
 import type { IProgram, ITuple } from '../../../../../pkg/clvm_tools_wasm.js';
 import type { G1Element } from 'bls-signatures';
 
+import { spawn } from 'child_process';
 import * as fs from 'fs';
+import * as net from 'net';
 import { resolve } from 'path';
 import * as assert from 'assert';
 import * as bls_loader from 'bls-signatures';
-const {h, t, Program} = require('../../../../../pkg/clvm_tools_wasm.js');
+const {
+    compile_to_arm_elf,
+    create_gdb_stub,
+    destroy_gdb_stub,
+    gdb_stub_incoming_data,
+    gdb_stub_interrupt,
+    h,
+    t,
+    Program
+} = require('../../../../../pkg/clvm_tools_wasm.js');
 
 it('Has BLS signatures support', async () => {
     const bls = await bls_loader.default();
@@ -17,6 +28,94 @@ it('Has BLS signatures support', async () => {
 it('Has the "h" function', async () => {
     const unhexed = h('21203031');
     assert.equal([0x21, 0x20, 0x30, 0x31].toString(), unhexed.toString());
+});
+
+it('Can compile chialisp to an ARM ELF object with DWARF symbols', async () => {
+    const program = '(mod (X) (+ X 7))';
+    const result = compile_to_arm_elf(program, 'wasm_arm_elf_test.clsp', [], '(5)');
+    const objectFile: Uint8Array = result.object_file;
+    const syntheticSource: string = result.synthetic_source;
+
+    assert.ok(objectFile instanceof Uint8Array);
+    assert.equal(Buffer.from(objectFile.subarray(0, 4)).toString('hex'), '7f454c46');
+
+    const objectText = Buffer.from(objectFile).toString('latin1');
+    assert.ok(objectText.includes('.debug_info'));
+    assert.ok(objectText.includes('.debug_line'));
+    assert.ok(objectText.includes('.debug_str'));
+    assert.ok(objectText.includes('wasm_arm_elf_test.clsp'));
+    assert.ok(syntheticSource.includes('=>'));
+});
+
+it('Can run the ARM GDB stub from wasm', async () => {
+    const workspaceRoot = resolve(__dirname, '../../../../../../');
+    const programPath = resolve(workspaceRoot, 'resources/tests/simple_deinline_case_23.clsp');
+    const program = fs.readFileSync(programPath, 'utf-8');
+    const result = compile_to_arm_elf(program, 'resources/tests/simple_deinline_case_23.clsp', [], '(5)');
+    assert.ifError(result.error);
+
+    const objectFile: Uint8Array = result.object_file;
+    fs.writeFileSync(resolve(workspaceRoot, 'sdc.elf'), Buffer.from(objectFile));
+
+    let stubId: number | undefined;
+    let socket: net.Socket | undefined;
+    const server = net.createServer((client) => {
+        socket = client;
+        stubId = create_gdb_stub(objectFile, result.symbols, (data: Uint8Array) => {
+            client.write(Buffer.from(data));
+        });
+
+        client.on('data', (data) => {
+            assert.ok(stubId !== undefined);
+            const response = gdb_stub_incoming_data(stubId, new Uint8Array(data));
+            assert.ifError(response && response.error);
+        });
+        client.on('end', () => {
+            if (stubId !== undefined) {
+                gdb_stub_interrupt(stubId);
+            }
+        });
+    });
+
+    try {
+        await new Promise<void>((resolveListen) => {
+            server.listen(0, '127.0.0.1', () => resolveListen());
+        });
+        const address = server.address();
+        assert.ok(address && typeof address !== 'string');
+
+        const output = await new Promise<string>((resolveRun, rejectRun) => {
+            const child = spawn(
+                resolve(workspaceRoot, 'resources/tests/test_sdc_gdb.sh'),
+                [`127.0.0.1:${address.port}`],
+                { cwd: workspaceRoot }
+            );
+            let collected = '';
+            child.stdout.on('data', (data) => {
+                collected += data.toString();
+            });
+            child.stderr.on('data', (data) => {
+                collected += data.toString();
+            });
+            child.on('error', rejectRun);
+            child.on('close', (code) => {
+                if (code === 0) {
+                    resolveRun(collected);
+                } else {
+                    rejectRun(new Error(`test_sdc_gdb.sh exited with ${code}:\n${collected}`));
+                }
+            });
+        });
+
+        assert.ok(output.includes('CLVM: 6000030'));
+    } finally {
+        socket?.destroy();
+        await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+        if (stubId !== undefined) {
+            destroy_gdb_stub(stubId);
+        }
+        fs.rmSync(resolve(workspaceRoot, 'sdc.elf'), { force: true });
+    }
 });
 
 it('Converts uint8arrays', async () => {

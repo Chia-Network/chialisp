@@ -167,7 +167,7 @@ pub fn improve_presentation(a: Rc<SExp>, flags: u32) -> Rc<SExp> {
     }
 }
 
-fn is_print_request(a: &SExp) -> Option<(Srcloc, Rc<SExp>)> {
+pub fn is_print_request(a: &SExp) -> Option<(Srcloc, Rc<SExp>)> {
     if let SExp::Cons(l, f, r) = a {
         if &print_atom() == f.borrow() {
             return Some((l.clone(), humanize(r.clone())));

@@ -67,7 +67,7 @@ fn produce_valid_cse_regression_merge_test<R: Rng>(
 
     Some(CompileForm {
         loc: srcloc.clone(),
-        args: args,
+        args,
         helpers: vec![function],
         include_forms: vec![],
         exp: Rc::new(BodyForm::Call(

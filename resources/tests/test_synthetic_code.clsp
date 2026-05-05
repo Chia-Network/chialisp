@@ -1,0 +1,5 @@
+(mod ARGS
+  (include *standard-cl-23*)
+  (defun F (A B C D E) (a (list (+ A 1) B C D) E))
+  (F &rest ARGS)
+  )

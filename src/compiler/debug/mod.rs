@@ -7,6 +7,8 @@ use crate::classic::clvm::__type_compatibility__::{sha256, Bytes, BytesFromType}
 use crate::compiler::sexp::SExp;
 use crate::util::u8_from_number;
 
+pub mod armjit;
+
 /// Given an SExp and a transformation, make a map of the transformed subtrees of
 /// the given SExp in code that's indexed by treehash.  This will merge equivalent
 /// subtrees but the uses to which it's put will generally work well enough.
