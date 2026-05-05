@@ -507,7 +507,7 @@ impl Preprocessor {
                 name: name.to_vec(),
                 kw: None,
                 nl: srcloc.clone(),
-                tabled: true,
+                tabled: false,
                 body: Rc::new(BodyForm::Quoted(s)),
             })
             .to_sexp()
