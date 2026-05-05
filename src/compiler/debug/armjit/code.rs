@@ -1401,6 +1401,114 @@ fn dequote(a: Rc<SExp>) -> Option<Rc<SExp>> {
     None
 }
 
+fn write_u16_le(buf: &mut [u8], offset: usize, value: u16) {
+    buf[offset] = (value & 0xff) as u8;
+    buf[offset + 1] = (value >> 8) as u8;
+}
+
+fn read_u32_le(buf: &[u8], offset: usize) -> u32 {
+    (buf[offset] as u32)
+        | ((buf[offset + 1] as u32) << 8)
+        | ((buf[offset + 2] as u32) << 16)
+        | ((buf[offset + 3] as u32) << 24)
+}
+
+fn mark_elf_executable(buf: &mut [u8], entry: u32) -> Result<(), String> {
+    const ELF_MAGIC: &[u8] = b"\x7fELF";
+    const EI_CLASS: usize = 4;
+    const EI_DATA: usize = 5;
+    const ELFCLASS32: u8 = 1;
+    const ELFDATA2LSB: u8 = 1;
+    const E_TYPE: usize = 16;
+    const E_ENTRY: usize = 24;
+    const ET_EXEC: u16 = 2;
+
+    if buf.len() < 52
+        || &buf[..ELF_MAGIC.len()] != ELF_MAGIC
+        || buf[EI_CLASS] != ELFCLASS32
+        || buf[EI_DATA] != ELFDATA2LSB
+    {
+        return Err("expected 32-bit little-endian ELF output".to_string());
+    }
+
+    write_u16_le(buf, E_TYPE, ET_EXEC);
+    write_u32(buf, E_ENTRY, entry);
+    Ok(())
+}
+
+fn add_elf_load_segment(buf: &mut Vec<u8>) -> Result<(), String> {
+    const E_PHOFF: usize = 28;
+    const E_SHOFF: usize = 32;
+    const E_PHENTSIZE: usize = 42;
+    const E_PHNUM: usize = 44;
+    const E_SHENTSIZE: usize = 46;
+    const E_SHNUM: usize = 48;
+    const SH_ADDR: usize = 12;
+    const SH_OFFSET: usize = 16;
+    const SH_SIZE: usize = 20;
+    const SH_FLAGS: usize = 8;
+    const SHF_ALLOC: u32 = 2;
+    const PT_LOAD: u32 = 1;
+    const PF_X: u32 = 1;
+    const PF_W: u32 = 2;
+    const PF_R: u32 = 4;
+
+    if buf.len() < 52 {
+        return Err("ELF header too short".to_string());
+    }
+
+    let shoff = read_u32_le(buf, E_SHOFF) as usize;
+    let shentsize = u16::from_le_bytes([buf[E_SHENTSIZE], buf[E_SHENTSIZE + 1]]) as usize;
+    let shnum = u16::from_le_bytes([buf[E_SHNUM], buf[E_SHNUM + 1]]) as usize;
+    let phentsize = u16::from_le_bytes([buf[E_PHENTSIZE], buf[E_PHENTSIZE + 1]]) as usize;
+    if phentsize != 32 {
+        return Err(format!(
+            "expected ELF32 program header size 32, got {phentsize}"
+        ));
+    }
+
+    let mut min_addr = u32::MAX;
+    let mut max_addr = 0_u32;
+    let mut min_offset = u32::MAX;
+    let mut max_offset = 0_u32;
+    for section_idx in 0..shnum {
+        let section = shoff + section_idx * shentsize;
+        if section + SH_SIZE + 4 > buf.len() {
+            return Err("section header table extends past ELF buffer".to_string());
+        }
+        let flags = read_u32_le(buf, section + SH_FLAGS);
+        if flags & SHF_ALLOC == 0 {
+            continue;
+        }
+
+        let addr = read_u32_le(buf, section + SH_ADDR);
+        let offset = read_u32_le(buf, section + SH_OFFSET);
+        let size = read_u32_le(buf, section + SH_SIZE);
+        min_addr = min_addr.min(addr);
+        max_addr = max_addr.max(addr + size);
+        min_offset = min_offset.min(offset);
+        max_offset = max_offset.max(offset + size);
+    }
+
+    if min_addr == u32::MAX {
+        return Err("no allocatable sections found for PT_LOAD".to_string());
+    }
+
+    let phoff = buf.len();
+    buf.resize(phoff + phentsize, 0);
+    write_u32(buf, phoff, PT_LOAD);
+    write_u32(buf, phoff + 4, min_offset);
+    write_u32(buf, phoff + 8, min_addr);
+    write_u32(buf, phoff + 12, min_addr);
+    write_u32(buf, phoff + 16, max_offset - min_offset);
+    write_u32(buf, phoff + 20, max_addr - min_addr);
+    write_u32(buf, phoff + 24, PF_R | PF_W | PF_X);
+    write_u32(buf, phoff + 28, 0x1000);
+    write_u32(buf, E_PHOFF, phoff as u32);
+    write_u16_le(buf, E_PHNUM, 1);
+    Ok(())
+}
+
 pub fn swi_print(register: usize, label: usize) -> usize {
     SWI_PRINT_EXPR | register << 4 | label << 8
 }
@@ -2216,6 +2324,7 @@ impl Program {
         }
 
         let mut result_buf = obj.emit().map_err(|e| format!("obj emit {e:?}"))?;
+        mark_elf_executable(&mut result_buf, self.target_addr)?;
 
         // Patch up
         eprintln!("reload elf");
@@ -2232,6 +2341,7 @@ impl Program {
             eprintln!("section {i} target {target:x} value {value:x}");
             write_u32(&mut result_buf, target, value);
         }
+        add_elf_load_segment(&mut result_buf)?;
 
         eprintln!("code succeeded");
         Ok(ElfObject {
