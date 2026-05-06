@@ -13,6 +13,7 @@ use crate::compiler::comptypes::{
     HelperForm,
 };
 use crate::compiler::dialect::AcceptedDialect;
+use crate::compiler::diskcache::function_cache_path;
 use crate::compiler::frontend::frontend;
 use crate::compiler::optimize::above22::Strategy23;
 use crate::compiler::optimize::depgraph::{DepgraphOptions, FunctionDependencyGraph};
@@ -405,14 +406,11 @@ fn test_codegen_function_cache() {
     assert_ne!(diffcc_h, old_h);
 }
 
-/// The cache key does NOT include the dialect or module_phase from opts; it only
-/// captures the helper s-expression, depended-on forms, and the filtered env shape.
-/// This is safe today because Funcache is scoped to a single deinline pass where
-/// dialect and module_phase are constant. This test documents that contract: the same
-/// helper compiled via two fresh Funcaches with different dialects produces different
-/// CLVM, proving the cache must not be shared across dialect boundaries.
+/// The cache key includes compile settings that can affect generated defun code.
+/// This is required now that function cache entries can be reused from disk across
+/// independent compiler invocations.
 #[test]
-fn funcache_key_same_across_dialects_different_output() {
+fn funcache_key_differs_across_dialects() {
     let program_src = "(mod (X) (defun F (Y) (+ Y 1)) (F X))";
 
     let make_opts = |stepping: i32, strict: bool| -> Rc<dyn CompilerOpts> {
@@ -468,14 +466,11 @@ fn funcache_key_same_across_dialects_different_output() {
     let cache_a = &ctx_a.funcache.as_ref().unwrap().function_outputs;
     let cache_b = &ctx_b.funcache.as_ref().unwrap().function_outputs;
 
-    // The cache keys should be the same because get_function_cache_key only hashes
-    // (helper.to_sexp(), filtered_env, depended_on_forms) -- not dialect/opts.
-    // This documents that the Funcache must not be shared across dialect boundaries.
     assert_eq!(cache_a.len(), cache_b.len());
     for k in cache_a.keys() {
         assert!(
-            cache_b.contains_key(k),
-            "cache key should be identical across dialects (documents that dialect is not in the preimage)"
+            !cache_b.contains_key(k),
+            "cache key should differ across dialects so persisted entries do not cross settings"
         );
     }
 
@@ -582,6 +577,102 @@ fn funcache_cold_vs_warm_roundtrip() {
             decode_string(&cold_entry.name)
         );
     }
+}
+
+#[test]
+fn funcache_reuses_entries_from_disk() {
+    let orig_opts: Rc<dyn CompilerOpts> =
+        Rc::new(DefaultCompilerOpts::new(&"*disk-roundtrip*".to_string()));
+    let opts: Rc<dyn CompilerOpts> = orig_opts
+        .set_search_paths(&["resources/tests/module".to_string(), ".".to_string()])
+        .set_stdenv(false)
+        .set_dialect(AcceptedDialect {
+            stepping: Some(25),
+            strict: true,
+            int_fix: true,
+            extra_numeric_constants: false,
+        });
+    let fs_opts = TestModuleCompilerOpts::new(opts.clone());
+    let opts: Rc<dyn CompilerOpts> = Rc::new(fs_opts.clone());
+    let (_, content) = opts
+        .read_new_file(
+            opts.filename(),
+            "resources/tests/module/cache-test-1.clsp".to_string(),
+        )
+        .expect("read");
+    let parsed =
+        parse_sexp(Srcloc::start(&opts.filename()), content.iter().cloned()).expect("parse");
+    let program = frontend(opts.clone(), &parsed).expect("frontend");
+    let (mut compileform, exports) = if let FrontendOutput::Module(cf, ex) = program {
+        (cf, ex)
+    } else {
+        panic!("expected Module");
+    };
+    (compileform.args, compileform.exp) = if let Export::MainProgram(ep) = &exports[0] {
+        (ep.args.clone(), ep.expr.clone())
+    } else {
+        panic!("expected MainProgram export");
+    };
+    compileform = rename_args_compileform(&compileform).unwrap();
+    let desugared = do_desugar(opts.clone(), &compileform).unwrap();
+    let depgraph = FunctionDependencyGraph::new_with_options(
+        &desugared,
+        DepgraphOptions {
+            with_constants: true,
+        },
+    );
+    let runner = Rc::new(DefaultProgramRunner::new());
+
+    let mut cold = BasicCompileContext::new(
+        Allocator::new(),
+        runner.clone(),
+        HashMap::new(),
+        Box::new(Strategy23 {}),
+    );
+    cold.funcache = Some(Funcache::default());
+    let out_cold =
+        codegen(&mut cold, opts.clone(), Some(&depgraph), &desugared).expect("cold codegen");
+    let function_cache_files: Vec<String> = fs_opts
+        .list_written_files()
+        .into_iter()
+        .filter(|path| path.starts_with(".chialisp/function-cache/"))
+        .collect();
+    assert!(
+        !function_cache_files.is_empty(),
+        "cold codegen should persist function cache entries"
+    );
+    for key in cold
+        .funcache
+        .as_ref()
+        .expect("cold cache")
+        .function_outputs
+        .keys()
+    {
+        assert!(
+            function_cache_files.contains(&function_cache_path(key)),
+            "persisted cache files should be named from the sha256tree hash of the function cache key"
+        );
+    }
+
+    let mut warm = BasicCompileContext::new(
+        Allocator::new(),
+        runner,
+        HashMap::new(),
+        Box::new(Strategy23 {}),
+    );
+    warm.funcache = Some(Funcache::default());
+    let out_warm =
+        codegen(&mut warm, opts.clone(), Some(&depgraph), &desugared).expect("warm codegen");
+    let warm_cache = warm.funcache.as_ref().expect("warm cache");
+    assert!(
+        warm_cache.hits > 0,
+        "warm codegen should count persisted function cache hits"
+    );
+    assert_eq!(
+        warm_cache.misses, 0,
+        "warm codegen should not miss when all persisted entries exist"
+    );
+    assert_eq!(out_cold.to_string(), out_warm.to_string());
 }
 
 /// `Funcache` is only consulted when a `FunctionDependencyGraph` is passed into `codegen`.
