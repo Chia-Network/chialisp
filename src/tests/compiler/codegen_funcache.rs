@@ -555,6 +555,8 @@ fn funcache_cold_vs_warm_roundtrip() {
     );
     ctx_warm.funcache = Some(Funcache {
         function_outputs: cold_cache.clone(),
+        hits: 0,
+        misses: 0,
     });
     let out_warm =
         codegen(&mut ctx_warm, opts.clone(), Some(&depgraph), &desugared).expect("codegen warm");
