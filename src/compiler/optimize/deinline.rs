@@ -23,6 +23,16 @@ struct FuncacheSnapshot {
     entries: usize,
 }
 
+struct DeinlineDiagnostic<'a> {
+    opts: Rc<dyn CompilerOpts>,
+    compileform: &'a CompileForm,
+    elapsed: Duration,
+    cache_before: FuncacheSnapshot,
+    cache_after: FuncacheSnapshot,
+    initial_metric: Option<u64>,
+    final_metric: Option<u64>,
+}
+
 fn funcache_snapshot(funcache: Option<&Funcache>) -> FuncacheSnapshot {
     funcache.map_or_else(FuncacheSnapshot::default, |fc| FuncacheSnapshot {
         hits: fc.hits,
@@ -67,32 +77,35 @@ fn format_hit_percent(hits: u64, misses: u64) -> String {
     }
 }
 
-fn write_deinline_diagnostic(
-    path: Option<&str>,
-    opts: Rc<dyn CompilerOpts>,
-    compileform: &CompileForm,
-    elapsed: Duration,
-    cache_before: FuncacheSnapshot,
-    cache_after: FuncacheSnapshot,
-    initial_metric: Option<u64>,
-    final_metric: Option<u64>,
-) {
+fn write_deinline_diagnostic(path: Option<&str>, diagnostic: DeinlineDiagnostic<'_>) {
     let Some(path) = path else {
         return;
     };
 
-    let cache_hits = cache_after.hits.saturating_sub(cache_before.hits);
-    let cache_misses = cache_after.misses.saturating_sub(cache_before.misses);
+    let cache_hits = diagnostic
+        .cache_after
+        .hits
+        .saturating_sub(diagnostic.cache_before.hits);
+    let cache_misses = diagnostic
+        .cache_after
+        .misses
+        .saturating_sub(diagnostic.cache_before.misses);
     let cache_attempts = cache_hits + cache_misses;
-    let cache_entries_added = cache_after.entries.saturating_sub(cache_before.entries);
-    let module_phase = opts
+    let cache_entries_added = diagnostic
+        .cache_after
+        .entries
+        .saturating_sub(diagnostic.cache_before.entries);
+    let module_phase = diagnostic
+        .opts
         .module_phase()
         .map(|phase| format!("{phase:?}"))
         .unwrap_or_else(|| "program".to_string());
-    let initial_metric = initial_metric
+    let initial_metric = diagnostic
+        .initial_metric
         .map(|m| m.to_string())
         .unwrap_or_else(|| "n/a".to_string());
-    let final_metric = final_metric
+    let final_metric = diagnostic
+        .final_metric
         .map(|m| m.to_string())
         .unwrap_or_else(|| "n/a".to_string());
 
@@ -122,17 +135,17 @@ fn write_deinline_diagnostic(
 
     let row = format!(
         "{}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-        diagnostics_field(&opts.filename()),
+        diagnostics_field(&diagnostic.opts.filename()),
         diagnostics_field(&module_phase),
-        diagnostics_field(&compileform.loc.to_string()),
-        elapsed.as_secs_f64() * 1000.0,
+        diagnostics_field(&diagnostic.compileform.loc.to_string()),
+        diagnostic.elapsed.as_secs_f64() * 1000.0,
         cache_hits,
         cache_misses,
         cache_attempts,
         format_hit_percent(cache_hits, cache_misses),
         cache_entries_added,
-        cache_after.entries,
-        compileform.helpers.len(),
+        diagnostic.cache_after.entries,
+        diagnostic.compileform.helpers.len(),
         initial_metric,
         final_metric
     );
@@ -193,13 +206,15 @@ pub fn deinline_opt(
             let cache_snapshot = funcache_snapshot(context.funcache.as_ref());
             write_deinline_diagnostic(
                 diagnostics_path.as_deref(),
-                opts,
-                &compileform,
-                diagnostics_started_at.elapsed(),
-                cache_snapshot,
-                cache_snapshot,
-                None,
-                None,
+                DeinlineDiagnostic {
+                    opts,
+                    compileform: &compileform,
+                    elapsed: diagnostics_started_at.elapsed(),
+                    cache_before: cache_snapshot,
+                    cache_after: cache_snapshot,
+                    initial_metric: None,
+                    final_metric: None,
+                },
             );
         }
         return Ok(compileform);
@@ -425,13 +440,15 @@ pub fn deinline_opt(
 
     write_deinline_diagnostic(
         diagnostics_path.as_deref(),
-        opts,
-        &best_compileform,
-        diagnostics_started_at.elapsed(),
-        cache_before,
-        funcache_snapshot(context.funcache.as_ref()),
-        Some(initial_metric),
-        Some(metric),
+        DeinlineDiagnostic {
+            opts,
+            compileform: &best_compileform,
+            elapsed: diagnostics_started_at.elapsed(),
+            cache_before,
+            cache_after: funcache_snapshot(context.funcache.as_ref()),
+            initial_metric: Some(initial_metric),
+            final_metric: Some(metric),
+        },
     );
 
     Ok(best_compileform)
