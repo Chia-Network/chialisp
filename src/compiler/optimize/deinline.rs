@@ -109,7 +109,7 @@ fn write_deinline_diagnostic(
 
     if write_header {
         let header = concat!(
-            "program\tmodule_phase\tcompileform_loc\thelapsed_ms\t",
+            "program\tmodule_phase\tcompileform_loc\telapsed_ms\t",
             "cache_hits\tcache_misses\tcache_attempts\tcache_hit_percent\t",
             "cache_entries_added\tcache_entries_total\thelper_count\t",
             "initial_metric\tfinal_metric\n"
