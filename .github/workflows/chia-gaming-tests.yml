@@ -72,7 +72,35 @@ jobs:
         ./tools/run-clsp-tests.sh
         echo deinline diagnostics
         if [ -f deinline-diagnostics.tsv ]; then
-          cat deinline-diagnostics.tsv
+          python3 - <<'PY'
+        import csv
+        from pathlib import Path
+
+        path = Path("deinline-diagnostics.tsv")
+        with path.open(newline="") as diagnostics:
+            rows = list(csv.DictReader(diagnostics, delimiter="\t"))
+
+        print(f"deinline diagnostic rows: {len(rows)}")
+        interesting = [
+            row
+            for row in rows
+            if int(row["cache_attempts"]) > 0 or float(row["elapsed_ms"]) >= 1.0
+        ]
+        interesting.sort(key=lambda row: float(row["elapsed_ms"]), reverse=True)
+        for row in interesting[:50]:
+            print(
+                "\t".join(
+                    [
+                        row["elapsed_ms"],
+                        row["cache_hit_percent"],
+                        row["cache_attempts"],
+                        row["helper_count"],
+                        row["program"],
+                        row["compileform_loc"],
+                    ]
+                )
+            )
+        PY
         else
           echo "deinline-diagnostics.tsv was not generated"
         fi

@@ -13,6 +13,7 @@ use crate::compiler::{
 };
 
 const DEINLINE_DIAGNOSTICS_ENV: &str = "CHIALISP_DEINLINE_DIAGNOSTICS";
+const DEINLINE_DIAGNOSTICS_SKIPPED_ENV: &str = "CHIALISP_DEINLINE_DIAGNOSTICS_SKIPPED";
 const DEINLINE_DIAGNOSTICS_FILE: &str = "deinline-diagnostics.tsv";
 
 #[derive(Clone, Copy, Default)]
@@ -41,6 +42,12 @@ fn deinline_diagnostics_path() -> Option<String> {
     } else {
         Some(path)
     }
+}
+
+fn write_skipped_deinline_diagnostics() -> bool {
+    env::var(DEINLINE_DIAGNOSTICS_SKIPPED_ENV)
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 fn diagnostics_field(value: &str) -> String {
@@ -182,17 +189,19 @@ pub fn deinline_opt(
 
     // Short circuit return: no helpers.
     if compileform.helpers.is_empty() {
-        let cache_snapshot = funcache_snapshot(context.funcache.as_ref());
-        write_deinline_diagnostic(
-            diagnostics_path.as_deref(),
-            opts,
-            &compileform,
-            diagnostics_started_at.elapsed(),
-            cache_snapshot,
-            cache_snapshot,
-            None,
-            None,
-        );
+        if write_skipped_deinline_diagnostics() {
+            let cache_snapshot = funcache_snapshot(context.funcache.as_ref());
+            write_deinline_diagnostic(
+                diagnostics_path.as_deref(),
+                opts,
+                &compileform,
+                diagnostics_started_at.elapsed(),
+                cache_snapshot,
+                cache_snapshot,
+                None,
+                None,
+            );
+        }
         return Ok(compileform);
     }
 
