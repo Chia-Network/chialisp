@@ -1322,12 +1322,24 @@ fn codegen_(
                     .filter(|_| context.funcache.is_some())
                     .map(|d| get_function_cache_key(compiler, d, h));
 
-                if let Some(code) = cache_key.as_ref().and_then(|key| {
-                    context
-                        .funcache
-                        .as_ref()
-                        .and_then(|c| c.function_outputs.get(key).map(|e| e.code.clone()))
-                }) {
+                let cached_code = if let (Some(key), Some(fc)) =
+                    (cache_key.as_ref(), context.funcache.as_mut())
+                {
+                    match fc.function_outputs.get(key).map(|e| e.code.clone()) {
+                        Some(code) => {
+                            fc.hits += 1;
+                            Some(code)
+                        }
+                        None => {
+                            fc.misses += 1;
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(code) = cached_code {
                     if !allow_redef {
                         check_already_present(code.clone())?;
                     }

@@ -105,6 +105,8 @@ pub struct FunctionEntry {
 #[derive(Default)]
 pub struct Funcache {
     pub function_outputs: HashMap<Vec<u8>, FunctionEntry>,
+    pub hits: u64,
+    pub misses: u64,
 }
 
 /// An object which represents the standard set of mutable items passed down the

@@ -49,11 +49,14 @@ jobs:
         ./tools/check-build-deps.sh --install --yes
 
     - name: Rebuild chia-gaming chialisp
+      env:
+        CHIALISP_DEINLINE_DIAGNOSTICS: deinline-diagnostics.tsv
       run: |
         cp support/chia-gaming-build.rs chia-gaming/build.rs
         cp support/chia-gaming-run-clsp-tests.sh chia-gaming/tools/run-clsp-tests.sh
         chmod +x chia-gaming/tools/run-clsp-tests.sh
         cd chia-gaming
+        rm -f deinline-diagnostics.tsv
         for file in $(find clsp -name \*.hex) ; do rm $file ; done
         cargo build
         echo generated hex files
@@ -62,6 +65,14 @@ jobs:
         rm -rf build.rs
 
     - name: Run chia-gaming chialisp tests
+      env:
+        CHIALISP_DEINLINE_DIAGNOSTICS: deinline-diagnostics.tsv
       run: |
         cd chia-gaming
         ./tools/run-clsp-tests.sh
+        echo deinline diagnostics
+        if [ -f deinline-diagnostics.tsv ]; then
+          cat deinline-diagnostics.tsv
+        else
+          echo "deinline-diagnostics.tsv was not generated"
+        fi

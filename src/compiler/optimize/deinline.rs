@@ -1,5 +1,9 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::env;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use crate::compiler::codegen::codegen;
 use crate::compiler::optimize::depgraph::{DepgraphKind, DepgraphOptions, FunctionDependencyGraph};
@@ -7,6 +11,128 @@ use crate::compiler::optimize::{sexp_scale, SyntheticType};
 use crate::compiler::{
     BasicCompileContext, CompileErr, CompileForm, CompilerOpts, Funcache, HelperForm,
 };
+
+const DEINLINE_DIAGNOSTICS_ENV: &str = "CHIALISP_DEINLINE_DIAGNOSTICS";
+const DEINLINE_DIAGNOSTICS_FILE: &str = "deinline-diagnostics.tsv";
+
+#[derive(Clone, Copy, Default)]
+struct FuncacheSnapshot {
+    hits: u64,
+    misses: u64,
+    entries: usize,
+}
+
+fn funcache_snapshot(funcache: Option<&Funcache>) -> FuncacheSnapshot {
+    funcache.map_or_else(FuncacheSnapshot::default, |fc| FuncacheSnapshot {
+        hits: fc.hits,
+        misses: fc.misses,
+        entries: fc.function_outputs.len(),
+    })
+}
+
+fn deinline_diagnostics_path() -> Option<String> {
+    let path = env::var(DEINLINE_DIAGNOSTICS_ENV).ok()?;
+    if path == "0" || path.eq_ignore_ascii_case("false") {
+        return None;
+    }
+
+    if path.is_empty() || path == "1" || path.eq_ignore_ascii_case("true") {
+        Some(DEINLINE_DIAGNOSTICS_FILE.to_string())
+    } else {
+        Some(path)
+    }
+}
+
+fn diagnostics_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+fn format_hit_percent(hits: u64, misses: u64) -> String {
+    let attempts = hits + misses;
+    if attempts == 0 {
+        "0.00".to_string()
+    } else {
+        format!("{:.2}", hits as f64 * 100.0 / attempts as f64)
+    }
+}
+
+fn write_deinline_diagnostic(
+    path: Option<&str>,
+    opts: Rc<dyn CompilerOpts>,
+    compileform: &CompileForm,
+    elapsed: Duration,
+    cache_before: FuncacheSnapshot,
+    cache_after: FuncacheSnapshot,
+    initial_metric: Option<u64>,
+    final_metric: Option<u64>,
+) {
+    let Some(path) = path else {
+        return;
+    };
+
+    let cache_hits = cache_after.hits.saturating_sub(cache_before.hits);
+    let cache_misses = cache_after.misses.saturating_sub(cache_before.misses);
+    let cache_attempts = cache_hits + cache_misses;
+    let cache_entries_added = cache_after.entries.saturating_sub(cache_before.entries);
+    let module_phase = opts
+        .module_phase()
+        .map(|phase| format!("{phase:?}"))
+        .unwrap_or_else(|| "program".to_string());
+    let initial_metric = initial_metric
+        .map(|m| m.to_string())
+        .unwrap_or_else(|| "n/a".to_string());
+    let final_metric = final_metric
+        .map(|m| m.to_string())
+        .unwrap_or_else(|| "n/a".to_string());
+
+    let write_header = std::fs::metadata(path)
+        .map(|metadata| metadata.len() == 0)
+        .unwrap_or(true);
+    let mut file = match OpenOptions::new().create(true).append(true).open(path) {
+        Ok(file) => file,
+        Err(e) => {
+            eprintln!("failed to open deinline diagnostics file {path}: {e}");
+            return;
+        }
+    };
+
+    if write_header {
+        let header = concat!(
+            "program\tmodule_phase\tcompileform_loc\thelapsed_ms\t",
+            "cache_hits\tcache_misses\tcache_attempts\tcache_hit_percent\t",
+            "cache_entries_added\tcache_entries_total\thelper_count\t",
+            "initial_metric\tfinal_metric\n"
+        );
+        if let Err(e) = file.write_all(header.as_bytes()) {
+            eprintln!("failed to write deinline diagnostics header to {path}: {e}");
+            return;
+        }
+    }
+
+    let row = format!(
+        "{}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+        diagnostics_field(&opts.filename()),
+        diagnostics_field(&module_phase),
+        diagnostics_field(&compileform.loc.to_string()),
+        elapsed.as_secs_f64() * 1000.0,
+        cache_hits,
+        cache_misses,
+        cache_attempts,
+        format_hit_percent(cache_hits, cache_misses),
+        cache_entries_added,
+        cache_after.entries,
+        compileform.helpers.len(),
+        initial_metric,
+        final_metric
+    );
+    if let Err(e) = file.write_all(row.as_bytes()) {
+        eprintln!("failed to write deinline diagnostics row to {path}: {e}");
+    }
+}
 
 // Find the roots for the given function.
 fn find_roots(
@@ -51,14 +177,29 @@ pub fn deinline_opt(
     opts: Rc<dyn CompilerOpts>,
     mut compileform: CompileForm,
 ) -> Result<CompileForm, CompileErr> {
+    let diagnostics_path = deinline_diagnostics_path();
+    let diagnostics_started_at = Instant::now();
+
     // Short circuit return: no helpers.
     if compileform.helpers.is_empty() {
+        let cache_snapshot = funcache_snapshot(context.funcache.as_ref());
+        write_deinline_diagnostic(
+            diagnostics_path.as_deref(),
+            opts,
+            &compileform,
+            diagnostics_started_at.elapsed(),
+            cache_snapshot,
+            cache_snapshot,
+            None,
+            None,
+        );
         return Ok(compileform);
     }
 
     if context.funcache.is_none() {
         context.funcache = Some(Funcache::default());
     }
+    let cache_before = funcache_snapshot(context.funcache.as_ref());
 
     let is_module_compile = opts.module_phase().is_some();
     let depgraph = if is_module_compile {
@@ -75,6 +216,7 @@ pub fn deinline_opt(
     let mut best_compileform = compileform.clone();
     let generated_program = codegen(context, opts.clone(), Some(&depgraph), &best_compileform)?;
     let mut metric = sexp_scale(&generated_program);
+    let initial_metric = metric;
 
     let flip_helper = |h: &mut HelperForm| {
         if let HelperForm::Defun(inline, defun) = h {
@@ -271,6 +413,17 @@ pub fn deinline_opt(
             }
         }
     }
+
+    write_deinline_diagnostic(
+        diagnostics_path.as_deref(),
+        opts,
+        &best_compileform,
+        diagnostics_started_at.elapsed(),
+        cache_before,
+        funcache_snapshot(context.funcache.as_ref()),
+        Some(initial_metric),
+        Some(metric),
+    );
 
     Ok(best_compileform)
 }
