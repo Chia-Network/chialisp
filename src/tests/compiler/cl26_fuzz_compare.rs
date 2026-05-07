@@ -632,7 +632,11 @@ impl Rule<Cl26ProgramFuzz> for AssignTailFinalRule {
             return Ok(None);
         }
 
-        Ok(Some(placeholder(&state.srcloc, idx, Cl26Tag::Tail(scope))))
+        Ok(Some(cons(
+            &state.srcloc,
+            placeholder(&state.srcloc, idx, Cl26Tag::Tail(scope)),
+            nil(&state.srcloc),
+        )))
     }
 }
 
