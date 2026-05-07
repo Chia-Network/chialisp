@@ -407,13 +407,19 @@ impl Rule<Cl26ProgramFuzz> for ProgramDefconstRule {
         let name = state.fresh_const();
         let mut next_scope = scope.clone();
         next_scope.consts.push(name.clone());
+        let value_scope = Scope {
+            depth: 0,
+            vars: Vec::new(),
+            funcs: Vec::new(),
+            consts: scope.consts.clone(),
+        };
         let loc = &state.srcloc;
         let helper = list(
             loc,
             &[
                 atom(loc, "defconst"),
                 atom(loc, &name),
-                placeholder(loc, idx, Cl26Tag::Tail(scope.child().without_vars())),
+                placeholder(loc, idx, Cl26Tag::Tail(value_scope)),
             ],
         );
         let next_program = placeholder(loc, idx + 1, Cl26Tag::Program(next_scope));
