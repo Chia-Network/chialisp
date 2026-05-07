@@ -319,16 +319,16 @@ impl Rule<Cl26ProgramFuzz> for ProgramDefunRule {
 
         let func = state.fresh_func();
         let arg = state.fresh_var();
-        let mut funcs_with_self = scope.funcs.clone();
-        funcs_with_self.push(func.clone());
+        let mut funcs_for_next_forms = scope.funcs.clone();
+        funcs_for_next_forms.push(func.clone());
         let body_scope = Scope {
             depth: scope.depth - 1,
             vars: vec![arg.clone()],
-            funcs: funcs_with_self.clone(),
+            funcs: scope.funcs.clone(),
             consts: scope.consts.clone(),
         };
         let next_scope = Scope {
-            funcs: funcs_with_self,
+            funcs: funcs_for_next_forms,
             ..scope
         };
         let loc = &state.srcloc;
