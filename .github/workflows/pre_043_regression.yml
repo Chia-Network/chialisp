@@ -1,4 +1,4 @@
-name: npm publish
+name: regression test against 0.4.3 release
 
 on:
   push:
