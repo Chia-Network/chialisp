@@ -38,6 +38,7 @@ sha2 = "0.10.9"
 tempfile = "3.25.0"
 unicode-segmentation = "1.13.2"
 yaml-rust2 = "0.11.0"
+subprocess = { version = "1.1.0", optional = true }
 
 [dependencies.pyo3]
 version = "0.25.1"
@@ -57,6 +58,7 @@ crate-type = ["cdylib", "rlib"]
 extension-module = ["dep:pyo3"]
 fuzz = ["dep:rand", "dep:rand_chacha", "dep:lfsr"]
 default = []
+preserved_043 = ["dep:subprocess"]
 
 [target.'cfg(target_family="wasm")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }

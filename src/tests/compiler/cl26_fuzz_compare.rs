@@ -1,12 +1,9 @@
 use num_bigint::ToBigInt;
 use rand::Rng;
-use std::env;
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::rc::Rc;
 
 use clvmr::allocator::Allocator;
+use subprocess::Exec;
 
 use crate::classic::clvm::__type_compatibility__::Stream;
 use crate::classic::clvm::serialize::sexp_to_stream;
@@ -820,88 +817,26 @@ fn compile_current_branch_to_hex(program: &str) -> String {
     compiler_output_to_hex("current compiler", program, &compiled)
 }
 
-fn chialisp_043_python() -> Option<PathBuf> {
-    if let Some(python) = env::var_os("CHIALISP_043_PYTHON") {
-        let path = PathBuf::from(python);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-
-    let bundled_venv = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join(".venv_chialisp_0_4_3")
-        .join("bin")
-        .join("python");
-    bundled_venv.exists().then_some(bundled_venv)
-}
-
-fn assert_chialisp_043(python: &Path) {
-    let output = Command::new(python)
-        .arg("-c")
-        .arg("import chialisp.chialisp as c; print(c.get_version(), end='')")
-        .output()
-        .expect("should run chialisp 0.4.3 python");
-    assert!(
-        output.status.success(),
-        "failed to query chialisp version: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8(output.stdout).expect("version should be utf8"),
-        "0.4.3"
-    );
-}
-
-fn compile_chialisp_043_to_hex(python: &Path, program: &str) -> String {
-    let mut child = Command::new(python)
-        .arg("-c")
-        .arg(
-            "import sys; import chialisp.chialisp as c; sys.stdout.buffer.write(c.launch_tool('run', ['run', sys.stdin.read()]))",
-        )
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("should start chialisp 0.4.3 compiler");
-
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin should be piped")
-        .write_all(program.as_bytes())
-        .expect("should write program to compiler stdin");
-
-    let output = child
-        .wait_with_output()
-        .expect("should wait for chialisp 0.4.3 compiler");
-    assert!(
-        output.status.success(),
-        "chialisp 0.4.3 failed:\n{}\nprogram:\n{}",
-        String::from_utf8_lossy(&output.stderr),
-        program
-    );
-
-    let compiled = String::from_utf8(output.stdout).expect("compiler output should be utf8");
-    compiler_output_to_hex("chialisp 0.4.3 compiler", program, &compiled)
+fn compile_chialisp_043_to_hex(program: &str) -> String {
+    let program_run =
+        Exec::cmd("/usr/bin/env")
+        .arg("node")
+        .arg("./support/chialisp_043/src/index.js")
+        .arg(program)
+        .capture().expect("should run");
+    eprintln!("{}", program_run.stderr_str());
+    program_run.stdout_str()
 }
 
 #[test]
 fn random_cl26_programs_match_chialisp_043_hex() {
-    let Some(python) = chialisp_043_python() else {
-        eprintln!(
-            "skipping chialisp 0.4.3 comparison; set CHIALISP_043_PYTHON or create .venv_chialisp_0_4_3"
-        );
-        return;
-    };
-    assert_chialisp_043(&python);
-
     for seed in 0..GENERATED_PROGRAMS_TO_COMPARE {
         let mut rng = simple_seeded_rng(0xC126_0000 | seed);
         let program = random_cl26_program(&mut rng);
         let current_hex = compile_current_branch_to_hex(&program);
-        let chialisp_043_hex = compile_chialisp_043_to_hex(&python, &program);
+        let chialisp_043_hex = compile_chialisp_043_to_hex(&program);
         assert_eq!(
-            current_hex, chialisp_043_hex,
+            current_hex.trim(), chialisp_043_hex.trim(),
             "compiled hex mismatch for generated CL26 program seed {seed}:\n{program}"
         );
     }
