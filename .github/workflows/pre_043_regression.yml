@@ -21,8 +21,8 @@ permissions:
   id-token: write
 
 jobs:
-  build_npm:
-    name: Npm
+  intall_and_run:
+    name: install 0.4.3
     runs-on: ubuntu-latest
 
     steps:
@@ -30,28 +30,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set Env
-        uses: Chia-Network/actions/setjobenv@main
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Set up rusts
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           components: rustfmt, clippy
 
-      - name: install wasm-pack
-        run: cargo install --version 0.13.1 wasm-pack
-
-      - name: wasm-pack build and pack
-        run: wasm-pack build --release --target=nodejs wasm && wasm-pack pack wasm
-
-      - name: Setup Node 24.x
-        uses: actions/setup-node@v5
-        with:
-          node-version: '24.x'
+      - name: Install old version
+        run: cargo install chialisp@0.4.3
 
       - name: Test regression vs wasm artifact from 0.4.3 release
-        run: |
-          cargo test --features=preserved_043 random_cl26
+        run: cargo test --features=preserved_043 random_cl26

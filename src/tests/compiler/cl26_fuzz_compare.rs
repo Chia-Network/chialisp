@@ -1,5 +1,6 @@
 use num_bigint::ToBigInt;
 use rand::Rng;
+use std::env;
 use std::rc::Rc;
 
 use clvmr::allocator::Allocator;
@@ -14,7 +15,7 @@ use crate::compiler::srcloc::Srcloc;
 use crate::tests::classic::run::do_basic_run;
 use crate::tests::compiler::fuzz::simple_seeded_rng;
 
-const GENERATED_PROGRAMS_TO_COMPARE: u32 = 24;
+const GENERATED_PROGRAMS_TO_COMPARE: u32 = 100;
 const MAX_EXPANSIONS_BEFORE_TERMINATING: usize = 28;
 const MAX_EXPANSIONS_TOTAL: usize = 160;
 const MAX_HELPERS: usize = 6;
@@ -818,14 +819,12 @@ fn compile_current_branch_to_hex(program: &str) -> String {
 }
 
 fn compile_chialisp_043_to_hex(program: &str) -> String {
-    let program_run = Exec::cmd("/usr/bin/env")
-        .arg("node")
-        .arg("./support/chialisp_043/src/index.js")
+    let program_run = Exec::cmd(format!("{}/.cargo/bin/run", env::var("HOME").unwrap()))
         .arg(program)
         .capture()
         .expect("should run");
     eprintln!("{}", program_run.stderr_str());
-    program_run.stdout_str()
+    compiler_output_to_hex("current compiler", program, &program_run.stdout_str())
 }
 
 #[test]
