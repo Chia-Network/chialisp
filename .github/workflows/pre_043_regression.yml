@@ -52,6 +52,6 @@ jobs:
         with:
           node-version: '24.x'
 
-      - name: Publish wasm
+      - name: Test regression vs wasm artifact from 0.4.3 release
         run: |
           cargo test --features=preserved_043 random_cl26
