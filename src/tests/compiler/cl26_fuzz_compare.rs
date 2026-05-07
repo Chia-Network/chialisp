@@ -42,12 +42,6 @@ impl Scope {
         next.vars.push(name);
         next
     }
-
-    fn without_vars(&self) -> Self {
-        let mut next = self.clone();
-        next.vars.clear();
-        next
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -811,15 +805,19 @@ pub fn random_cl26_program<R: Rng + Sized>(rng: &mut R) -> String {
     fuzzer.result().to_string()
 }
 
-fn compile_current_branch_to_hex(program: &str) -> String {
-    let compiled = do_basic_run(&vec!["run".to_string(), program.to_string()]);
+fn compiler_output_to_hex(compiler_name: &str, program: &str, compiled: &str) -> String {
     let mut allocator = Allocator::new();
     let assembled = assemble(&mut allocator, compiled.trim()).unwrap_or_else(|err| {
-        panic!("current compiler output did not assemble: {err:?}\nprogram:\n{program}\ncompiled:\n{compiled}")
+        panic!("{compiler_name} output did not assemble: {err:?}\nprogram:\n{program}\ncompiled:\n{compiled}")
     });
     let mut stream_out = Stream::new(None);
     sexp_to_stream(&mut allocator, assembled, &mut stream_out);
     hex::encode(&stream_out.get_value().data())
+}
+
+fn compile_current_branch_to_hex(program: &str) -> String {
+    let compiled = do_basic_run(&vec!["run".to_string(), program.to_string()]);
+    compiler_output_to_hex("current compiler", program, &compiled)
 }
 
 fn chialisp_043_python() -> Option<PathBuf> {
@@ -858,7 +856,7 @@ fn compile_chialisp_043_to_hex(python: &Path, program: &str) -> String {
     let mut child = Command::new(python)
         .arg("-c")
         .arg(
-            "import sys; import chialisp.chialisp as c; print(c.compile(sys.stdin.read()), end='')",
+            "import sys; import chialisp.chialisp as c; sys.stdout.buffer.write(c.launch_tool('run', ['run', sys.stdin.read()]))",
         )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -883,10 +881,8 @@ fn compile_chialisp_043_to_hex(python: &Path, program: &str) -> String {
         program
     );
 
-    String::from_utf8(output.stdout)
-        .expect("compiler hex should be utf8")
-        .trim()
-        .to_string()
+    let compiled = String::from_utf8(output.stdout).expect("compiler output should be utf8");
+    compiler_output_to_hex("chialisp 0.4.3 compiler", program, &compiled)
 }
 
 #[test]
