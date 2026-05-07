@@ -5,6 +5,7 @@ use crate::compiler::sexp::{parse_sexp, SExp};
 use crate::compiler::srcloc::{Srcloc, Until};
 
 mod assign;
+mod cl26_fuzz_compare;
 mod cldb;
 mod clvm;
 mod codegen_funcache;
