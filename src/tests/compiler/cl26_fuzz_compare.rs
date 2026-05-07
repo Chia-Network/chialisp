@@ -818,12 +818,12 @@ fn compile_current_branch_to_hex(program: &str) -> String {
 }
 
 fn compile_chialisp_043_to_hex(program: &str) -> String {
-    let program_run =
-        Exec::cmd("/usr/bin/env")
+    let program_run = Exec::cmd("/usr/bin/env")
         .arg("node")
         .arg("./support/chialisp_043/src/index.js")
         .arg(program)
-        .capture().expect("should run");
+        .capture()
+        .expect("should run");
     eprintln!("{}", program_run.stderr_str());
     program_run.stdout_str()
 }
@@ -836,7 +836,8 @@ fn random_cl26_programs_match_chialisp_043_hex() {
         let current_hex = compile_current_branch_to_hex(&program);
         let chialisp_043_hex = compile_chialisp_043_to_hex(&program);
         assert_eq!(
-            current_hex.trim(), chialisp_043_hex.trim(),
+            current_hex.trim(),
+            chialisp_043_hex.trim(),
             "compiled hex mismatch for generated CL26 program seed {seed}:\n{program}"
         );
     }
