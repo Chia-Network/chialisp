@@ -1,0 +1,3 @@
+(import qualified programs.classic as P1)
+
+(export () (a P1.program (list 3)))

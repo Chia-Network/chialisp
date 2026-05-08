@@ -1,0 +1,7 @@
+(include *standard-cl-23*)
+(import std.shatree)
+
+(defconst Y (sha256 "hello"))
+(defconst A (lambda (X) (sha256 Y X)))
+
+(export A)

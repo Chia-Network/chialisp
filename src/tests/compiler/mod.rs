@@ -5,15 +5,21 @@ use crate::compiler::sexp::{parse_sexp, SExp};
 use crate::compiler::srcloc::{Srcloc, Until};
 
 mod assign;
+#[cfg(feature = "preserved_043")]
+mod cl26_fuzz_compare;
 mod cldb;
 mod clvm;
+mod codegen_funcache;
 mod compiler;
 mod evaluate;
 mod fuzz;
 mod fuzz_assign;
+mod module_cache;
+mod modules;
 mod optimizer;
 mod preprocessor;
 mod repl;
+mod resolve;
 mod restargs;
 mod runtypes;
 mod singleton;

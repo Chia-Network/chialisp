@@ -1,0 +1,6 @@
+(include *standard-cl-23*)
+(export F)
+(export G)
+
+(defun F (X) (+ X 1))
+(defun G (X) (* X 2))

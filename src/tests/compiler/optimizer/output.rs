@@ -107,7 +107,13 @@ fn run_string_get_program_and_output_dialect(
         &mut HashMap::new(),
     )
     .and_then(|program| {
-        run_with_cost(&mut allocator, runner, Rc::new(program), sexp_args).map_err(|e| match e {
+        run_with_cost(
+            &mut allocator,
+            runner,
+            Rc::new(program.to_sexp()),
+            sexp_args,
+        )
+        .map_err(|e| match e {
             RunFailure::RunErr(l, s) => CompileErr(l, s),
             RunFailure::RunExn(l, s) => CompileErr(l, s.to_string()),
         })

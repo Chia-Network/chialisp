@@ -1,0 +1,4 @@
+(include *standard-cl-23*)
+(import qualified programs.two-outputs-include as two.outputs)
+
+(export (X) (a two.outputs.G (list X)))

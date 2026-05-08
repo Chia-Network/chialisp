@@ -1,0 +1,43 @@
+name: regression test against 0.4.3 release
+
+on:
+  push:
+    branches:
+      - base
+  release:
+    types: [published]
+  pull_request:
+    branches:
+      - '**'
+
+concurrency:
+  # SHA is added to the end to let all workflows run
+  group: ${{ github.ref }}-${{ github.workflow }}-${{ github.event_name }}-${{ (github.ref == 'refs/heads/main') && github.sha || '' }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write
+  id-token: write
+
+jobs:
+  intall_and_run:
+    name: install 0.4.3
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up rusts
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Install old version
+        run: cargo install chialisp@0.4.3
+
+      - name: Test regression vs wasm artifact from 0.4.3 release
+        run: cargo test --features=preserved_043 random_cl26

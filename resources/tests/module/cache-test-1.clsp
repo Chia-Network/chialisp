@@ -1,0 +1,31 @@
+(include *standard-cl-24*)
+
+(defconst C 33)
+(defconst CC 99)
+
+(defun F (X)
+  (+ X C)
+  )
+
+(defun G (X)
+  (sha256 X CC)
+  )
+
+(defun H (X)
+  (sha256 1 X CC)
+  )
+
+(defun FF (X Y)
+  (assign
+    Z (concat X Y)
+    (sha256 (F X) Y (fake-letbinding Z))
+    )
+  )
+
+(defun-inline fake-letbinding (X) X)
+
+(defun GG (X Y)
+  (sha256 (G X) (H Y))
+  )
+
+(export (X Y) (c (FF X Y) (GG X Y)))

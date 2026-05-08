@@ -756,16 +756,18 @@ impl<'info> Evaluator {
                 )),
             ));
 
-            frontend(self.opts.clone(), &[frontend_macro_input]).and_then(|program| {
-                self.shrink_bodyform_visited(
-                    context,
-                    visited,
-                    prog_args.clone(),
-                    env,
-                    program.exp,
-                    false,
-                )
-            })
+            frontend(self.opts.clone(), &[frontend_macro_input])
+                .map(|p| p.compileform().clone())
+                .and_then(|program| {
+                    self.shrink_bodyform_visited(
+                        context,
+                        visited,
+                        prog_args.clone(),
+                        env,
+                        program.exp,
+                        false,
+                    )
+                })
         } else {
             promote_program_to_bodyform(
                 macro_expansion.to_sexp(),
@@ -1489,13 +1491,9 @@ impl<'info> Evaluator {
                 // A mod form yields the compiled code.
                 let mut symbols = HashMap::new();
                 let optimizer = get_optimizer(l, self.opts.clone())?;
-                let mut context_wrapper = CompileContextWrapper::new(
-                    context.allocator(),
-                    self.runner.clone(),
-                    &mut symbols,
-                    optimizer,
-                );
-                let code = codegen(&mut context_wrapper.context, self.opts.clone(), program)?;
+                let mut context_wrapper =
+                    CompileContextWrapper::new(self.runner.clone(), &mut symbols, optimizer);
+                let code = codegen(context_wrapper.context(), self.opts.clone(), None, program)?;
                 Ok(Rc::new(BodyForm::Quoted(code)))
             }
             BodyForm::Lambda(ldata) => self.enrich_lambda_site_info(
@@ -1649,7 +1647,7 @@ impl<'info> Evaluator {
 
         let com_result = updated_opts.compile_program(context, use_body)?;
 
-        Ok(Rc::new(com_result))
+        Ok(Rc::new(com_result.to_sexp()))
     }
 
     pub fn add_helper(&mut self, h: &HelperForm) {

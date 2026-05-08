@@ -225,7 +225,7 @@ fn sorted_cse_detections_by_applicability(
         .iter()
         .map(|a| (number_of_overlaps(cse_detections, a), a.clone()))
         .collect();
-    detections_with_dependencies.sort_by(|(a, _), (b, _)| a.cmp(b));
+    detections_with_dependencies.sort_by_key(|(a, _)| *a);
     detections_with_dependencies
 }
 

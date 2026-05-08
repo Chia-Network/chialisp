@@ -27,7 +27,8 @@ fn compile_string(content: &String) -> Result<String, CompileErr> {
     let runner = Rc::new(DefaultProgramRunner::new());
     let opts = Rc::new(DefaultCompilerOpts::new(&"*test*".to_string()));
 
-    compile_file(&mut allocator, runner, opts, &content, &mut HashMap::new()).map(|x| x.to_string())
+    compile_file(&mut allocator, runner, opts, &content, &mut HashMap::new())
+        .map(|x| x.to_sexp().to_string())
 }
 
 fn run_string_maybe_opt(
@@ -67,7 +68,7 @@ fn run_string_maybe_opt(
             &mut allocator,
             runner,
             Rc::new(HashMap::new()),
-            Rc::new(x),
+            Rc::new(x.to_sexp()),
             sexp_args,
             None,
             Some(TEST_TIMEOUT),
@@ -474,6 +475,27 @@ fn run_test_at_form() {
     )
     .unwrap();
     assert_eq!(result.to_string(), "56".to_string());
+}
+
+#[test]
+fn run_test_at_two_arg_atom_integer() {
+    let result = run_string(
+        &"(mod (A B) (include *standard-cl-24*) (defun F (A B) (if (@ B 1) (+ A B) 99)) (F &rest (@ 3)))".to_string(),
+        &"(10 20)".to_string(),
+    )
+    .unwrap();
+    assert_eq!(result.to_string(), "30");
+}
+
+#[test]
+fn run_test_at_two_arg_non_integer_error() {
+    let result = run_string_strict(
+        &"(mod (a b) (include *standard-cl-24*) (defun F (A B) (@ A B)) (F a b))".to_string(),
+        &"(10 20)".to_string(),
+    );
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.unwrap_err().1);
+    assert!(err_msg.contains("@ form with two arguments requires argument and integer"));
 }
 
 #[test]
@@ -2386,7 +2408,10 @@ fn test_rename_in_compileform_simple() {
     let desired_outcome = "(defun F overridden_$_A (let ((overridden_$_B (* 3 (f overridden_$_A))) (y_$_C (f (r overridden_$_A))) (z_$_D (f (r (r overridden_$_A))))) (+ overridden_$_B z_$_D y_$_C)))";
     let parsed = parse_sexp(Srcloc::start("*test*"), prog.bytes()).expect("should parse");
     let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(&"*test*".to_string()));
-    let compiled = frontend(opts, &parsed).expect("should compile");
+    let compiled = frontend(opts, &parsed)
+        .expect("should compile")
+        .compileform()
+        .clone();
     let helper_f: Vec<_> = compiled
         .helpers
         .iter()
@@ -2438,7 +2463,7 @@ fn test_handle_explicit_empty_atom() {
         &mut context.allocator,
         runner,
         opts.prim_map(),
-        Rc::new(compiled),
+        Rc::new(compiled.to_sexp()),
         nil,
         None,
         None,
@@ -2523,7 +2548,7 @@ fn test_exhaustive_chars() {
                 .compile_program(&mut context, make_test_program(sub_qe))
                 .expect("should compile");
 
-            let compiled_output = compiled.to_string();
+            let compiled_output = compiled.to_sexp().to_string();
             let result = do_basic_brun(&vec!["brun".to_string(), compiled_output])
                 .trim()
                 .to_string();

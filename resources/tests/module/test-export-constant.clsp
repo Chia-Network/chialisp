@@ -1,0 +1,4 @@
+(include *standard-cl-23*)
+(defconst add-5-and-9 (list 16 (c 1 5) (c 1 9)))
+
+(export add-5-and-9)

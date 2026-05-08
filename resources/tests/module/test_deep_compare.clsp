@@ -1,0 +1,4 @@
+(include *standard-cl-23*)
+(import std.deep_compare exposing deep_compare)
+
+(export (X Y) (a (lambda (X Y) (deep_compare X Y)) (list X Y)))

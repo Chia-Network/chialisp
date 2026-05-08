@@ -72,7 +72,10 @@ fn test_bodyform_simple_traversal_0() {
         ),
     ];
     for (traversal1, want) in tests.iter() {
-        let retrieved1 = retrieve_bodyform(&traversal1, compiled.exp.borrow(), &|b| b.clone());
+        let retrieved1 =
+            retrieve_bodyform(&traversal1, compiled.compileform().exp.borrow(), &|b| {
+                b.clone()
+            });
         if let Some(r) = want {
             let re = Regex::new(r).unwrap();
             assert!(re.is_match(&retrieved1.unwrap().to_sexp().to_string()));
@@ -165,7 +168,7 @@ fn test_replace_in_bodyform() {
         }];
         let replaced = replace_in_bodyform(
             &replace_spec,
-            compiled.exp.borrow(),
+            compiled.compileform().exp.borrow(),
             &|spec: &PathDetectVisitorResult<()>, _old: &BodyForm| spec.subexp.clone(),
         );
         if let Some(r) = expect {
@@ -186,7 +189,10 @@ fn make_test_case_for_visitor(program: &str) -> CompileForm {
     let srcloc = Srcloc::start(progfile);
     let parsed = parse_sexp(srcloc.clone(), program.bytes()).expect("should parse");
     let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(progfile));
-    frontend(opts.clone(), &parsed).expect("should fe")
+    frontend(opts.clone(), &parsed)
+        .expect("should fe")
+        .compileform()
+        .clone()
 }
 
 #[test]

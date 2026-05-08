@@ -5,12 +5,16 @@ use std::rc::Rc;
 
 use crate::classic::clvm::__type_compatibility__::bi_one;
 use crate::compiler::comptypes::{
-    list_to_cons, ArgsAndTail, Binding, BindingPattern, BodyForm, CompileErr, CompileForm,
-    CompilerOpts, ConstantKind, DefconstData, DefmacData, DefunData, HelperForm, IncludeDesc,
-    LetData, LetFormInlineHint, LetFormKind, ModAccum,
+    list_to_cons, match_as_named, ArgsAndTail, Binding, BindingPattern, BodyForm, CompileErr,
+    CompileForm, CompilerOpts, ConstantKind, DefconstData, DefmacData, DefunData, Export,
+    ExportProgramDesc, FrontendOutput, HelperForm, ImportLongName, IncludeDesc, LetData,
+    LetFormInlineHint, LetFormKind, LongNameTranslation, ModAccum, ModuleImportSpec, NamespaceData,
+    NamespaceRefData,
 };
 use crate::compiler::lambda::handle_lambda;
-use crate::compiler::preprocessor::preprocess;
+use crate::compiler::preprocessor::{
+    detect_chialisp_module, parse_toplevel_mod, preprocess, Preprocessor, ToplevelModParseResult,
+};
 use crate::compiler::rename::rename_children_compileform;
 use crate::compiler::sexp::{decode_string, enlist, SExp};
 use crate::compiler::srcloc::Srcloc;
@@ -78,7 +82,7 @@ pub fn collect_used_names_bodyform(body: &BodyForm) -> Vec<Vec<u8>> {
     }
 }
 
-fn collect_used_names_helperform(body: &HelperForm) -> Vec<Vec<u8>> {
+pub fn collect_used_names_helperform(body: &HelperForm) -> Vec<Vec<u8>> {
     match body {
         HelperForm::Defconstant(defc) => collect_used_names_bodyform(defc.body.borrow()),
         HelperForm::Defmacro(mac) => {
@@ -89,6 +93,8 @@ fn collect_used_names_helperform(body: &HelperForm) -> Vec<Vec<u8>> {
             res
         }
         HelperForm::Defun(_, defun) => collect_used_names_bodyform(&defun.body),
+        HelperForm::Defnamespace(_ns) => Vec::new(),
+        HelperForm::Defnsref(_ns) => Vec::new(),
     }
 }
 
@@ -320,7 +326,6 @@ fn handle_assign_form(
     for idx in (0..(v.len() - 1) / 2).map(|idx| idx * 2) {
         let destructure_pattern = Rc::new(v[idx].clone());
         let binding_body = compile_bodyform(opts.clone(), Rc::new(v[idx + 1].clone()))?;
-
         // Ensure bindings aren't duplicated as we won't be able to
         // guarantee their order during toposort.
         let mut this_provides = HashSet::new();
@@ -469,7 +474,7 @@ pub fn compile_bodyform(
                                 qq_to_expression(opts, Rc::new(quote_body))
                             } else if *atom_name == b"mod" {
                                 let subparse = frontend(opts, std::slice::from_ref(&body))?;
-                                Ok(BodyForm::Mod(op.loc(), subparse))
+                                Ok(BodyForm::Mod(op.loc(), subparse.compileform().clone()))
                             } else if *atom_name == b"lambda" {
                                 handle_lambda(opts, body.loc(), Some(l.clone()), &v)
                             } else {
@@ -625,7 +630,7 @@ fn compile_defmacro(
             kw: kwl,
             name,
             args: args.clone(),
-            program: Rc::new(p),
+            program: Rc::new(p.compileform().clone()),
             advanced: false,
         })
     })
@@ -638,15 +643,19 @@ struct OpName4Match {
     name: Vec<u8>,
     args: Rc<SExp>,
     body: Rc<SExp>,
+    orig: Vec<SExp>,
 }
 
-#[allow(clippy::type_complexity)]
 fn match_op_name_4(pl: &[SExp]) -> Option<OpName4Match> {
     if pl.is_empty() {
         return None;
     }
 
-    match &pl[0] {
+    // Atomize ensures that the result is presented as an atom if possible.  This makes the parser
+    // a bit more forgiving when we're examining code that has round-tripped through traditional
+    // clvm, which happens when modern tools such as use check are used on classic programs.
+    // The modern frontend requires atom representation in positions 0 and 1 of helpers anyway.
+    match &pl[0].atomize() {
         SExp::Atom(l, op_name) => {
             if pl.len() < 3 {
                 return Some(OpName4Match {
@@ -656,31 +665,36 @@ fn match_op_name_4(pl: &[SExp]) -> Option<OpName4Match> {
                     name: Vec::new(),
                     args: Rc::new(SExp::Nil(l.clone())),
                     body: Rc::new(SExp::Nil(l.clone())),
+                    orig: pl.to_owned(),
                 });
             }
 
-            match &pl[1] {
+            match &pl[1].atomize() {
                 SExp::Atom(ll, name) => {
+                    let tail_idx = 3;
                     let mut tail_list = Vec::new();
-                    for elt in pl.iter().skip(3) {
+                    for elt in pl.iter().skip(tail_idx) {
                         tail_list.push(Rc::new(elt.clone()));
                     }
+
                     Some(OpName4Match {
-                        opl: l.clone(),
-                        op_name: op_name.clone(),
                         nl: ll.clone(),
+                        op_name: op_name.clone(),
+                        opl: l.clone(),
                         name: name.clone(),
                         args: Rc::new(pl[2].clone()),
                         body: Rc::new(enlist(l.clone(), &tail_list)),
+                        orig: pl.to_owned(),
                     })
                 }
                 _ => Some(OpName4Match {
+                    nl: pl[0].loc(),
                     opl: l.clone(),
                     op_name: op_name.clone(),
-                    nl: pl[1].loc(),
                     name: Vec::new(),
                     args: Rc::new(SExp::Nil(l.clone())),
                     body: Rc::new(SExp::Nil(l.clone())),
+                    orig: pl.to_owned(),
                 }),
             }
         }
@@ -688,35 +702,224 @@ fn match_op_name_4(pl: &[SExp]) -> Option<OpName4Match> {
     }
 }
 
+pub fn match_export_form(
+    opts: Rc<dyn CompilerOpts>,
+    form: Rc<SExp>,
+) -> Result<Option<Export>, CompileErr> {
+    if let Some(lst) = form.proper_list() {
+        // Empty form isn't export
+        if lst.is_empty() {
+            return Ok(None);
+        }
+
+        // Export if it has an export keyword.
+        if let SExp::Atom(_, export_name) = lst[0].borrow() {
+            if export_name != b"export" {
+                return Ok(None);
+            }
+        } else {
+            // No export kw, not export.
+            return Ok(None);
+        }
+
+        if let Some(efd) = match_as_named(form.loc(), &lst, 1) {
+            return Ok(Some(Export::Function(Box::new(efd))));
+        }
+
+        // A main export
+        if lst.len() != 3 {
+            return Err(CompileErr(form.loc(), format!("Malformed export {form}")));
+        }
+
+        let expr = compile_bodyform(opts.clone(), Rc::new(lst[2].clone()))?;
+        return Ok(Some(Export::MainProgram(ExportProgramDesc {
+            loc: form.loc(),
+            kw_loc: Some(lst[0].loc()),
+            args: Rc::new(lst[1].clone()),
+            expr: Rc::new(expr),
+        })));
+    }
+
+    Ok(None)
+}
+
+#[derive(Debug, Clone)]
+pub struct HelperFormResult {
+    pub new_helpers: Vec<HelperForm>,
+}
+
+impl HelperFormResult {
+    pub fn new(helpers: &[HelperForm]) -> Self {
+        HelperFormResult {
+            new_helpers: helpers.to_vec(),
+        }
+    }
+}
+
+/// Produce a helperform from a namespace.  This acts as a storage container for helpers that
+/// can later be resolved via module resolution.
+///
+/// Nobody will write this, but it is parsed and transits this representation:
+///
+/// (namespace Foo.Bar
+///    (defconst C 99)
+///    (defun F (X) ...)
+/// )
+///
+/// These are used at compile time as helper buckets which can be drawn from to reseolve
+/// external dependencies a lot like how object files are used during linking of native code.
+///
+/// Module style constructs a program that contains namespaces and then resolves them to
+/// construct a non-namespaced program where all helpers have fully qualified names.
+pub fn compile_namespace(
+    opts: Rc<dyn CompilerOpts>,
+    loc: Srcloc,
+    internal: &[SExp],
+) -> Result<HelperForm, CompileErr> {
+    // A namespace needs a keyword and a name.
+    if internal.len() < 2 {
+        return Err(CompileErr(loc, "Namespace must have a name".to_string()));
+    }
+
+    // Its name should parse as a qualified name, even if it has only one component.
+    let (_, parsed) = if let SExp::Atom(_, name) = &internal[1] {
+        ImportLongName::parse(name)
+    } else {
+        return Err(CompileErr(
+            internal[1].loc(),
+            "Namespace name must be an atom".to_string(),
+        ));
+    };
+
+    let mut helpers = Vec::new();
+    // Parse all helpers.
+    for sexp in internal.iter().skip(2) {
+        if let Some(hresult) = compile_helperform(opts.clone(), Rc::new(sexp.clone()))? {
+            for h in hresult.new_helpers.iter() {
+                helpers.push(h.clone());
+            }
+        } else {
+            return Err(CompileErr(
+                sexp.loc(),
+                "Namespaces must contain only definitions".to_string(),
+            ));
+        }
+    }
+
+    Ok(HelperForm::Defnamespace(Box::new(NamespaceData {
+        loc: loc.clone(),
+        kw: internal[0].loc(),
+        nl: internal[1].loc(),
+        rendered_name: parsed.as_u8_vec(LongNameTranslation::Namespace),
+        longname: parsed,
+        helpers,
+    })))
+}
+
+/// Add a namespace reference from an input form.  These specify namespaces to use when adding
+/// helper forms.  A namespaced program is rewritten so that every helper has a fully resolved
+/// name.
+///
+/// An nsref is in one of these forms:
+///   (import Foo.Bar)
+///   (import qualified Foo.Bar)
+///   (import qualified Foo.Bar as A.B)
+///   (import Foo.Bar exposing baz (a as b))
+///   (import Foo.Bar hiding z)
+///
+/// This is mostly like what haskell does and it's pretty expressive.
+pub fn compile_nsref(loc: Srcloc, internal: &[SExp]) -> Result<HelperForm, CompileErr> {
+    if internal.len() < 2 {
+        return Err(CompileErr(
+            loc.clone(),
+            "import must import a module".to_string(),
+        ));
+    }
+
+    // Compile a module import spec from the tail of the import.
+    let import_spec = ModuleImportSpec::parse(loc.clone(), internal, 1)?;
+    // Qualfiied forms are simpler so we short circuit here.
+    if let ModuleImportSpec::Qualified(q) = &import_spec {
+        return Ok(HelperForm::Defnsref(Box::new(NamespaceRefData {
+            loc,
+            kw: internal[0].loc(),
+            nl: q.nl.clone(),
+            rendered_name: q.name.as_u8_vec(LongNameTranslation::Namespace),
+            longname: q.name.clone(),
+            specification: import_spec.clone(),
+        })));
+    }
+
+    // Not qualified path, so we haven't validated the name yet.
+    let (_, parsed) = if let SExp::Atom(_nl, name) = &internal[1] {
+        ImportLongName::parse(name)
+    } else {
+        return Err(CompileErr(
+            internal[1].loc(),
+            "Import name must be an atom".to_string(),
+        ));
+    };
+
+    Ok(HelperForm::Defnsref(Box::new(NamespaceRefData {
+        loc,
+        kw: internal[0].loc(),
+        nl: internal[1].loc(),
+        rendered_name: parsed.as_u8_vec(LongNameTranslation::Namespace),
+        longname: parsed,
+        specification: import_spec,
+    })))
+}
+
 pub fn compile_helperform(
     opts: Rc<dyn CompilerOpts>,
     body: Rc<SExp>,
-) -> Result<Option<HelperForm>, CompileErr> {
-    let l = location_span(body.loc(), body.clone());
+) -> Result<Option<HelperFormResult>, CompileErr> {
+    compile_helperform_mm(opts, body, false)
+}
 
-    if let Some(matched) = body.proper_list().and_then(|pl| match_op_name_4(&pl)) {
-        if matched.op_name == b"defconstant" {
-            compile_defconstant(
+pub fn compile_helperform_mm(
+    opts: Rc<dyn CompilerOpts>,
+    body: Rc<SExp>,
+    modules: bool,
+) -> Result<Option<HelperFormResult>, CompileErr> {
+    let l = location_span(body.loc(), body.clone());
+    let plist = body.proper_list();
+
+    if let Some(matched) = plist.and_then(|pl| match_op_name_4(&pl)) {
+        let inline = matched.op_name == "defun-inline".as_bytes().to_vec();
+        let is_defmac = matched.op_name == "defmac".as_bytes().to_vec();
+        if matched.op_name == "defconstant".as_bytes().to_vec() {
+            let definition = compile_defconstant(
                 opts,
                 l,
                 matched.nl,
                 Some(matched.opl),
                 matched.name.to_vec(),
                 matched.args,
-            )
-            .map(Some)
+            )?;
+            Ok(Some(HelperFormResult {
+                new_helpers: vec![definition],
+            }))
         } else if matched.op_name == b"defconst" {
-            compile_defconst(
+            let definition = compile_defconst(
                 opts,
                 l,
                 matched.nl,
                 Some(matched.opl),
                 matched.name.to_vec(),
                 matched.args,
-            )
-            .map(Some)
-        } else if matched.op_name == b"defmacro" || matched.op_name == b"defmac" {
-            compile_defmacro(
+            )?;
+            Ok(Some(HelperFormResult {
+                new_helpers: vec![definition],
+            }))
+        } else if matched.op_name == b"defmacro" || is_defmac {
+            if is_defmac && modules {
+                return Ok(Some(HelperFormResult {
+                    new_helpers: vec![],
+                }));
+            }
+
+            let definition = compile_defmacro(
                 opts,
                 l,
                 matched.nl,
@@ -724,99 +927,108 @@ pub fn compile_helperform(
                 matched.name.to_vec(),
                 matched.args,
                 matched.body,
-            )
-            .map(Some)
-        } else if matched.op_name == b"defun" {
-            compile_defun(
+            )?;
+            Ok(Some(HelperFormResult {
+                new_helpers: vec![definition],
+            }))
+        } else if matched.op_name == "defun".as_bytes().to_vec() || inline {
+            let definition = compile_defun(
                 opts,
                 CompileDefun {
                     l,
                     nl: matched.nl,
                     kwl: Some(matched.opl),
-                    inline: false,
+                    inline,
                     name: matched.name.to_vec(),
-                    args: matched.args,
+                    args: matched.args.clone(),
                     body: matched.body,
                 },
-            )
-            .map(Some)
-        } else if matched.op_name == b"defun-inline" {
-            compile_defun(
-                opts,
-                CompileDefun {
-                    l,
-                    nl: matched.nl,
-                    kwl: Some(matched.opl),
-                    inline: true,
-                    name: matched.name.to_vec(),
-                    args: matched.args,
-                    body: matched.body,
-                },
-            )
-            .map(Some)
+            )?;
+            Ok(Some(HelperFormResult {
+                new_helpers: vec![definition],
+            }))
+        } else if matched.op_name == "namespace".as_bytes().to_vec() {
+            let ns = compile_namespace(opts, body.loc(), &matched.orig)?;
+            Ok(Some(HelperFormResult {
+                new_helpers: vec![ns],
+            }))
+        } else if matched.op_name == "import".as_bytes().to_vec() {
+            let nsref = compile_nsref(body.loc(), &matched.orig)?;
+            Ok(Some(HelperFormResult {
+                new_helpers: vec![nsref],
+            }))
         } else {
             Err(CompileErr(
                 matched.body.loc(),
-                "unknown keyword in helper".to_string(),
+                format!("unknown keyword in helper {body}"),
             ))
         }
     } else {
-        Err(CompileErr(
-            body.loc(),
-            "Helper wasn't in the proper form".to_string(),
-        ))
+        Ok(None)
     }
 }
 
-fn compile_mod_(
-    mc: &ModAccum,
-    opts: Rc<dyn CompilerOpts>,
-    args: Rc<SExp>,
-    content: Rc<SExp>,
-) -> Result<ModAccum, CompileErr> {
-    match content.borrow() {
-        SExp::Nil(l) => Err(CompileErr(
-            l.clone(),
-            "no expression at end of mod".to_string(),
-        )),
-        SExp::Cons(l, body, tail) => match tail.borrow() {
-            SExp::Nil(_) => match mc.exp_form {
-                Some(_) => Err(CompileErr(l.clone(), "too many expressions".to_string())),
-                _ => Ok(mc.set_final(&CompileForm {
-                    loc: mc.loc.clone(),
-                    include_forms: mc.includes.clone(),
-                    args,
-                    helpers: mc.helpers.clone(),
-                    exp: Rc::new(compile_bodyform(opts.clone(), body.clone())?),
-                })),
-            },
-            _ => {
-                let helper = compile_helperform(opts.clone(), body.clone())?;
-                match helper {
-                    None => Err(CompileErr(
-                        l.clone(),
-                        "only the last form can be an exprssion in mod".to_string(),
-                    )),
-                    Some(form) => match mc.exp_form {
-                        None => compile_mod_(&mc.add_helper(form), opts, args, tail.clone()),
-                        Some(_) => Err(CompileErr(l.clone(), "too many expressions".to_string())),
-                    },
-                }
+trait ModCompileForms {
+    fn compile_mod_body(
+        &self,
+        opts: Rc<dyn CompilerOpts>,
+        include_forms: Vec<IncludeDesc>,
+        args: Rc<SExp>,
+        body: Rc<SExp>,
+    ) -> Result<ModAccum, CompileErr>;
+
+    fn compile_mod_helper(
+        &self,
+        opts: Rc<dyn CompilerOpts>,
+        args: Rc<SExp>,
+        body: Rc<SExp>,
+    ) -> Result<ModAccum, CompileErr>;
+}
+
+impl ModCompileForms for ModAccum {
+    fn compile_mod_body(
+        &self,
+        opts: Rc<dyn CompilerOpts>,
+        include_forms: Vec<IncludeDesc>,
+        args: Rc<SExp>,
+        body: Rc<SExp>,
+    ) -> Result<ModAccum, CompileErr> {
+        Ok(self.set_final(&CompileForm {
+            loc: self.loc.clone(),
+            args,
+            include_forms,
+            helpers: self.helpers.clone(),
+            exp: Rc::new(compile_bodyform(opts, body)?),
+        }))
+    }
+
+    fn compile_mod_helper(
+        &self,
+        opts: Rc<dyn CompilerOpts>,
+        _args: Rc<SExp>,
+        body: Rc<SExp>,
+    ) -> Result<ModAccum, CompileErr> {
+        let mut mc = self.clone();
+        if let Some(helpers) = compile_helperform(opts.clone(), body.clone())? {
+            for form in helpers.new_helpers.iter() {
+                mc = mc.add_helper(form.clone());
             }
-        },
-        _ => Err(CompileErr(
-            content.loc(),
-            format!("inappropriate sexp {content}"),
-        )),
+            Ok(mc)
+        } else {
+            Err(CompileErr(
+                body.loc(),
+                "only the last form can be an exprssion in mod".to_string(),
+            ))
+        }
     }
 }
 
 fn frontend_step_finish(
     opts: Rc<dyn CompilerOpts>,
     includes: &mut Vec<IncludeDesc>,
+    loc: Srcloc,
     pre_forms: &[Rc<SExp>],
 ) -> Result<ModAccum, CompileErr> {
-    let loc = pre_forms[0].loc();
     frontend_start(
         opts.clone(),
         includes,
@@ -837,48 +1049,37 @@ fn frontend_start(
     includes: &mut Vec<IncludeDesc>,
     pre_forms: &[Rc<SExp>],
 ) -> Result<ModAccum, CompileErr> {
-    if pre_forms.is_empty() {
-        Err(CompileErr(
-            Srcloc::start(&opts.filename()),
-            "empty source file not allowed".to_string(),
-        ))
-    } else {
-        let l = pre_forms[0].loc();
-        pre_forms[0]
-            .proper_list()
-            .map(|x| {
-                if x.is_empty() {
-                    return frontend_step_finish(opts.clone(), includes, pre_forms);
-                }
+    let top_loc = pre_forms.iter().next().map(|f| f.loc());
+    match parse_toplevel_mod(opts.clone(), top_loc.clone(), pre_forms)? {
+        ToplevelModParseResult::Mod(tm) => {
+            let ls = preprocess(opts.clone(), includes, &tm.forms)?;
 
-                if let SExp::Atom(_, mod_atom) = &x[0] {
-                    if pre_forms.len() > 1 {
-                        return Err(CompileErr(
-                            pre_forms[0].loc(),
-                            "one toplevel mod form allowed".to_string(),
-                        ));
-                    }
+            if ls.forms.is_empty() {
+                // Empty mod is illegal.
+                return Err(CompileErr(
+                    top_loc.unwrap_or_else(|| Srcloc::start(&opts.filename())),
+                    "Empty module isn't allowed".to_string(),
+                ));
+            }
 
-                    if *mod_atom == b"mod" {
-                        let args = Rc::new(x[1].clone());
-                        let body_vec: Vec<Rc<SExp>> =
-                            x.iter().skip(2).map(|s| Rc::new(s.clone())).collect();
-                        let body = Rc::new(enlist(pre_forms[0].loc(), &body_vec));
+            let mut ma = ModAccum::new(tm.loc.clone());
+            for form in ls.forms.iter().take(ls.forms.len() - 1) {
+                ma = ma.compile_mod_helper(opts.clone(), tm.stripped_args.clone(), form.clone())?;
+            }
 
-                        let ls = preprocess(opts.clone(), includes, body)?;
-                        return compile_mod_(
-                            &ModAccum::new(l.clone()),
-                            opts.clone(),
-                            args,
-                            Rc::new(list_to_cons(l, &ls)),
-                        );
-                    }
-                }
-
-                frontend_step_finish(opts.clone(), includes, pre_forms)
-            })
-            .unwrap_or_else(|| frontend_step_finish(opts, includes, pre_forms))
+            ma.compile_mod_body(
+                opts.clone(),
+                includes.clone(),
+                tm.stripped_args,
+                ls.forms[ls.forms.len() - 1].clone(),
+            )
+        }
+        ToplevelModParseResult::Simple(l, t) => frontend_step_finish(opts.clone(), includes, l, &t),
     }
+}
+
+fn is_namespace_decl(h: &HelperForm) -> bool {
+    matches!(h, HelperForm::Defnamespace(_) | HelperForm::Defnsref(_))
 }
 
 /// Given the available helper list and the main expression, compute the list of
@@ -903,7 +1104,9 @@ pub fn compute_live_helpers(
 
     helper_list
         .iter()
-        .filter(|h| !opts.frontend_check_live() || helper_names.contains(h.name()))
+        .filter(|h| {
+            !opts.frontend_check_live() || is_namespace_decl(h) || helper_names.contains(h.name())
+        })
         .cloned()
         .collect()
 }
@@ -924,8 +1127,45 @@ pub fn compute_live_helpers(
 pub fn frontend(
     opts: Rc<dyn CompilerOpts>,
     pre_forms: &[Rc<SExp>],
-) -> Result<CompileForm, CompileErr> {
+) -> Result<FrontendOutput, CompileErr> {
     let mut includes = Vec::new();
+
+    if let Some(_dialect) = detect_chialisp_module(Srcloc::start(&opts.filename()), pre_forms)? {
+        let mut other_forms = vec![];
+        let mut exports = vec![];
+
+        let mut preprocessor = Preprocessor::new(opts.clone());
+        let output_forms = preprocessor.run_modules(&mut includes, pre_forms)?;
+
+        if output_forms.forms.is_empty() {
+            return Err(CompileErr(
+                Srcloc::start(&opts.filename()),
+                "Module style chialisp programs require at least one export".to_string(),
+            ));
+        }
+
+        for form in output_forms.forms.iter() {
+            if let Some(export) = match_export_form(opts.clone(), form.clone())? {
+                exports.push(export);
+            } else if let Some(helper) = compile_helperform_mm(opts.clone(), form.clone(), true)? {
+                for h in helper.new_helpers.iter() {
+                    other_forms.push(h.clone());
+                }
+            }
+        }
+
+        let loc = output_forms.forms[0].loc();
+        let program = CompileForm {
+            loc: loc.clone(),
+            include_forms: includes.to_vec(),
+            args: Rc::new(SExp::Nil(loc.clone())),
+            helpers: other_forms.clone(),
+            exp: Rc::new(BodyForm::Quoted(SExp::Nil(loc.clone()))),
+        };
+
+        return Ok(FrontendOutput::Module(program, exports));
+    }
+
     let started = frontend_start(opts.clone(), &mut includes, pre_forms)?;
 
     for i in includes.iter() {
@@ -945,34 +1185,13 @@ pub fn frontend(
 
     let our_mod = rename_children_compileform(&compiled?)?;
 
-    let expr_names: HashSet<Vec<u8>> = collect_used_names_bodyform(our_mod.exp.borrow())
-        .iter()
-        .map(|x| x.to_vec())
-        .collect();
+    let live_helpers = compute_live_helpers(opts.clone(), &our_mod.helpers, our_mod.exp.clone());
 
-    let helper_list = our_mod.helpers.iter().map(|h| (h.name(), h));
-    let mut helper_map = HashMap::new();
-
-    for hpair in helper_list {
-        helper_map.insert(hpair.0.clone(), hpair.1.clone());
-    }
-
-    let helper_names = calculate_live_helpers(&HashSet::new(), &expr_names, &helper_map);
-
-    let mut live_helpers = Vec::new();
-    for h in our_mod.helpers {
-        if !opts.frontend_check_live() || helper_names.contains(h.name()) {
-            live_helpers.push(h);
-        }
-    }
-
-    Ok(CompileForm {
-        loc: our_mod.loc.clone(),
+    Ok(FrontendOutput::CompileForm(CompileForm {
         include_forms: includes.to_vec(),
-        args: our_mod.args.clone(),
         helpers: live_helpers,
-        exp: our_mod.exp.clone(),
-    })
+        ..our_mod
+    }))
 }
 
 fn is_quote_op(sexp: Rc<SExp>) -> bool {

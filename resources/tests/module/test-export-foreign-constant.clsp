@@ -1,0 +1,4 @@
+(include *standard-cl-23*)
+(import qualified test-data.one as one)
+
+(export one.QUOTED_ONE as ONE)

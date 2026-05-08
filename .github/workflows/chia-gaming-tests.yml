@@ -1,0 +1,67 @@
+name: Chia Gaming tests
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+    tags:
+        - '**'
+  pull_request:
+    branches:
+      - '**'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  chia_gaming_tests:
+    name: Extensive Chia Gaming tests
+    permissions:
+      contents: read
+
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+      fail-fast: false
+
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    - name: Checkout chia-gaming
+      uses: actions/checkout@v6
+      with:
+        repository: Chia-Network/chia-gaming
+        path: chia-gaming
+        ref: 6a0816328183c55e782d6bbbd1ea9d6812c641a5
+
+    - name: Replace chialisp pkg in chia-gaming
+      run: |
+        python3 support/change-chialisp-rev.py ${{ github.sha }} chia-gaming/Cargo.toml
+
+    - name: Install chia-gaming dependencies
+      run: |
+        cd chia-gaming
+        ./tools/check-build-deps.sh --install --yes
+
+    - name: Rebuild chia-gaming chialisp
+      run: |
+        cp support/chia-gaming-build.rs chia-gaming/build.rs
+        cp support/chia-gaming-run-clsp-tests.sh chia-gaming/tools/run-clsp-tests.sh
+        chmod +x chia-gaming/tools/run-clsp-tests.sh
+        cd chia-gaming
+        for file in $(find clsp -name \*.hex) ; do rm $file ; done
+        cargo build
+        echo generated hex files
+        find clsp -name \*.hex
+        echo end hex files
+        rm -rf build.rs
+
+    - name: Run chia-gaming chialisp tests
+      run: |
+        cd chia-gaming
+        ./tools/run-clsp-tests.sh

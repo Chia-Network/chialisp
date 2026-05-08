@@ -1,0 +1,6 @@
+(include *standard-cl-23*)
+(import std.assert exposing assert)
+
+(export (X)
+  (assert (not (= X 13)) X)
+  )

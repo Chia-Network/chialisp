@@ -1,9 +1,36 @@
+//! Chialisp compiler and some associated tools, such as a more informative debugger.
+//!
+//! clvm -- a clvm runner which allows clvm to be executed one step at a time, returning control
+//! to the caller.
+//!
+//! cldb -- cldb debugging using the clvm step runner.  it produces source coordinates for the
+//!
+//! clvm code being executed at each step.
+//!
+//! comptypes -- datastructure for representing and manipulating chialisp programs.
+//!
+//! debug -- support for partly recovering debug information after passing clvm data through
+//! a less expressive data representation.
+//!
+//! evaluate -- an evaluator for the chialisp language itself which can also partially evaluate
+//! chialisp expressions.
+//!
+//! frontend -- process parsed clvm sexp into a representation of a chialisp program.
+//!
+//! gensym -- simple unique name generator.
+//!
+//! inline -- support for transforming inline function calls to the fully expanded expression.
+//!
+//! lambda -- support for callable lambda function as expressions.
+//!
+//! optimize -- support for some kinds of optimization.
+
 /// Chialisp debugging.
 pub mod cldb;
 pub mod cldb_hierarchy;
 /// CLVM running.
 pub mod clvm;
-mod codegen;
+pub mod codegen;
 /// CompilerOpts which is the main holder of toplevel compiler state.
 #[allow(clippy::module_inception)]
 pub mod compiler;
@@ -16,22 +43,45 @@ pub mod comptypes;
 pub mod debug;
 /// Utilities for chialisp dialect choice
 pub mod dialect;
+/// An on-disk cache for compiled modules
+pub mod diskcache;
+/// Evaluate and partially evaluate chialisp expressions
 pub mod evaluate;
+/// Turn chialisp programs expressed as parsed clvm into data structures describing a chialisp program.
 pub mod frontend;
+/// A generator which can expand clvm expressions randomly according to rules, allowing random
+/// programs and data structures to be generated.
 #[cfg(any(test, feature = "fuzz"))]
 pub mod fuzz;
+/// Gensym function which creates a new unused name.
 pub mod gensym;
+/// Support for inline functions.
 mod inline;
+/// Support for lambda functions with captures.
 mod lambda;
+/// Support for optimizing chialisp.
 pub mod optimize;
+/// A fully independent prepreocessor step for chialisp.
 pub mod preprocessor;
+/// Defined primitives which act as callable functions in the chialisp language.
 pub mod prims;
+/// Renaming support for making shadowed names in chialisp code unambiguous.
 pub mod rename;
+/// A repl using ```evaluate```.
 pub mod repl;
+/// A namespace resolver which uses (namespace ...) and (import ...) forms to assemble standard
+/// style compileforms from ones that use namespaces.  Helpers are retrieved from accessible
+/// namespaces and all references are rewritten to be fully qualified.
+pub mod resolve;
+/// Types related to running clvm code.
 pub mod runtypes;
+/// A flexible, full featured SExp object which preserves a source association and user intent.
 pub mod sexp;
+/// Support for preserving the association between clvm data and locations in the source code.
 pub mod srcloc;
+/// Support for limiting stack depth during evaluation.
 pub mod stackvisit;
+/// Support for determining whether program argument values will be used statically.
 pub mod usecheck;
 
 use clvmr::allocator::Allocator;
@@ -46,6 +96,17 @@ use crate::compiler::comptypes::{
 use crate::compiler::optimize::Optimization;
 use crate::compiler::sexp::SExp;
 
+#[derive(Clone)]
+pub struct FunctionEntry {
+    pub name: Vec<u8>,
+    pub code: Rc<SExp>,
+}
+
+#[derive(Default)]
+pub struct Funcache {
+    pub function_outputs: HashMap<Vec<u8>, FunctionEntry>,
+}
+
 /// An object which represents the standard set of mutable items passed down the
 /// stack when compiling chialisp.
 pub struct BasicCompileContext {
@@ -53,6 +114,12 @@ pub struct BasicCompileContext {
     pub runner: Rc<dyn TRunProgram>,
     pub symbols: HashMap<String, String>,
     pub optimizer: Box<dyn Optimization>,
+    /// Given the operative environment and a serialization of the helper, this is the generated
+    /// code from that helper.
+    ///
+    /// Since this is for speeding up optimization-time work, generation of the dependency graph
+    /// must follow desugaring.
+    pub funcache: Option<Funcache>,
 }
 
 impl BasicCompileContext {
@@ -200,8 +267,14 @@ impl BasicCompileContext {
             runner,
             symbols,
             optimizer,
+            funcache: None,
         }
     }
+}
+
+enum ContextHolder<'a> {
+    ByRef(&'a mut BasicCompileContext),
+    ByVal(Box<BasicCompileContext>),
 }
 
 /// A wrapper that owns a BasicCompileContext and remembers a mutable reference
@@ -210,9 +283,8 @@ impl BasicCompileContext {
 /// a subcompile occurs such as when a macro is compiled to CLVM to be executed
 /// or an inner mod is compiled.
 pub struct CompileContextWrapper<'a> {
-    pub allocator: &'a mut Allocator,
     pub symbols: &'a mut HashMap<String, String>,
-    pub context: BasicCompileContext,
+    context_: ContextHolder<'a>,
 }
 
 impl<'a> CompileContextWrapper<'a> {
@@ -234,16 +306,33 @@ impl<'a> CompileContextWrapper<'a> {
     /// optimizer, which is modified when an inner compile has a different sigil
     /// and must be optimized differently.
     pub fn new(
-        allocator: &'a mut Allocator,
         runner: Rc<dyn TRunProgram>,
         symbols: &'a mut HashMap<String, String>,
         optimizer: Box<dyn Optimization>,
     ) -> Self {
         let bcc = BasicCompileContext::new(Allocator::new(), runner, HashMap::new(), optimizer);
         let mut wrapper = CompileContextWrapper {
-            allocator,
             symbols,
-            context: bcc,
+            context_: ContextHolder::ByVal(Box::new(bcc)),
+        };
+        wrapper.switch();
+        wrapper
+    }
+
+    pub fn from_context(
+        context: &'a mut BasicCompileContext,
+        symbols: &'a mut HashMap<String, String>,
+    ) -> Self {
+        // Subcompiles should not try to share the function cache here.
+        // Whenever we obtain a new context, it's because we're reaching across a boundary
+        // notionally between programs or within a context where the code being generated
+        // for only part of a program (such as a subcompile or to compute the body of a
+        // constant and then discard).  None of those situations would benefit from caching
+        // function bodies nor would we necessarily want the cached results (these often use
+        // different settings).
+        let mut wrapper = CompileContextWrapper {
+            symbols,
+            context_: ContextHolder::ByRef(context),
         };
         wrapper.switch();
         wrapper
@@ -255,8 +344,21 @@ impl<'a> CompileContextWrapper<'a> {
     /// perspective.  Useful when compile context has more fields and needs
     /// to change for a consumer down the stack.
     fn switch(&mut self) {
-        swap(self.allocator, &mut self.context.allocator);
-        swap(self.symbols, &mut self.context.symbols);
+        match &mut self.context_ {
+            ContextHolder::ByRef(v) => {
+                swap(self.symbols, &mut v.symbols);
+            }
+            ContextHolder::ByVal(v) => {
+                swap(self.symbols, &mut v.symbols);
+            }
+        }
+    }
+
+    pub fn context(&mut self) -> &mut BasicCompileContext {
+        match &mut self.context_ {
+            ContextHolder::ByVal(v) => v,
+            ContextHolder::ByRef(v) => v,
+        }
     }
 }
 

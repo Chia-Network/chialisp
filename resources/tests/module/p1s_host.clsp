@@ -1,0 +1,6 @@
+(include *standard-cl-23*)
+
+(import programs.p1s exposing (program as P1S))
+(import programs.p1t exposing (program as P1T))
+
+(export (X) (+ (a P1T (list X)) (a P1S (list X))))

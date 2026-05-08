@@ -1,6 +1,6 @@
 [package]
 name = "clvm_tools_wasm"
-version = "0.4.3"
+version = "0.4.5"
 edition = "2018"
 authors = ["Art Yerkes <art.yerkes@gmail.com>"]
 description = "tools for working with chialisp language; compiler, repl, python and wasm bindings"
@@ -18,7 +18,7 @@ path = "src/mod.rs"
 
 [dependencies]
 chialisp = { path= "..", features = [] }
-clvmr = { version = "0.17.5", features = ["pre-eval"] }
+clvmr = { version = "0.17.7", features = ["pre-eval"] }
 wasm-bindgen = "=0.2.100"
 js-sys = "0.3.60"
 num-bigint = "0.4.0"

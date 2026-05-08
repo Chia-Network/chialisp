@@ -1,0 +1,10 @@
+(defconst ZZ 0x00)
+(defconst ZZ1 0x0001)
+
+(defun ZF (X) (concat 0x00 X))
+(defun FZ (X) (concat X 0x00))
+
+(export ZZ)
+(export ZZ1)
+(export ZF)
+(export FZ)

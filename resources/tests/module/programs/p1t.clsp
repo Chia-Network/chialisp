@@ -1,0 +1,5 @@
+(include *standard-cl-23*)
+
+(import programs.single-constant exposing C)
+
+(export (X) (+ X C))

@@ -1,0 +1,10 @@
+(include *standard-cl-23*)
+
+(import std.shatree exposing shatree)
+
+(defun F-internal (X) (+ X 3))
+
+(defconst F (list (F-internal_hash) F-internal))
+
+(export F-internal)
+(export F)

@@ -1,0 +1,4 @@
+(include *standard-cl-23*)
+(import qualified programs.two-outputs as two.outputs)
+
+(export (X Y) (list two.outputs.F_hash (a two.outputs.F (list X)) two.outputs.F two.outputs.G_hash (a two.outputs.G (list Y)) two.outputs.G))

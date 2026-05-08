@@ -1,0 +1,6 @@
+(include *strict-cl-21*)
+(import std.assert exposing assert)
+
+(defun F (X) (lambda ((& X) Y) (assert (not (= X 13)) (list (+ X Y) (* X Y)))))
+
+(export (X Y) (a (F X) (list Y)))
