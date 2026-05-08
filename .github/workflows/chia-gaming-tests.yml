@@ -41,6 +41,7 @@ jobs:
 
     - name: Replace chialisp pkg in chia-gaming
       run: |
+        cp support/chia-gaming-cargo.toml chia-gaming/Cargo.toml
         python3 support/change-chialisp-rev.py ${{ github.sha }} chia-gaming/Cargo.toml
 
     - name: Install chia-gaming dependencies
