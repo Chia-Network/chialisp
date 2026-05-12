@@ -1,0 +1,39 @@
+(mod (BOARD)
+  (i (> (f BOARD) 0)
+    (i (> (f (r BOARD)) 0)
+      (i (> (f (r (r BOARD))) 0)
+        (i (> (f (r (r (r BOARD)))) 0)
+          (i (> (f (r (r (r (r BOARD))))) 0)
+            (i (> (f (r (r (r (r (r BOARD)))))) 0)
+              (i (> (f (r (r (r (r (r (r BOARD))))))) 0)
+                (i (> (f (r (r (r (r (r (r (r BOARD)))))))) 0)
+                  (i (> (f (r (r (r (r (r (r (r (r BOARD))))))))) 0)
+                    (i (> (f (r (r (r (r (r (r (r (r (r BOARD)))))))))) 0)
+                      (i (> (f (r (r (r (r (r (r (r (r (r (r BOARD))))))))))) 0)
+                        (i (> (f (r (r (r (r (r (r (r (r (r (r (r BOARD)))))))))))) 0)
+                          1
+                          1
+                        )
+                        1
+                      )
+                      1
+                    )
+                    1
+                  )
+                  1
+                )
+                1
+              )
+              1
+            )
+            1
+          )
+          1
+        )
+        1
+      )
+      1
+    )
+    1
+  )
+)
