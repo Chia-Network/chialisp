@@ -431,8 +431,8 @@ fn paired_template_placeholder(
     let template_id = state.templates.len();
     state.templates.push(PairTemplate {
         kind,
-        modern_original: original.modern,
-        classic_original: original.classic,
+        modern_original: original.modern.clone(),
+        classic_original: original.classic.clone(),
         depth,
         allow_literal,
     });
