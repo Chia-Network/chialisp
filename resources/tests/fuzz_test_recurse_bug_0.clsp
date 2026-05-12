@@ -1,0 +1,13 @@
+(include *standard-cl-23*)
+
+(defun walk (lst i)
+    (if (= i 12)
+        1
+        (if (> (f lst) 0)
+            (walk (r lst) (+ i 1))
+            (walk (r lst) (+ i 1))
+        )
+    )
+)
+
+(export (board) (walk board 0))

@@ -1,0 +1,39 @@
+(include *standard-cl-23*)
+(import games.game_codes)
+(import std.assert)
+(import std.if_any_fail)
+(import std.li)
+(import std.relops)
+
+(defun debug (X Y) (i (all "$print$" X) Y Y))
+
+(defun nth (lst i)
+    (if (= i 0)
+        (f lst)
+        (nth (r lst) (- i 1))
+    )
+)
+
+(export (mod_hash
+    (MOVER_PUBKEY WAITER_PUBKEY TIMEOUT AMOUNT MOD_HASH NONCE
+        MOVE MAX_MOVE_SIZE VALIDATION_INFO_HASH MOVER_SHARE PREVIOUS_VALIDATION_INFO_HASH)
+        previous_state previous_validation_program evidence output_conditions)
+    (assign
+        game_state (f previous_state)
+        mover_commit (f (r previous_state))
+        opponent_seed (f (r (r previous_state)))
+
+        board (f game_state)
+        white_off (f (r game_state))
+        black_off (f (r (r game_state)))
+        mover_parity (f (r (r (r game_state))))
+        turn_number (f (r (r (r (r game_state)))))
+        commit_hash (f (r (r (r (r (r game_state))))))
+        ; Toggle bug A: include any (strlen binding) in this dummy.
+        ; With strlen in: runtime crash on the (nth board 0) tail call.
+        ; Without strlen: passes cleanly with result 01.
+        dummy (+ white_off black_off mover_parity turn_number
+                 (strlen commit_hash) (strlen mover_commit) (strlen opponent_seed))
+        (nth board 0)
+    )
+)
