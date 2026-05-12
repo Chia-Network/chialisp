@@ -1,0 +1,15 @@
+{
+  "(defun walk (lst i) (if (= i 12) 1 (if (> (f lst) 0) (walk (r lst) (+ i 1)) (walk (r lst) (+ i 1)))))": "(defun walk (lst i) (if (= i 12) 1 (if (> (f lst) 0) (walk (r lst) (+ i 1)) (walk (r lst) (+ i 1)))))",
+  "(lst i)": "(lst i)",
+  "(if (= i 12) 1 (if (> (f lst) 0) (walk (r lst) (+ i 1)) (walk (r lst) (+ i 1))))": "(if (= i 12) 1 (if (> (f lst) 0) (walk (r lst) (+ i 1)) (walk (r lst) (+ i 1))))",
+  "(= i 12)": "(= i 12)",
+  "(if (> (f lst) 0) (walk (r lst) (+ i 1)) (walk (r lst) (+ i 1)))": "(if (> (f lst) 0) (walk (r lst) (+ i 1)) (walk (r lst) (+ i 1)))",
+  "(> (f lst) 0)": "(> (f lst) 0)",
+  "(f lst)": "(f lst)",
+  "(walk (r lst) (+ i 1))": "(walk (r lst) (+ i 1))",
+  "(r lst)": "(r lst)",
+  "(+ i 1)": "(+ i 1)",
+  "(export (board) (walk board 0))": "(mod (board) (defun walk (lst i) (if (= i 12) 1 (if (> (f lst) 0) (walk (r lst) (+ i 1)) (walk (r lst) (+ i 1))))) (walk board 0))",
+  "(board)": "(board)",
+  "(walk board 0)": "(walk board 0)"
+}
