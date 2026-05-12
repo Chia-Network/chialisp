@@ -1554,13 +1554,13 @@ fn assign_targets() -> Vec<TargetSpec> {
             source: "(+ white_off black_off mover_parity turn_number (strlen commit_hash) (strlen mover_commit) (strlen opponent_seed))",
             kind: ExprKind::Scalar,
             depth: 3,
-            allow_literal: true,
+            allow_literal: false,
         },
         TargetSpec {
             source: "(nth board 0)",
             kind: ExprKind::Scalar,
             depth: 3,
-            allow_literal: true,
+            allow_literal: false,
         },
     ]
 }
