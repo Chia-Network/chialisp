@@ -1,0 +1,10 @@
+(mod (mod_hash validation_constants previous_state previous_validation_program evidence output_conditions)
+  (defun nth (lst i)
+    (i (= i 0)
+      (f lst)
+      (nth (r lst) (- i 1))
+    )
+  )
+
+  (nth (f (f previous_state)) 0)
+)

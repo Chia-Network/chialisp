@@ -1,0 +1,13 @@
+(mod (board)
+  (defun walk (lst i)
+    (i (= i 12)
+      1
+      (i (> (f lst) 0)
+        (walk (r lst) (+ i 1))
+        (walk (r lst) (+ i 1))
+      )
+    )
+  )
+
+  (walk board 0)
+)
