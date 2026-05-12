@@ -1,0 +1,27 @@
+(mod (mod_hash
+    (MOVER_PUBKEY WAITER_PUBKEY TIMEOUT AMOUNT MOD_HASH NONCE
+        MOVE MAX_MOVE_SIZE VALIDATION_INFO_HASH MOVER_SHARE PREVIOUS_VALIDATION_INFO_HASH)
+        previous_state previous_validation_program evidence output_conditions)
+  (defun nth (lst i)
+      (if (= i 0)
+          (f lst)
+          (nth (r lst) (- i 1))
+      )
+  )
+
+  (defun stage-1 (previous_state)
+    (stage-2 (f previous_state) (f (r previous_state)) (f (r (r previous_state))))
+    )
+
+  (defun stage-2 (game_state mover_commit opponent_seed)
+    (stage-3 game_state mover_commit opponent_seed (f game_state) (f (r game_state)) (f (r (r game_state))) (f (r (r (r game_state)))) (f (r (r (r (r game_state))))) (f (r (r (r (r (r game_state)))))))
+    )
+
+  (defun stage-3 (game_state mover_commit opponent_seed board white_off black_off mover_parity turn_number commit_hash)
+    (stage-4 (+ white_off black_off mover_parity turn_number (strlen commit_hash) (strlen mover_commit) (strlen opponent_seed)) board)
+    )
+
+  (defun stage-4 (dummy board) (nth board 0))
+
+  (stage-1 previous_state)
+  )

@@ -6,12 +6,13 @@ use clvmr::Allocator;
 
 use crate::classic::clvm_tools::binutils::assemble;
 use crate::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
+use crate::compiler::clvm::convert_from_clvm_rs;
 use crate::compiler::compiler::DefaultCompilerOpts;
 use crate::compiler::comptypes::{CompilerOpts, CompilerOutput};
 use crate::compiler::fuzz::{FuzzGenerator, FuzzTypeParams, Rule};
 use crate::compiler::sexp::{decode_string, enlist, parse_sexp, SExp};
 use crate::compiler::srcloc::Srcloc;
-use crate::tests::compiler::fuzz::{simple_run, simple_seeded_rng};
+use crate::tests::compiler::fuzz::{compose_sexp, simple_run, simple_seeded_rng};
 use crate::tests::compiler::modules::{
     hex_to_clvm, perform_compile_of_file, TestModuleCompilerOpts,
 };
@@ -23,7 +24,11 @@ const MAX_EXPANSIONS_TOTAL: usize = 120;
 const ASSIGN_PROGRAM: &str = include_str!("../../../resources/tests/fuzz_test_assign_bug_1.clsp");
 const ASSIGN_ARGS_PROGRAM: &str =
     include_str!("../../../resources/tests/fuzz_test_assign_bug_1_args.clsp");
+const ASSIGN_CLASSIC_PROGRAM: &str =
+    include_str!("../../../resources/tests/fuzz_test_assign_bug_1_classic.clsp");
 const RECURSE_PROGRAM: &str = include_str!("../../../resources/tests/fuzz_test_recurse_bug_0.clsp");
+const RECURSE_CLASSIC_PROGRAM: &str =
+    include_str!("../../../resources/tests/fuzz_test_recurse_bug_0_classic.clsp");
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ExprKind {
@@ -673,13 +678,37 @@ fn generate_assign_args() -> Rc<SExp> {
 }
 
 fn run_module_component(filename: &str, component_hex: &[u8], args: &str) {
+    let _ = run_module_component_result(filename, component_hex, args);
+}
+
+fn run_module_component_result(filename: &str, component_hex: &[u8], args: &str) -> Rc<SExp> {
     let mut allocator = Allocator::new();
     let runner = DefaultProgramRunner::new();
     let program = hex_to_clvm(&mut allocator, component_hex);
     let env = assemble(&mut allocator, args).expect("test arguments should assemble");
-    runner
+    let result = runner
         .run_program(&mut allocator, program, env, None)
-        .unwrap_or_else(|err| panic!("compiled variation from {filename} should run: {err:?}"));
+        .unwrap_or_else(|err| panic!("compiled variation from {filename} should run: {err:?}"))
+        .1;
+    convert_from_clvm_rs(&mut allocator, Srcloc::start(filename), result)
+        .expect("reference program result should convert to SExp")
+}
+
+fn run_reference_program(filename: &str, source: &str, args: &str) -> Rc<SExp> {
+    let component_hex = compile_module_component(filename, source);
+    run_module_component_result(filename, &component_hex, args)
+}
+
+fn run_classic_program(filename: &str, source: &str, args: &str) -> Rc<SExp> {
+    assert!(source.trim_start().starts_with("(mod "));
+    assert!(!source.contains("(include"));
+    assert!(!source.contains("(assign"));
+
+    let program = compile_program(filename, source);
+    let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename));
+    let env = compose_sexp(Srcloc::start(filename), args);
+    simple_run(opts, program, env)
+        .unwrap_or_else(|err| panic!("classic analogue {filename} should run: {err:?}"))
 }
 
 fn assign_targets() -> Vec<TargetSpec> {
@@ -767,4 +796,38 @@ fn fuzz_resource_program_variations_run() {
         "((1 2 3 4 5 6 7 8 9 10 11 12 13))",
         0x5EC0_0000,
     );
+}
+
+#[test]
+fn fuzz_test_assign_bug_1_classic_matches_reference() {
+    let args = generate_assign_args().to_string();
+    let reference = run_reference_program(
+        "resources/tests/fuzz_test_assign_bug_1.clsp",
+        ASSIGN_PROGRAM,
+        &args,
+    );
+    let classic = run_classic_program(
+        "resources/tests/fuzz_test_assign_bug_1_classic.clsp",
+        ASSIGN_CLASSIC_PROGRAM,
+        &args,
+    );
+    eprintln!("reference {reference}");
+    eprintln!("classic   {classic}");
+    assert_eq!(reference, classic);
+}
+
+#[test]
+fn fuzz_test_recurse_bug_0_classic_matches_reference() {
+    let args = "((1 2 3 4 5 6 7 8 9 10 11 12 13))";
+    let reference = run_reference_program(
+        "resources/tests/fuzz_test_recurse_bug_0.clsp",
+        RECURSE_PROGRAM,
+        args,
+    );
+    let classic = run_classic_program(
+        "resources/tests/fuzz_test_recurse_bug_0_classic.clsp",
+        RECURSE_CLASSIC_PROGRAM,
+        args,
+    );
+    assert_eq!(reference, classic);
 }

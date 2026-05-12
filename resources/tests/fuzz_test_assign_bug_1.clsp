@@ -5,8 +5,6 @@
 (import std.li)
 (import std.relops)
 
-(defun debug (X Y) (i (all "$print$" X) Y Y))
-
 (defun nth (lst i)
     (if (= i 0)
         (f lst)
