@@ -1,13 +1,39 @@
 (mod (BOARD)
-  (defun WALK (LST I)
-    (i (= I 12)
-      1
-      (i (> (f LST) 0)
-        (WALK (r LST) (+ I 1))
-        (WALK (r LST) (+ I 1))
+  (i (> (f BOARD) 0)
+    (i (> (f (r BOARD)) 0)
+      (i (> (f (r (r BOARD))) 0)
+        (i (> (f (r (r (r BOARD)))) 0)
+          (i (> (f (r (r (r (r BOARD))))) 0)
+            (i (> (f (r (r (r (r (r BOARD)))))) 0)
+              (i (> (f (r (r (r (r (r (r BOARD))))))) 0)
+                (i (> (f (r (r (r (r (r (r (r BOARD)))))))) 0)
+                  (i (> (f (r (r (r (r (r (r (r (r BOARD))))))))) 0)
+                    (i (> (f (r (r (r (r (r (r (r (r (r BOARD)))))))))) 0)
+                      (i (> (f (r (r (r (r (r (r (r (r (r (r BOARD))))))))))) 0)
+                        (i (> (f (r (r (r (r (r (r (r (r (r (r (r BOARD)))))))))))) 0)
+                          1
+                          1
+                        )
+                        1
+                      )
+                      1
+                    )
+                    1
+                  )
+                  1
+                )
+                1
+              )
+              1
+            )
+            1
+          )
+          1
+        )
+        1
       )
+      1
     )
+    1
   )
-
-  (WALK BOARD 0)
 )
