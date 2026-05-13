@@ -429,6 +429,7 @@ fn compile_generated(program: &str, optimize: bool) -> Rc<SExp> {
         panic!("generated CSE lift program should compile: {err:?}\nprogram:\n{program}")
     })
     .to_sexp()
+    .into()
 }
 
 fn run_compiled(compiled: Rc<SExp>, args: &str) -> Result<Rc<SExp>, String> {
