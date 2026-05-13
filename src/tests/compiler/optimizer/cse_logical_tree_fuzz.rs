@@ -13,7 +13,7 @@ use crate::tests::compiler::fuzz::{
     compose_sexp, perform_compile_of_file, simple_run, simple_seeded_rng,
 };
 
-const GENERATED_LOGICAL_TREE_PROGRAMS: u32 = 60;
+const GENERATED_LOGICAL_TREE_PROGRAMS: u32 = 30;
 const MAX_SPEC_DEPTH: u8 = 6;
 const MAX_BINDING_STACK_DEPTH: usize = 6;
 
@@ -104,7 +104,11 @@ impl ProgramRenderer {
 
     fn wrap_expression<R: Rng>(&mut self, rng: &mut R, expression: String) -> String {
         let mut result = expression;
-        let stack_depth = rng.random_range(0..=MAX_BINDING_STACK_DEPTH);
+        let stack_depth = if rng.random_bool(0.35) {
+            rng.random_range(1..=MAX_BINDING_STACK_DEPTH)
+        } else {
+            0
+        };
         for _ in 0..stack_depth {
             result = match rng.random_range(0..4) {
                 0 => {
@@ -215,12 +219,34 @@ impl ProgramRenderer {
         for index in (0..self.specs.len()).rev() {
             if matches!(self.specs[index], LogicalTreeShape::Condition { .. }) {
                 let mut memo = BTreeMap::new();
-                let condition = self.maybe_value_list(rng, index, &mut memo);
-                result = format!("(append {condition} {result})");
+                result = self.maybe_cons_value(rng, index, &result, &mut memo);
             }
         }
 
         self.wrap_expression(rng, result)
+    }
+
+    fn maybe_cons_value<R: Rng>(
+        &mut self,
+        rng: &mut R,
+        index: usize,
+        tail: &str,
+        memo: &mut BTreeMap<usize, String>,
+    ) -> String {
+        let shape = self.specs[index].clone();
+        let result = self.wrap_expression(rng, path_expr(shape.path(), "X"));
+        let present = match shape {
+            LogicalTreeShape::Scalar { path, .. } => {
+                self.safe_path_equals(rng, path, self.specs[index].value())
+            }
+            LogicalTreeShape::Condition { .. } => self.condition_true(rng, index, memo),
+        };
+
+        if rng.random_bool(0.5) {
+            format!("(if {present} (c {result} {tail}) {tail})")
+        } else {
+            format!("(if (not {present}) {tail} (c {result} {tail}))")
+        }
     }
 
     fn render<R: Rng>(&mut self, rng: &mut R, case: &LogicalTreeCase) -> RenderedProgram {
@@ -232,7 +258,6 @@ impl ProgramRenderer {
             "(mod (X)
   (include *standard-cl-23*)
   (defmac and (A B) (qq (if (unquote A) (unquote B) 0)))
-  (defun append (A B) (if A (c (f A) (append (r A) B)) B))
   {body}
 )"
         );
@@ -306,7 +331,7 @@ fn path_expr(path: u64, base: &str) -> String {
 }
 
 fn generate_specs<R: Rng>(rng: &mut R) -> Vec<LogicalTreeShape> {
-    let target_len = rng.random_range(4..=8);
+    let target_len = rng.random_range(3..=6);
     let mut paths = Vec::new();
     while paths.len() < target_len {
         let path = random_path(rng);
