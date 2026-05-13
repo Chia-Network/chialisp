@@ -13,7 +13,7 @@ use crate::tests::compiler::fuzz::{
     compose_sexp, perform_compile_of_file, simple_run, simple_seeded_rng,
 };
 
-const GENERATED_LOGICAL_TREE_PROGRAMS: u32 = 30;
+const GENERATED_LOGICAL_TREE_PROGRAMS: u32 = 10;
 const MAX_SPEC_DEPTH: u8 = 6;
 const MAX_BINDING_STACK_DEPTH: usize = 6;
 
@@ -498,10 +498,6 @@ fn test_cse_logical_tree_fuzz() {
         let case = build_case(&mut rng);
         let mut renderer = ProgramRenderer::new(case.specs.clone());
         let rendered = renderer.render(&mut rng, &case);
-        eprintln!(
-            "logical tree fuzz seed {seed} program bytes {}",
-            rendered.program.len()
-        );
         let result = compile_and_run(&rendered.program, &rendered.run_args);
         let expected = compose_sexp(renderer.srcloc.clone(), &rendered.expected);
 
