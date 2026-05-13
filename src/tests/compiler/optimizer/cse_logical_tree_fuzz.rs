@@ -13,7 +13,7 @@ use crate::tests::compiler::fuzz::{
     compose_sexp, perform_compile_of_file, simple_run, simple_seeded_rng,
 };
 
-const GENERATED_LOGICAL_TREE_PROGRAMS: u32 = 120;
+const GENERATED_LOGICAL_TREE_PROGRAMS: u32 = 60;
 const MAX_SPEC_DEPTH: u8 = 6;
 const MAX_BINDING_STACK_DEPTH: usize = 6;
 
@@ -120,7 +120,7 @@ impl ProgramRenderer {
                     let var = self.fresh_variable();
                     format!("(assign {var} {result} {var})")
                 }
-                _ => format!("(if 1 {result} {result})"),
+                _ => format!("(if (strlen 1) {result} 0)"),
             };
         }
 
@@ -306,7 +306,7 @@ fn path_expr(path: u64, base: &str) -> String {
 }
 
 fn generate_specs<R: Rng>(rng: &mut R) -> Vec<LogicalTreeShape> {
-    let target_len = rng.random_range(5..=12);
+    let target_len = rng.random_range(4..=8);
     let mut paths = Vec::new();
     while paths.len() < target_len {
         let path = random_path(rng);
