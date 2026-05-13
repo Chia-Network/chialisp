@@ -231,6 +231,7 @@ impl ProgramRenderer {
         let program = format!(
             "(mod (X)
   (include *standard-cl-23*)
+  (defmac and (A B) (qq (if (unquote A) (unquote B) 0)))
   (defun append (A B) (if A (c (f A) (append (r A) B)) B))
   {body}
 )"
