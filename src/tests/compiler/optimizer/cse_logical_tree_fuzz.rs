@@ -498,6 +498,10 @@ fn test_cse_logical_tree_fuzz() {
         let case = build_case(&mut rng);
         let mut renderer = ProgramRenderer::new(case.specs.clone());
         let rendered = renderer.render(&mut rng, &case);
+        eprintln!(
+            "logical tree fuzz seed {seed} program bytes {}",
+            rendered.program.len()
+        );
         let result = compile_and_run(&rendered.program, &rendered.run_args);
         let expected = compose_sexp(renderer.srcloc.clone(), &rendered.expected);
 
