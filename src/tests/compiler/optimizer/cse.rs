@@ -47,6 +47,36 @@ fn smoke_test_cse_optimization() {
 }
 
 #[test]
+fn test_cse_let_binding_inserted_inside_outermost_use() {
+    let filename = "*test*";
+    let source = indoc! {"
+    (G
+      (let ((Z X))
+        (* (+ Z 1) (+ Z 1))
+        )
+      999
+      )"}
+    .to_string();
+    let srcloc = Srcloc::start(filename);
+    let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename));
+    let parsed = parse_sexp(srcloc.clone(), source.bytes()).expect("should parse");
+    let bodyform = compile_bodyform(opts.clone(), parsed[0].clone()).expect("should compile");
+    let cse_transformed =
+        cse_optimize_bodyform(&srcloc, b"test", true, &bodyform).expect("should cse optimize");
+    let got = cse_transformed.to_sexp().to_string();
+    let re = Regex::new(
+        r"^\(G \(let \(\(Z X\)\) \(let \(\((cse_[$]_[0-9]+) \(\+ Z 1\)\)\) \(\* (cse_[$]_[0-9]+) (cse_[$]_[0-9]+)\)\)\) 999\)$",
+    )
+    .expect("should become a regex");
+    let captures = re
+        .captures(&got)
+        .unwrap_or_else(|| panic!("unexpected CSE output: {got}"));
+
+    assert_eq!(&captures[1], &captures[2]);
+    assert_eq!(&captures[1], &captures[3]);
+}
+
+#[test]
 fn test_cse_tricky() {
     let filename = "resources/tests/strict/cse-complex-1.clsp";
     let program = do_basic_run(&vec!["run".to_string(), filename.to_string()])
