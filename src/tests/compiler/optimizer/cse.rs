@@ -15,7 +15,7 @@ use crate::compiler::clvm::run;
 use crate::compiler::compiler::{compile_from_compileform, DefaultCompilerOpts};
 use crate::compiler::comptypes::{BodyForm, CompileForm, CompilerOpts, DefunData, HelperForm};
 use crate::compiler::dialect::AcceptedDialect;
-use crate::compiler::frontend::compile_bodyform;
+use crate::compiler::frontend::{compile_bodyform, frontend};
 use crate::compiler::optimize::cse::cse_optimize_bodyform;
 use crate::compiler::optimize::get_optimizer;
 use crate::compiler::sexp::{enlist, parse_sexp, SExp};
@@ -50,30 +50,49 @@ fn smoke_test_cse_optimization() {
 fn test_cse_let_binding_inserted_inside_outermost_use() {
     let filename = "*test*";
     let source = indoc! {"
-    (G
-      (let ((Z X))
-        (* (+ Z 1) (+ Z 1))
+    (mod (X)
+      (defun F (X)
+        (G
+          (let ((Z X))
+            (* (+ Z 1) (+ Z 1))
+            )
+          999
+          )
         )
-      999
+      (F X)
       )"}
     .to_string();
     let srcloc = Srcloc::start(filename);
     let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename));
     let parsed = parse_sexp(srcloc.clone(), source.bytes()).expect("should parse");
-    let bodyform = compile_bodyform(opts.clone(), parsed[0].clone()).expect("should compile");
-    let cse_transformed =
-        cse_optimize_bodyform(&srcloc, b"test", true, &bodyform).expect("should cse optimize");
+    let compileform = frontend(opts.clone(), &parsed)
+        .expect("should compile")
+        .compileform()
+        .clone();
+    let helper = compileform
+        .helpers
+        .iter()
+        .find(|helper| helper.name() == b"F")
+        .expect("should include F helper");
+    let cse_transformed = match helper {
+        HelperForm::Defun(_, defun) => {
+            cse_optimize_bodyform(&helper.loc(), helper.name(), true, defun.body.borrow())
+                .expect("should cse optimize")
+        }
+        _ => panic!("F should be a defun"),
+    };
     let got = cse_transformed.to_sexp().to_string();
     let re = Regex::new(
-        r"^\(G \(let \(\(Z X\)\) \(let \(\((cse_[$]_[0-9]+) \(\+ Z 1\)\)\) \(\* (cse_[$]_[0-9]+) (cse_[$]_[0-9]+)\)\)\) 999\)$",
+        r"^\(G \(let \(\((Z_[$]_[0-9]+) (X_[$]_[0-9]+)\)\) \(let \(\((cse_[$]_[0-9]+) \(\+ (Z_[$]_[0-9]+) 1\)\)\) \(\* (cse_[$]_[0-9]+) (cse_[$]_[0-9]+)\)\)\) 999\)$",
     )
     .expect("should become a regex");
     let captures = re
         .captures(&got)
         .unwrap_or_else(|| panic!("unexpected CSE output: {got}"));
 
-    assert_eq!(&captures[1], &captures[2]);
-    assert_eq!(&captures[1], &captures[3]);
+    assert_eq!(&captures[1], &captures[4]);
+    assert_eq!(&captures[3], &captures[5]);
+    assert_eq!(&captures[3], &captures[6]);
 }
 
 #[test]
