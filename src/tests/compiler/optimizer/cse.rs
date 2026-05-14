@@ -13,9 +13,11 @@ use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 
 use crate::compiler::clvm::run;
 use crate::compiler::compiler::{compile_from_compileform, DefaultCompilerOpts};
-use crate::compiler::comptypes::{BodyForm, CompileForm, CompilerOpts, DefunData, HelperForm};
+use crate::compiler::comptypes::{
+    Binding, BindingPattern, BodyForm, CompileForm, CompilerOpts, DefunData, HelperForm,
+};
 use crate::compiler::dialect::AcceptedDialect;
-use crate::compiler::frontend::{compile_bodyform, frontend};
+use crate::compiler::frontend::{collect_used_names_bodyform, compile_bodyform, frontend};
 use crate::compiler::optimize::cse::cse_optimize_bodyform;
 use crate::compiler::optimize::get_optimizer;
 use crate::compiler::sexp::{enlist, parse_sexp, SExp};
@@ -48,6 +50,156 @@ fn smoke_test_cse_optimization() {
 
 #[test]
 fn test_cse_let_binding_inserted_inside_outermost_use() {
+    let host_forms = [
+        "assign",
+        "let",
+        "let*",
+        "condition",
+        "then-branch",
+        "condition-and-branches",
+        "condition-and-else-branch",
+    ];
+
+    for first_idx in 0..host_forms.len() {
+        for second_idx in first_idx + 1..host_forms.len() {
+            for third_idx in second_idx + 1..host_forms.len() {
+                let mut selected = vec![
+                    host_forms[first_idx],
+                    host_forms[second_idx],
+                    host_forms[third_idx],
+                ];
+                // Keep this suite focused on valid CSE moves; the branch-only
+                // conditional form is already a non-dominance case when it is
+                // the first repeated occurrence visited.
+                selected.sort_by_key(|kind| *kind == "then-branch");
+                assert_cse_let_binding_inserted_inside_outermost_use(&[
+                    selected[0],
+                    selected[1],
+                    selected[2],
+                ]);
+            }
+        }
+    }
+
+    fn assert_cse_let_binding_inserted_inside_outermost_use(host_forms: &[&str; 3]) {
+        let filename = "*test*";
+        let subexpr = "(+ Z 1)";
+        let source = format!(
+            indoc! {"
+            (mod (X)
+              (defun F (X)
+                (let ((Z X))
+                  (+ {subexpr}
+                     {first}
+                     {second}
+                     {third}
+                     )
+                  )
+                )
+              (F X)
+              )"},
+            subexpr = subexpr,
+            first = render_cse_host_form(host_forms[0], 0, subexpr),
+            second = render_cse_host_form(host_forms[1], 1, subexpr),
+            third = render_cse_host_form(host_forms[2], 2, subexpr),
+        );
+        let srcloc = Srcloc::start(filename);
+        let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename));
+        let parsed = parse_sexp(srcloc.clone(), source.bytes()).expect("should parse");
+        let compileform = frontend(opts.clone(), &parsed)
+            .expect("should compile")
+            .compileform()
+            .clone();
+        let helper = compileform
+            .helpers
+            .iter()
+            .find(|helper| helper.name() == b"F")
+            .expect("should include F helper");
+        let cse_transformed = match helper {
+            HelperForm::Defun(_, defun) => {
+                cse_optimize_bodyform(&helper.loc(), helper.name(), true, defun.body.borrow())
+                    .expect("should cse optimize")
+            }
+            _ => panic!("F should be a defun"),
+        };
+        assert_cse_binding_inside_renamed_let(&cse_transformed, host_forms);
+    }
+
+    fn binding_name(binding: &Rc<Binding>) -> Option<Vec<u8>> {
+        match binding.pattern.borrow() {
+            BindingPattern::Name(name) => Some(name.clone()),
+            BindingPattern::Complex(pattern) => match pattern.borrow() {
+                SExp::Atom(_, name) => Some(name.clone()),
+                _ => None,
+            },
+        }
+    }
+
+    fn assert_cse_binding_inside_renamed_let(cse_transformed: &BodyForm, host_forms: &[&str; 3]) {
+        let got = cse_transformed.to_sexp().to_string();
+        let outer_let = match cse_transformed {
+            BodyForm::Let(_, letdata) => letdata,
+            _ => panic!("missing renamed outer let for {host_forms:?}: {got}"),
+        };
+        let outer_binding = outer_let
+            .bindings
+            .first()
+            .unwrap_or_else(|| panic!("outer let had no bindings for {host_forms:?}: {got}"));
+        let z_name = binding_name(outer_binding).unwrap_or_else(|| {
+            panic!("outer let binding was not a name for {host_forms:?}: {got}")
+        });
+
+        assert!(
+            z_name.starts_with(b"Z_$_"),
+            "outer let was not the renamed Z binding for {host_forms:?}: {got}"
+        );
+
+        let cse_let = match outer_let.body.borrow() {
+            BodyForm::Let(_, letdata) => letdata,
+            _ => panic!("missing CSE let inside renamed outer let for {host_forms:?}: {got}"),
+        };
+        let cse_binding_uses_z = cse_let.bindings.iter().any(|binding| {
+            let Some(name) = binding_name(binding) else {
+                return false;
+            };
+            name.starts_with(b"cse_$_")
+                && collect_used_names_bodyform(binding.body.borrow()).contains(&z_name)
+        });
+
+        assert!(
+            cse_binding_uses_z,
+            "missing CSE binding that depends on renamed Z for {host_forms:?}: {got}"
+        );
+    }
+
+    fn render_cse_host_form(kind: &str, idx: usize, subexpr: &str) -> String {
+        let binding_name = format!("A{idx}");
+
+        match kind {
+            "assign" => {
+                format!("(assign {binding_name} (+ X {subexpr}) (+ {binding_name} {subexpr}))")
+            }
+            "let" => {
+                format!("(let (({binding_name} (+ X {subexpr}))) (+ {binding_name} {subexpr}))")
+            }
+            "let*" => {
+                format!("(let* (({binding_name} (+ X {subexpr}))) (+ {binding_name} {subexpr}))")
+            }
+            "condition" => format!("(a (i (+ X {subexpr}) (com 1) (com 0)) @)"),
+            "then-branch" => format!("(a (i X (com (+ X {subexpr})) (com ())) @)"),
+            "condition-and-branches" => {
+                format!("(a (i (+ 1 X {subexpr}) (com (+ X {subexpr})) (com (+ X {subexpr}))) @)")
+            }
+            "condition-and-else-branch" => {
+                format!("(a (i (+ X {subexpr}) (com ()) (com (+ X {subexpr}))) @)")
+            }
+            _ => panic!("unknown CSE host form kind {kind}"),
+        }
+    }
+}
+
+#[test]
+fn test_cse_let_binding_inserted_inside_outermost_use_single_case() {
     let filename = "*test*";
     let source = indoc! {"
     (mod (X)
