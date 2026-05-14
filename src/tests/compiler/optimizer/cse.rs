@@ -301,6 +301,102 @@ fn test_cse_assign_in_call_argument_can_lift_binding_out_of_scope() {
 }
 
 #[test]
+fn test_cse_let_in_call_argument_can_lift_binding_outside_let() {
+    let filename = "*test*";
+    let source = indoc! {"
+    (mod (X)
+      (defun F (X)
+        (G
+          (let ((A (+ X 1)))
+            (+ X 1)
+            )
+          )
+        )
+      (F X)
+      )"}
+    .to_string();
+    let srcloc = Srcloc::start(filename);
+    let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename));
+    let parsed = parse_sexp(srcloc.clone(), source.bytes()).expect("should parse");
+    let compileform = frontend(opts.clone(), &parsed)
+        .expect("should compile")
+        .compileform()
+        .clone();
+    let helper = compileform
+        .helpers
+        .iter()
+        .find(|helper| helper.name() == b"F")
+        .expect("should include F helper");
+    let cse_transformed = match helper {
+        HelperForm::Defun(_, defun) => {
+            cse_optimize_bodyform(&helper.loc(), helper.name(), true, defun.body.borrow())
+                .expect("should cse optimize")
+        }
+        _ => panic!("F should be a defun"),
+    };
+    let got = cse_transformed.to_sexp().to_string();
+
+    let re = Regex::new(
+        r"^\(let \(\((cse_[$]_[0-9]+) \(\+ (X_[$]_[0-9]+) 1\)\)\) \(G \(let \(\((A_[$]_[0-9]+) (cse_[$]_[0-9]+)\)\) (cse_[$]_[0-9]+)\)\)\)$",
+    )
+    .expect("should become a regex");
+    let captures = re.captures(&got).unwrap_or_else(|| {
+        panic!("unexpected CSE output for let-in-call escape reproducer: {got}")
+    });
+
+    assert_eq!(&captures[1], &captures[4]);
+    assert_eq!(&captures[1], &captures[5]);
+}
+
+#[test]
+fn test_cse_letstar_in_call_argument_can_lift_binding_outside_letstar() {
+    let filename = "*test*";
+    let source = indoc! {"
+    (mod (X)
+      (defun F (X)
+        (G
+          (let* ((A (+ X 1)))
+            (+ X 1)
+            )
+          )
+        )
+      (F X)
+      )"}
+    .to_string();
+    let srcloc = Srcloc::start(filename);
+    let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename));
+    let parsed = parse_sexp(srcloc.clone(), source.bytes()).expect("should parse");
+    let compileform = frontend(opts.clone(), &parsed)
+        .expect("should compile")
+        .compileform()
+        .clone();
+    let helper = compileform
+        .helpers
+        .iter()
+        .find(|helper| helper.name() == b"F")
+        .expect("should include F helper");
+    let cse_transformed = match helper {
+        HelperForm::Defun(_, defun) => {
+            cse_optimize_bodyform(&helper.loc(), helper.name(), true, defun.body.borrow())
+                .expect("should cse optimize")
+        }
+        _ => panic!("F should be a defun"),
+    };
+    let got = cse_transformed.to_sexp().to_string();
+
+    let re = Regex::new(
+        r"^\(let \(\((cse_[$]_[0-9]+) \(\+ (X_[$]_[0-9]+) 1\)\)\) \(G \(let \(\((A_[$]_[0-9]+) (cse_[$]_[0-9]+)\)\) (cse_[$]_[0-9]+)\)\)\)$",
+    )
+    .expect("should become a regex");
+    let captures = re.captures(&got).unwrap_or_else(|| {
+        panic!("unexpected CSE output for letstar-in-call escape reproducer: {got}")
+    });
+
+    assert_eq!(&captures[1], &captures[4]);
+    assert_eq!(&captures[1], &captures[5]);
+}
+
+#[test]
 fn test_cse_tricky() {
     let filename = "resources/tests/strict/cse-complex-1.clsp";
     let program = do_basic_run(&vec!["run".to_string(), filename.to_string()])
