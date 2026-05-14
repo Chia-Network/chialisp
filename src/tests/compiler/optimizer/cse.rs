@@ -248,6 +248,59 @@ fn test_cse_let_binding_inserted_inside_outermost_use_single_case() {
 }
 
 #[test]
+fn test_cse_assign_in_call_argument_can_lift_binding_out_of_scope() {
+    let filename = "*test*";
+    let source = indoc! {"
+    (mod (X)
+      (defun F (X)
+        (G
+          (assign
+            A (+ X 1)
+            B (+ A 1)
+            (+ A 1)
+            )
+          )
+        )
+      (F X)
+      )"}
+    .to_string();
+    let srcloc = Srcloc::start(filename);
+    let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename));
+    let parsed = parse_sexp(srcloc.clone(), source.bytes()).expect("should parse");
+    let compileform = frontend(opts.clone(), &parsed)
+        .expect("should compile")
+        .compileform()
+        .clone();
+    let helper = compileform
+        .helpers
+        .iter()
+        .find(|helper| helper.name() == b"F")
+        .expect("should include F helper");
+    let cse_transformed = match helper {
+        HelperForm::Defun(_, defun) => {
+            cse_optimize_bodyform(&helper.loc(), helper.name(), true, defun.body.borrow())
+                .expect("should cse optimize")
+        }
+        _ => panic!("F should be a defun"),
+    };
+    let got = cse_transformed.to_sexp().to_string();
+
+    // This demonstrates the scope leak: the new CSE binding wraps the call to
+    // G, but its body refers to A, which is only provided by the inner assign.
+    let re = Regex::new(
+        r"^\(let \(\((cse_[$]_[0-9]+) \(\+ (A_[$]_[0-9]+) 1\)\)\) \(G \(assign (B_[$]_[0-9]+) (cse_[$]_[0-9]+) (A_[$]_[0-9]+) \(\+ (X_[$]_[0-9]+) 1\) (cse_[$]_[0-9]+)\)\)\)$",
+    )
+    .expect("should become a regex");
+    let captures = re.captures(&got).unwrap_or_else(|| {
+        panic!("unexpected CSE output for assign-in-call scope reproducer: {got}")
+    });
+
+    assert_eq!(&captures[1], &captures[4]);
+    assert_eq!(&captures[1], &captures[7]);
+    assert_eq!(&captures[2], &captures[5]);
+}
+
+#[test]
 fn test_cse_tricky() {
     let filename = "resources/tests/strict/cse-complex-1.clsp";
     let program = do_basic_run(&vec!["run".to_string(), filename.to_string()])
