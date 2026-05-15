@@ -12,10 +12,11 @@ use crate::classic::clvm_tools::binutils::assemble;
 use crate::compiler::fuzz::{FuzzGenerator, FuzzTypeParams, Rule};
 use crate::compiler::sexp::{self, enlist, SExp};
 use crate::compiler::srcloc::Srcloc;
-use crate::tests::classic::run::do_basic_run;
+use crate::tests::classic::run::{do_basic_brun, do_basic_run};
 use crate::tests::compiler::fuzz::simple_seeded_rng;
 
 const GENERATED_PROGRAMS_TO_COMPARE: u32 = 100;
+const GENERATED_TRICKY_CSE_PROGRAMS_TO_COMPARE: u32 = 10;
 const MAX_EXPANSIONS_BEFORE_TERMINATING: usize = 28;
 const MAX_EXPANSIONS_TOTAL: usize = 160;
 const MAX_HELPERS: usize = 6;
@@ -803,28 +804,148 @@ pub fn random_cl26_program<R: Rng + Sized>(rng: &mut R) -> String {
     fuzzer.result().to_string()
 }
 
-fn compiler_output_to_hex(compiler_name: &str, program: &str, compiled: &str) -> String {
+fn try_compiler_output_to_hex(
+    compiler_name: &str,
+    program: &str,
+    compiled: &str,
+) -> Result<String, String> {
     let mut allocator = Allocator::new();
-    let assembled = assemble(&mut allocator, compiled.trim()).unwrap_or_else(|err| {
-        panic!("{compiler_name} output did not assemble: {err:?}\nprogram:\n{program}\ncompiled:\n{compiled}")
-    });
+    let assembled = assemble(&mut allocator, compiled.trim()).map_err(|err| {
+        format!(
+            "{compiler_name} output did not assemble: {err:?}\nprogram:\n{program}\ncompiled:\n{compiled}"
+        )
+    })?;
     let mut stream_out = Stream::new(None);
     sexp_to_stream(&mut allocator, assembled, &mut stream_out);
-    hex::encode(&stream_out.get_value().data())
+    Ok(hex::encode(&stream_out.get_value().data()))
+}
+
+fn compiler_output_to_hex(compiler_name: &str, program: &str, compiled: &str) -> String {
+    try_compiler_output_to_hex(compiler_name, program, compiled)
+        .unwrap_or_else(|err| panic!("{err}"))
+}
+
+fn compile_current_branch(program: &str) -> Result<String, String> {
+    let compiled = do_basic_run(&vec!["run".to_string(), program.to_string()]);
+    try_compiler_output_to_hex("current compiler", program, &compiled)?;
+    Ok(compiled)
 }
 
 fn compile_current_branch_to_hex(program: &str) -> String {
-    let compiled = do_basic_run(&vec!["run".to_string(), program.to_string()]);
+    let compiled = compile_current_branch(program).unwrap_or_else(|err| panic!("{err}"));
     compiler_output_to_hex("current compiler", program, &compiled)
 }
 
-fn compile_chialisp_043_to_hex(program: &str) -> String {
+fn compile_chialisp_043(program: &str) -> Result<String, String> {
     let program_run = Exec::cmd(format!("{}/.cargo/bin/run", env::var("HOME").unwrap()))
         .arg(program)
         .capture()
-        .expect("should run");
+        .expect("should run compiler 0.4.3");
     eprintln!("{}", program_run.stderr_str());
-    compiler_output_to_hex("compiler 0.4.3", program, &program_run.stdout_str())
+
+    let compiled = program_run.stdout_str();
+    try_compiler_output_to_hex("compiler 0.4.3", program, &compiled).map(|_| compiled)
+}
+
+fn compile_chialisp_043_to_hex(program: &str) -> String {
+    let compiled = compile_chialisp_043(program).unwrap_or_else(|err| panic!("{err}"));
+    compiler_output_to_hex("compiler 0.4.3", program, &compiled)
+}
+
+fn run_compiled_program(
+    compiler_name: &str,
+    program: &str,
+    compiled: &str,
+    args: &str,
+) -> Result<String, String> {
+    let output = do_basic_brun(&vec![
+        "brun".to_string(),
+        compiled.to_string(),
+        args.to_string(),
+    ])
+    .trim()
+    .to_string();
+    if output.starts_with("FAIL:") {
+        Err(format!(
+            "{compiler_name} compiled output did not run:\nprogram:\n{program}\ncompiled:\n{compiled}\nargs:\n{args}\noutput:\n{output}"
+        ))
+    } else {
+        Ok(output)
+    }
+}
+
+fn tricky_cse_binding_child_program(seed: u32) -> (String, String) {
+    let input = 7 + seed as i64;
+    let assign_add = 2 + (seed as i64 % 5);
+    let trigger = if seed % 2 == 0 {
+        input + assign_add
+    } else {
+        input + assign_add + 1
+    };
+    let then_add = 11 + seed as i64;
+    let then_const = 3 + (seed as i64 % 4);
+    let else_add = 5 + (seed as i64 % 6);
+    let else_const = 17 + seed as i64;
+    let assign_text = "a".repeat(1 + (seed as usize % 5));
+    let let_text = "b".repeat(2 + (seed as usize % 4));
+    let letstar_text = "c".repeat(3 + (seed as usize % 3));
+
+    (
+        format!(
+            r#"(mod (X)
+  (include *standard-cl-26*)
+
+  (defun F (X)
+    (+
+      (if
+        (assign
+          A (+ X {assign_add})
+          B (= A {trigger})
+          B
+        )
+        (let
+          ((C (+ X {then_add}))
+           (D {then_const}))
+          (+ C D)
+        )
+        (let*
+          ((E (+ X {else_add}))
+           (G (+ E {else_const})))
+          G
+        )
+      )
+      (+
+        (strlen
+          (assign
+            H "{assign_text}"
+            H
+          )
+        )
+        (+
+          (strlen
+            (let
+              ((I "{let_text}")
+               (J (+ X 1)))
+              I
+            )
+          )
+          (strlen
+            (let*
+              ((K "{letstar_text}")
+               (L K))
+              L
+            )
+          )
+        )
+      )
+    )
+  )
+
+  (F X)
+)"#
+        ),
+        format!("({input})"),
+    )
 }
 
 #[test]
@@ -839,5 +960,34 @@ fn random_cl26_programs_match_chialisp_043_hex() {
             chialisp_043_hex.trim(),
             "compiled hex mismatch for generated CL26 program seed {seed}:\n{program}"
         );
+    }
+}
+
+#[test]
+fn generated_tricky_cse_binding_children_match_or_compile_newly() {
+    for seed in 0..GENERATED_TRICKY_CSE_PROGRAMS_TO_COMPARE {
+        let (program, args) = tricky_cse_binding_child_program(seed);
+        let current_compiled =
+            compile_current_branch(&program).unwrap_or_else(|err| panic!("{err}"));
+        let current_output =
+            run_compiled_program("current compiler", &program, &current_compiled, &args)
+                .unwrap_or_else(|err| panic!("{err}"));
+
+        match compile_chialisp_043(&program) {
+            Ok(chialisp_043_compiled) => {
+                let chialisp_043_output =
+                    run_compiled_program("compiler 0.4.3", &program, &chialisp_043_compiled, &args)
+                        .unwrap_or_else(|err| panic!("{err}"));
+                assert_eq!(
+                    current_output, chialisp_043_output,
+                    "runtime output mismatch for generated tricky CSE program seed {seed}:\n{program}\nargs:\n{args}"
+                );
+            }
+            Err(err) => {
+                eprintln!(
+                    "compiler 0.4.3 did not compile generated tricky CSE program seed {seed}, which is allowed for this regression case:\n{err}"
+                );
+            }
+        }
     }
 }
