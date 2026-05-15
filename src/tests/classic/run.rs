@@ -2411,6 +2411,17 @@ fn test_cse_breakage_example_lift_outside_bindings() {
 }
 
 #[test]
+fn test_cse_breakage_example_conditional_dominance_trick() {
+    let filename = "resources/tests/cse-complex-4.clsp";
+    let program = do_basic_run(&vec!["run".to_string(), filename.to_string()])
+        .trim()
+        .to_string();
+
+    eprintln!(">> {program}");
+    assert!(program.starts_with("("));
+}
+
+#[test]
 fn test_cse_breakage_example_letstar() {
     let filename = "resources/tests/cse-bad-letstar.clsp";
     let program = do_basic_run(&vec!["run".to_string(), filename.to_string()])

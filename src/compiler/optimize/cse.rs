@@ -389,9 +389,7 @@ fn cse_is_unconditionally_used(
         })
 }
 
-// True if evaluating a condition always evaluates this CSE.  A use in the
-// condition expression is enough only when it is unconditional within that
-// expression; otherwise both branches must unconditionally use the CSE.
+// True if both branches of a condition always evaluate this CSE.
 fn cse_is_covering(
     condition: &CSECondition,
     conditions: &[CSECondition],
@@ -399,11 +397,6 @@ fn cse_is_covering(
 ) -> bool {
     if !condition.canonical {
         return false;
-    }
-
-    let condition_path = condition_subpath(&condition.path, 1);
-    if cse_is_unconditionally_used(&condition_path, conditions, instances) {
-        return true;
     }
 
     let consequent_path = condition_subpath(&condition.path, 2);

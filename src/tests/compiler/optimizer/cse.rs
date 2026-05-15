@@ -75,6 +75,21 @@ fn cse_saturated_for(source: &str, subexp: &str) -> bool {
 }
 
 #[test]
+fn test_cse_condition_use_does_not_cover_condition() {
+    let source = indoc! {"
+    (a
+      (i
+        (+ X 1)
+        (com 1)
+        (com (+ X 1))
+      )
+      @
+    )"};
+
+    assert!(!cse_saturated_for(source, "(+ X 1)"));
+}
+
+#[test]
 fn test_cse_conditional_condition_use_does_not_cover_condition() {
     let source = indoc! {"
     (a
