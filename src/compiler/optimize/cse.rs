@@ -433,13 +433,9 @@ fn condition_scoped_common_root(
 ) -> Option<Vec<BodyformPathArc>> {
     conditions
         .iter()
-        .flat_map(|condition| {
-            [1, 2, 3]
-                .iter()
-                .map(|argument| condition_subpath(&condition.path, *argument))
-        })
-        .filter(|condition_child| path_overlap_one_way(condition_child, common_root))
-        .max_by_key(|condition_child| condition_child.len())
+        .map(|condition| condition_subpath(&condition.path, 1))
+        .filter(|condition_path| path_overlap_one_way(condition_path, common_root))
+        .max_by_key(|condition_path| condition_path.len())
 }
 
 pub fn cse_classify_by_conditions(
