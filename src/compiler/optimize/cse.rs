@@ -399,11 +399,47 @@ fn cse_is_covering(
         return false;
     }
 
+    let condition_path = condition_subpath(&condition.path, 1);
+    if cse_is_unconditionally_used(&condition_path, conditions, instances) {
+        return true;
+    }
+
     let consequent_path = condition_subpath(&condition.path, 2);
     let alternative_path = condition_subpath(&condition.path, 3);
 
     cse_is_unconditionally_used(&consequent_path, conditions, instances)
         && cse_is_unconditionally_used(&alternative_path, conditions, instances)
+}
+
+fn common_instance_path_prefix(instances: &[CSEInstance]) -> Vec<BodyformPathArc> {
+    let min_size = instances.iter().map(|i| i.path.len()).min().unwrap_or(0);
+    let mut last_match = min_size;
+
+    for idx in 0..min_size {
+        for instance in instances.iter() {
+            if instance.path[idx] != instances[0].path[idx] {
+                last_match = last_match.min(idx);
+                break;
+            }
+        }
+    }
+
+    instances[0].path.iter().take(last_match).cloned().collect()
+}
+
+fn condition_scoped_common_root(
+    conditions: &[CSECondition],
+    common_root: &[BodyformPathArc],
+) -> Option<Vec<BodyformPathArc>> {
+    conditions
+        .iter()
+        .flat_map(|condition| {
+            [1, 2, 3]
+                .iter()
+                .map(|argument| condition_subpath(&condition.path, *argument))
+        })
+        .filter(|condition_child| path_overlap_one_way(condition_child, common_root))
+        .max_by_key(|condition_child| condition_child.len())
 }
 
 pub fn cse_classify_by_conditions(
@@ -418,7 +454,9 @@ pub fn cse_classify_by_conditions(
                 return None;
             }
 
-            let possible_root = detect_common_cse_root(None, &d.instances)?;
+            let common_root = common_instance_path_prefix(&d.instances);
+            let possible_root = condition_scoped_common_root(conditions, &common_root)
+                .unwrap_or_else(|| detect_common_cse_root(None, &d.instances).unwrap_or_default());
 
             // Find conditions that are downstream of the CSE root and contain
             // at least one CSE instance.  These are the conditionals we would
@@ -791,11 +829,15 @@ pub fn cse_optimize_bodyform(
 
             // Detect the root of the CSE as the innermost expression that covers
             // all uses.
-            let replace_path = match detect_common_cse_root(ceiling.as_ref(), &d.instances) {
-                Some(rp) => rp,
-                None => {
-                    // Can't do anything with this if there was no common root.
-                    continue;
+            let replace_path = if ceiling.is_none() {
+                d.root.clone()
+            } else {
+                match detect_common_cse_root(ceiling.as_ref(), &d.instances) {
+                    Some(rp) => rp,
+                    None => {
+                        // Can't do anything with this if there was no common root.
+                        continue;
+                    }
                 }
             };
 

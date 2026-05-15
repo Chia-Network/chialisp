@@ -75,7 +75,7 @@ fn cse_saturated_for(source: &str, subexp: &str) -> bool {
 }
 
 #[test]
-fn test_cse_condition_use_does_not_cover_condition() {
+fn test_cse_unconditional_condition_use_covers_condition() {
     let source = indoc! {"
     (a
       (i
@@ -86,7 +86,7 @@ fn test_cse_condition_use_does_not_cover_condition() {
       @
     )"};
 
-    assert!(!cse_saturated_for(source, "(+ X 1)"));
+    assert!(cse_saturated_for(source, "(+ X 1)"));
 }
 
 #[test]
