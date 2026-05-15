@@ -1,5 +1,4 @@
 use std::borrow::Borrow;
-use std::cmp::min;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Debug, Error, Formatter};
 use std::rc::Rc;
@@ -347,21 +346,71 @@ pub fn detect_conditions(bf: &BodyForm) -> Result<Vec<CSECondition>, CompileErr>
     Ok(results)
 }
 
-// True if for some condition path c_path there are matching instance paths
-// for either c_path + [CallArgument(1)] or both
-// c_path + [CallArgument(2)] and c_path + [CallArgument(3)]
-fn cse_is_covering(c_path: &[BodyformPathArc], instances: &[CSEInstance]) -> bool {
-    let mut target_paths = [c_path.to_vec(), c_path.to_vec(), c_path.to_vec()];
-    target_paths[0].push(BodyformPathArc::CallArgument(1));
-    target_paths[1].push(BodyformPathArc::CallArgument(2));
-    target_paths[2].push(BodyformPathArc::CallArgument(3));
+fn condition_subpath(c_path: &[BodyformPathArc], argument: usize) -> Vec<BodyformPathArc> {
+    let mut path = c_path.to_vec();
+    path.push(BodyformPathArc::CallArgument(argument));
+    path
+}
 
-    let have_targets: Vec<bool> = target_paths
+fn path_is_in_condition_branch(c_path: &[BodyformPathArc], path: &[BodyformPathArc]) -> bool {
+    let consequent_path = condition_subpath(c_path, 2);
+    let alternative_path = condition_subpath(c_path, 3);
+
+    path_overlap_one_way(&consequent_path, path) || path_overlap_one_way(&alternative_path, path)
+}
+
+fn first_branch_condition_between<'a>(
+    root: &[BodyformPathArc],
+    path: &[BodyformPathArc],
+    conditions: &'a [CSECondition],
+) -> Option<&'a CSECondition> {
+    conditions
         .iter()
-        .map(|t| instances.iter().any(|i| path_overlap_one_way(t, &i.path)))
-        .collect();
+        .filter(|c| path_overlap_one_way(root, &c.path))
+        .filter(|c| path_overlap_one_way(&c.path, path))
+        .filter(|c| path_is_in_condition_branch(&c.path, path))
+        .min_by_key(|c| c.path.len())
+}
 
-    have_targets[0] || (have_targets[1] && have_targets[2])
+fn cse_is_unconditionally_used(
+    root: &[BodyformPathArc],
+    conditions: &[CSECondition],
+    instances: &[CSEInstance],
+) -> bool {
+    instances
+        .iter()
+        .filter(|i| path_overlap_one_way(root, &i.path))
+        .any(|i| {
+            if let Some(condition) = first_branch_condition_between(root, &i.path, conditions) {
+                cse_is_covering(condition, conditions, instances)
+            } else {
+                true
+            }
+        })
+}
+
+// True if evaluating a condition always evaluates this CSE.  A use in the
+// condition expression is enough only when it is unconditional within that
+// expression; otherwise both branches must unconditionally use the CSE.
+fn cse_is_covering(
+    condition: &CSECondition,
+    conditions: &[CSECondition],
+    instances: &[CSEInstance],
+) -> bool {
+    if !condition.canonical {
+        return false;
+    }
+
+    let condition_path = condition_subpath(&condition.path, 1);
+    if cse_is_unconditionally_used(&condition_path, conditions, instances) {
+        return true;
+    }
+
+    let consequent_path = condition_subpath(&condition.path, 2);
+    let alternative_path = condition_subpath(&condition.path, 3);
+
+    cse_is_unconditionally_used(&consequent_path, conditions, instances)
+        && cse_is_unconditionally_used(&alternative_path, conditions, instances)
 }
 
 pub fn cse_classify_by_conditions(
@@ -376,25 +425,19 @@ pub fn cse_classify_by_conditions(
                 return None;
             }
 
-            let mut path_limit = 0;
-            let possible_root = d.instances[0].path.clone();
-            for i in d.instances.iter().skip(1) {
-                path_limit = min(path_limit, i.path.len());
-                for (idx, item) in possible_root.iter().take(path_limit).enumerate() {
-                    if &i.path[idx] != item {
-                        path_limit = idx;
-                        break;
-                    }
-                }
-            }
+            let possible_root = detect_common_cse_root(None, &d.instances)?;
 
-            // path_limit points to the common root of all instances of this
-            // cse detection.
-            //
-            // now find conditions that are downstream of the cse root.
+            // Find conditions that are downstream of the CSE root and contain
+            // at least one CSE instance.  These are the conditionals we would
+            // lift the CSE across.
             let applicable_conditions: Vec<CSECondition> = conditions
                 .iter()
-                .filter(|c| path_overlap_one_way(&c.path, &possible_root))
+                .filter(|c| path_overlap_one_way(&possible_root, &c.path))
+                .filter(|c| {
+                    d.instances
+                        .iter()
+                        .any(|i| path_overlap_one_way(&c.path, &i.path))
+                })
                 .cloned()
                 .collect();
 
@@ -403,7 +446,7 @@ pub fn cse_classify_by_conditions(
             // it encloses.
             let fully_canonical = applicable_conditions
                 .iter()
-                .all(|c| c.canonical && cse_is_covering(&c.path, &d.instances));
+                .all(|c| cse_is_covering(c, conditions, &d.instances));
 
             Some(CSEDetection {
                 hash: d.hash.clone(),

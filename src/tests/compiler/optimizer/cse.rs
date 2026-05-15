@@ -16,7 +16,9 @@ use crate::compiler::compiler::{compile_from_compileform, DefaultCompilerOpts};
 use crate::compiler::comptypes::{BodyForm, CompileForm, CompilerOpts, DefunData, HelperForm};
 use crate::compiler::dialect::AcceptedDialect;
 use crate::compiler::frontend::compile_bodyform;
-use crate::compiler::optimize::cse::cse_optimize_bodyform;
+use crate::compiler::optimize::cse::{
+    cse_classify_by_conditions, cse_detect, cse_optimize_bodyform, detect_conditions, CSEDetection,
+};
 use crate::compiler::optimize::get_optimizer;
 use crate::compiler::sexp::{enlist, parse_sexp, SExp};
 use crate::compiler::srcloc::Srcloc;
@@ -44,6 +46,77 @@ fn smoke_test_cse_optimization() {
     let re_def = r"(let ((cse_[$]_[0-9]+ ([*] ([+] 1 Q) R))) (a (i Q (com (G (- Q 1) cse_[$]_[0-9]+)) (com cse_[$]_[0-9]+)) 1))".replace("(", r"\(").replace(")",r"\)");
     let re = Regex::new(&re_def).expect("should become a regex");
     assert!(re.is_match(&cse_transformed.to_sexp().to_string()));
+}
+
+fn classify_cse_detections(source: &str) -> Vec<CSEDetection> {
+    let srcloc = Srcloc::start("*conditional-cse-test*");
+    let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new("*conditional-cse-test*"));
+    let parsed = parse_sexp(srcloc, source.bytes()).expect("should parse");
+    let bodyform = compile_bodyform(opts, parsed[0].clone()).expect("should compile");
+    let conditions = detect_conditions(&bodyform).expect("should detect conditions");
+    let cse_raw_detections = cse_detect(&bodyform).expect("should detect CSE");
+
+    cse_classify_by_conditions(&conditions, &cse_raw_detections)
+}
+
+fn cse_saturated_for(source: &str, subexp: &str) -> bool {
+    let matching_detections: Vec<CSEDetection> = classify_cse_detections(source)
+        .into_iter()
+        .filter(|d| d.subexp.to_sexp().to_string() == subexp)
+        .collect();
+
+    assert_eq!(
+        matching_detections.len(),
+        1,
+        "expected one detection for {subexp}"
+    );
+
+    matching_detections[0].saturated
+}
+
+#[test]
+fn test_cse_conditional_condition_use_does_not_cover_condition() {
+    let source = indoc! {"
+    (a
+      (i
+        (a (i B (com (+ X 1)) (com 0)) @)
+        (com 1)
+        (com (+ X 1))
+      )
+      @
+    )"};
+
+    assert!(!cse_saturated_for(source, "(+ X 1)"));
+}
+
+#[test]
+fn test_cse_conditional_branch_use_does_not_cover_condition() {
+    let source = indoc! {"
+    (a
+      (i
+        A
+        (com (a (i B (com (+ X 1)) (com 0)) @))
+        (com (+ X 1))
+      )
+      @
+    )"};
+
+    assert!(!cse_saturated_for(source, "(+ X 1)"));
+}
+
+#[test]
+fn test_cse_fully_covered_nested_condition_covers_branch() {
+    let source = indoc! {"
+    (a
+      (i
+        A
+        (com (a (i B (com (+ X 1)) (com (+ X 1))) @))
+        (com (+ X 1))
+      )
+      @
+    )"};
+
+    assert!(cse_saturated_for(source, "(+ X 1)"));
 }
 
 #[test]
