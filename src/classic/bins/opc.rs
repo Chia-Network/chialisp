@@ -1,7 +1,8 @@
-use chialisp::classic::clvm_tools::cmds::opc;
+use chialisp::classic::clvm_tools::cmds::opc_status;
 use std::env;
+use std::process::ExitCode;
 
-fn main() {
+fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
-    opc(&args);
+    ExitCode::from(opc_status(&args) as u8)
 }

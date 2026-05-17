@@ -27,7 +27,8 @@ fn check_argument_use(input_program: String) -> Vec<String> {
 
 fn do_basic_run(args: &Vec<String>) -> String {
     let mut s = Stream::new(None);
-    launch_tool(&mut s, args, &"run".to_string(), 2);
+    let mut serr = Stream::new(None);
+    launch_tool(&mut s, &mut serr, args, &"run".to_string(), 2);
     return s.get_value().decode();
 }
 

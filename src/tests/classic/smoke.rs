@@ -16,7 +16,9 @@ use crate::classic::clvm::serialize::{sexp_from_stream, SimpleCreateCLVMObject};
 use crate::classic::clvm::sexp::{sexp_as_bin, First, NodeSel, Rest, SelectNode, ThisNode};
 use crate::classic::clvm::syntax_error::SyntaxErr;
 use crate::classic::clvm_tools::binutils;
-use crate::classic::clvm_tools::cmds::{launch_tool, OpcConversion, OpdConversion, TConversion};
+use crate::classic::clvm_tools::cmds::{
+    call_tool_capture, launch_tool, OpcConversion, OpdConversion, TConversion,
+};
 
 use crate::classic::clvm_tools::binutils::{assemble, assemble_from_ir, disassemble};
 use crate::classic::clvm_tools::ir::r#type::IRRepr;
@@ -281,8 +283,10 @@ fn binutils_assemble() {
 #[test]
 fn quoted_negative() {
     let mut s = Stream::new(None);
+    let mut serr = Stream::new(None);
     launch_tool(
         &mut s,
+        &mut serr,
         &vec!["run".to_string(), "-d".to_string(), "(q . -3)".to_string()],
         &"run".to_string(),
         2,
@@ -432,8 +436,10 @@ fn test_simple_opd_conversion() {
 #[test]
 fn test_simple_brun_minus_x_1() {
     let mut s = Stream::new(None);
+    let mut serr = Stream::new(None);
     launch_tool(
         &mut s,
+        &mut serr,
         &vec![
             "brun".to_string(),
             "-x".to_string(),
@@ -450,8 +456,10 @@ fn test_simple_brun_minus_x_1() {
 #[test]
 fn test_simple_brun_minus_x_2() {
     let mut s = Stream::new(None);
+    let mut serr = Stream::new(None);
     launch_tool(
         &mut s,
+        &mut serr,
         &vec![
             "brun".to_string(),
             "-x".to_string(),
@@ -649,8 +657,10 @@ fn pool_member_innerpuz() {
     "};
     let desired = "(a (q 2 (i 767 (q 2 22 (c 2 (c 5 (c 1215 (c 1727 (c 383 (c (sha256 (logior 47 (logand (q . 0x00ffffffffffffffffffffffffffffffff) 767)) 11 383) ()))))))) (q 4 (c 8 (c 23 (c (a 30 (c 2 (c 383 ()))) ()))) (c (c 28 (c 95 (c 1727 ()))) ()))) 1) (c (q (50 61 . 51) 62 (c (c 28 (c 11 (c 23 ()))) (c (c 28 (c 5 (c 47 ()))) (c (c 10 (c 95 ())) (c (c 20 (c (sha256 95 (q . 36)) ())) ())))) 2 (i (l 5) (q 11 (q . 2) (a 30 (c 2 (c 9 ()))) (a 30 (c 2 (c 13 ())))) (q 11 (q . 1) 5)) 1) 1))".to_string();
     let mut s = Stream::new(None);
+    let mut serr = Stream::new(None);
     launch_tool(
         &mut s,
+        &mut serr,
         &vec![
             "run".to_string(),
             "--operators-version".to_string(),
@@ -673,16 +683,20 @@ fn test_non_consed_args() {
     let program =
         "(mod params (defun ident (arg) (f (list arg))) (ident (ident params)))".to_string();
     let mut s = Stream::new(None);
+    let mut serr = Stream::new(None);
     launch_tool(
         &mut s,
+        &mut serr,
         &vec!["run".to_string(), program],
         &"run".to_string(),
         2,
     );
     let result = s.get_value().decode().trim().to_string();
     let mut t = Stream::new(None);
+    let mut terr = Stream::new(None);
     launch_tool(
         &mut t,
+        &mut terr,
         &vec!["brun".to_string(), result, "99".to_string()],
         &"brun".to_string(),
         0,
@@ -779,6 +793,63 @@ fn test_argparse_not_present_option_2() {
 }
 
 #[test]
+fn test_err_exit_flag_for_call_tool_capture() {
+    let mut allocator = Allocator::new();
+    let without_flag = call_tool_capture(
+        &mut allocator,
+        "opc",
+        &[
+            "opc".to_string(),
+            "--this-option-does-not-exist".to_string(),
+        ],
+    );
+    assert_eq!(without_flag.exit_code, 0);
+
+    let with_flag = call_tool_capture(
+        &mut allocator,
+        "opc",
+        &[
+            "opc".to_string(),
+            "--err-exit".to_string(),
+            "--this-option-does-not-exist".to_string(),
+        ],
+    );
+    assert_eq!(with_flag.exit_code, 1);
+}
+
+#[test]
+fn test_err_exit_flag_for_launch_tool() {
+    let mut out = Stream::new(None);
+    let mut err = Stream::new(None);
+    let without_flag = launch_tool(
+        &mut out,
+        &mut err,
+        &[
+            "run".to_string(),
+            "--this-option-does-not-exist".to_string(),
+        ],
+        "run",
+        2,
+    );
+    assert_eq!(without_flag, 0);
+
+    let mut out = Stream::new(None);
+    let mut err = Stream::new(None);
+    let with_flag = launch_tool(
+        &mut out,
+        &mut err,
+        &[
+            "run".to_string(),
+            "--err-exit".to_string(),
+            "--this-option-does-not-exist".to_string(),
+        ],
+        "run",
+        2,
+    );
+    assert_eq!(with_flag, 1);
+}
+
+#[test]
 fn test_syntax_err_smoke() {
     let syntax_err = SyntaxErr::new("err".to_string());
     assert_eq!(syntax_err.to_string(), "err");
@@ -837,8 +908,10 @@ fn test_sub_args() {
 #[test]
 fn test_smoke_cl23_program_with_zero_folding() {
     let mut s = Stream::new(None);
+    let mut serr = Stream::new(None);
     launch_tool(
         &mut s,
+        &mut serr,
         &vec![
             "run".to_string(),
             "(mod () (include *standard-cl-23*) (defconst X (concat 0x00 0x00)) X)".to_string(),
@@ -853,8 +926,10 @@ fn test_smoke_cl23_program_with_zero_folding() {
 #[test]
 fn test_smoke_cl23_program_without_zero_folding() {
     let mut s = Stream::new(None);
+    let mut serr = Stream::new(None);
     launch_tool(
         &mut s,
+        &mut serr,
         &vec![
             "run".to_string(),
             "(mod () (include *standard-cl-23.1*) (defconst X (concat 0x00 0x00)) X)".to_string(),

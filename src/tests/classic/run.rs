@@ -30,13 +30,15 @@ const NUM_GEN_ATOMS: usize = 16;
 
 pub fn do_basic_brun(args: &Vec<String>) -> String {
     let mut s = Stream::new(None);
-    launch_tool(&mut s, args, &"run".to_string(), 0);
+    let mut serr = Stream::new(None);
+    launch_tool(&mut s, &mut serr, args, &"run".to_string(), 0);
     return s.get_value().decode();
 }
 
 pub fn do_basic_run(args: &Vec<String>) -> String {
     let mut s = Stream::new(None);
-    launch_tool(&mut s, args, &"run".to_string(), 2);
+    let mut serr = Stream::new(None);
+    launch_tool(&mut s, &mut serr, args, &"run".to_string(), 2);
     return s.get_value().decode();
 }
 
