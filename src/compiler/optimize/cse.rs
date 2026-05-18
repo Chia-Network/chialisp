@@ -350,8 +350,13 @@ pub fn detect_conditions(bf: &BodyForm) -> Result<Vec<CSECondition>, CompileErr>
 // True if for some condition path c_path there are matching instance paths
 // for either c_path + [CallArgument(1)] or both
 // c_path + [CallArgument(2)] and c_path + [CallArgument(3)]
-fn cse_is_covering(conditions: &[CSECondition], c_path: &[BodyformPathArc], instances: &[CSEInstance]) -> bool {
-    let condition_paths: Vec<Vec<BodyformPathArc>> = conditions.iter().map(|c| c.path.clone()).collect();
+fn cse_is_covering(
+    conditions: &[CSECondition],
+    c_path: &[BodyformPathArc],
+    instances: &[CSEInstance],
+) -> bool {
+    let condition_paths: Vec<Vec<BodyformPathArc>> =
+        conditions.iter().map(|c| c.path.clone()).collect();
     let mut target_paths = [c_path.to_vec(), c_path.to_vec(), c_path.to_vec()];
     target_paths[0].push(BodyformPathArc::CallArgument(1));
     target_paths[1].push(BodyformPathArc::CallArgument(2));
@@ -359,20 +364,40 @@ fn cse_is_covering(conditions: &[CSECondition], c_path: &[BodyformPathArc], inst
 
     let have_targets: Vec<Vec<CSEInstance>> = target_paths
         .iter()
-        .map(|t| instances.iter().filter(|i| path_overlap_one_way(t, &i.path)).cloned().collect())
+        .map(|t| {
+            instances
+                .iter()
+                .filter(|i| path_overlap_one_way(t, &i.path))
+                .cloned()
+                .collect()
+        })
         .collect();
 
     // Now we get the conditions that apply to each of the target paths and see if they're
     // covering.
-    let applicable_conditions: Vec<Vec<CSECondition>> = (0..3).map(|idx| {
-        conditions.iter().filter(|c| c.path != c_path && path_overlap_one_way(&target_paths[idx], &c.path)).cloned().collect()
-    }).collect();
-    let undominated_conditions: Vec<Vec<CSECondition>> = applicable_conditions.iter().map(|cs| {
-        cs.iter().filter(|c| !cse_is_covering(conditions, &c.path, instances)).cloned().collect()
-    }).collect();
-    let dominated_or_populated: Vec<bool> = undominated_conditions.iter().enumerate().map(|(i,cs)| {
-        !have_targets[i].is_empty() && cs.is_empty()
-    }).collect();
+    let applicable_conditions: Vec<Vec<CSECondition>> = (0..3)
+        .map(|idx| {
+            conditions
+                .iter()
+                .filter(|c| c.path != c_path && path_overlap_one_way(&target_paths[idx], &c.path))
+                .cloned()
+                .collect()
+        })
+        .collect();
+    let undominated_conditions: Vec<Vec<CSECondition>> = applicable_conditions
+        .iter()
+        .map(|cs| {
+            cs.iter()
+                .filter(|c| !cse_is_covering(conditions, &c.path, instances))
+                .cloned()
+                .collect()
+        })
+        .collect();
+    let dominated_or_populated: Vec<bool> = undominated_conditions
+        .iter()
+        .enumerate()
+        .map(|(i, cs)| !have_targets[i].is_empty() && cs.is_empty())
+        .collect();
     dominated_or_populated[0] || (dominated_or_populated[1] && dominated_or_populated[2])
 }
 
