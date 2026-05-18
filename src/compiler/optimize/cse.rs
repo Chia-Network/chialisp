@@ -408,7 +408,7 @@ fn cse_is_covering(
                 .filter(|c| {
                     instances
                         .iter()
-                        .any(|i| path_overlap_one_way(&i.path, &c.path))
+                        .any(|i| path_overlap_one_way(&c.path, &i.path))
                 })
                 .filter(|c| c.path != c_path && path_overlap_one_way(&target_paths[idx], &c.path))
                 .cloned()
