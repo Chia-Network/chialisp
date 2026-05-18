@@ -404,13 +404,14 @@ fn cse_is_covering(
         .map(|idx| {
             conditions
                 .iter()
+                // Isolate conditions downstream of one of the taget expressions.
+                .filter(|c| c.path != c_path && path_overlap_one_way(&target_paths[idx], &c.path))
                 // Use only conditions that overlap a cse instance.
                 .filter(|c| {
                     instances
                         .iter()
                         .any(|i| path_overlap_one_way(&c.path, &i.path))
                 })
-                .filter(|c| c.path != c_path && path_overlap_one_way(&target_paths[idx], &c.path))
                 .cloned()
                 .collect()
         })
