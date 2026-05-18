@@ -402,6 +402,7 @@ pub fn compile_module(
         if stepping < 26 {
             dialect.stepping = Some(26);
         }
+        dialect.cse_dominance = true;
     }
     opts = opts.set_optimize(true).set_dialect(dialect);
 

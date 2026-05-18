@@ -131,6 +131,7 @@ fn test_codegen_function_cache() {
             strict: true,
             int_fix: true,
             extra_numeric_constants: false,
+            cse_dominance: false,
         });
     let fs_opts = TestModuleCompilerOpts::new(orig_opts);
     let opts: Rc<dyn CompilerOpts> = Rc::new(fs_opts.clone());
@@ -421,6 +422,7 @@ fn funcache_key_same_across_dialects_different_output() {
             strict,
             int_fix: strict,
             extra_numeric_constants: false,
+            cse_dominance: false,
         })
     };
 
@@ -500,6 +502,7 @@ fn funcache_cold_vs_warm_roundtrip() {
             strict: true,
             int_fix: true,
             extra_numeric_constants: false,
+            cse_dominance: false,
         });
     let fs_opts = TestModuleCompilerOpts::new(opts.clone());
     let opts: Rc<dyn CompilerOpts> = Rc::new(fs_opts);
@@ -591,6 +594,7 @@ fn funcache_without_dependency_graph_does_not_store_entries() {
             strict: true,
             int_fix: true,
             extra_numeric_constants: false,
+            cse_dominance: false,
         });
     let loc = Srcloc::start("*fc-no-graph*");
     let parsed =

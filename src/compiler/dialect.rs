@@ -21,6 +21,8 @@ pub struct AcceptedDialect {
     pub int_fix: bool,
     // Extra numeric constants
     pub extra_numeric_constants: bool,
+    // Include fix for downstream cse dominance
+    pub cse_dominance: bool,
 }
 
 /// A package containing the content we should insert when a dialect include is
@@ -56,6 +58,7 @@ lazy_static! {
                         strict: true,
                         int_fix: false,
                         extra_numeric_constants: false,
+                        cse_dominance: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 22)
@@ -71,6 +74,7 @@ lazy_static! {
                         strict: false,
                         int_fix: false,
                         extra_numeric_constants: false,
+                        cse_dominance: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 22)
@@ -86,6 +90,7 @@ lazy_static! {
                         strict: true,
                         int_fix: false,
                         extra_numeric_constants: false,
+                        cse_dominance: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 23)
@@ -101,6 +106,7 @@ lazy_static! {
                         strict: true,
                         int_fix: true,
                         extra_numeric_constants: false,
+                        cse_dominance: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 23)
@@ -116,6 +122,7 @@ lazy_static! {
                         strict: true,
                         int_fix: true,
                         extra_numeric_constants: false,
+                        cse_dominance: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 24)
@@ -131,6 +138,7 @@ lazy_static! {
                         strict: true,
                         int_fix: true,
                         extra_numeric_constants: false,
+                        cse_dominance: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 25)
@@ -146,6 +154,7 @@ lazy_static! {
                         strict: true,
                         int_fix: true,
                         extra_numeric_constants: true,
+                        cse_dominance: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 25)
@@ -161,6 +170,7 @@ lazy_static! {
                         strict: false,
                         int_fix: true,
                         extra_numeric_constants: true,
+                        cse_dominance: false,
                     },
                     content: indoc! {"()"}.to_string(),
                 },
@@ -173,6 +183,7 @@ lazy_static! {
                         strict: true,
                         int_fix: true,
                         extra_numeric_constants: false,
+                        cse_dominance: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 26)

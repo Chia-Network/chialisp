@@ -1,33 +1,31 @@
-(mod ARGS
-  (include *standard-cl-26*)
+(include *standard-cl-26*)
 
-  ;; A program which has nested uses of common subexpressions within
-  ;; conditions.  The downstream conditions are not dominated.
-  (defun F (X Y)
-    (if
-      (assign
-        A (+ (l (@ Y 1)) 1)
-        B (+ (l (@ Y 1)) (+ A 1))
-        C (+ (l (@ Y 1)) (+ A 1))
-        D (if (l (@ Y 1)) (+ Y 2) ())
-        (+ A (+ A 1) (+ A 1) (l (@ Y 1)) B C D)
-      )
-      (let
-        ((C (if (@ Y 1) (+ Y 2) ()))
-         (D (if (@ Y 1) (+ Y 2) ()))
-         (E (if (@ Y 1) (+ Y 2) ()))
-         (F 2))
-        (+ (if (@ Y 1) (+ Y 2) ()) (if (@ Y 1) (+ Y 2) ()) C D E F)
-      )
-      (let*
-        ((E (+ X 3))
-         (F (+ E 1))
-         (G (+ (+ X 3) (+ E 1) F))
-         (H (+ (+ X 3) (+ E 1) (+ (+ X 3) (+ E 1) F) G)))
-        (+ (+ X 3) (+ E 1) G F H)
-      )
+;; A program which has nested uses of common subexpressions within
+;; conditions.  The downstream conditions are not dominated.
+(defun F (X Y)
+  (if
+    (assign
+      A (+ (l (@ Y 1)) 1)
+      B (+ (l (@ Y 1)) (+ A 1))
+      C (+ (l (@ Y 1)) (+ A 1))
+      D (if (l (@ Y 1)) (+ Y 2) ())
+      (+ A (+ A 1) (+ A 1) (l (@ Y 1)) B C D)
+    )
+    (let
+      ((C (if (@ Y 1) (+ Y 2) ()))
+       (D (if (@ Y 1) (+ Y 2) ()))
+       (E (if (@ Y 1) (+ Y 2) ()))
+       (F 2))
+      (+ (if (@ Y 1) (+ Y 2) ()) (if (@ Y 1) (+ Y 2) ()) C D E F)
+    )
+    (let*
+      ((E (+ X 3))
+       (F (+ E 1))
+       (G (+ (+ X 3) (+ E 1) F))
+       (H (+ (+ X 3) (+ E 1) (+ (+ X 3) (+ E 1) F) G)))
+      (+ (+ X 3) (+ E 1) G F H)
     )
   )
-
-  (F &rest ARGS)
 )
+
+(export ARGS (F &rest ARGS))
