@@ -347,9 +347,20 @@ pub fn detect_conditions(bf: &BodyForm) -> Result<Vec<CSECondition>, CompileErr>
     Ok(results)
 }
 
-// True if for some condition path c_path there are matching instance paths
-// for either c_path + [CallArgument(1)] or both
-// c_path + [CallArgument(2)] and c_path + [CallArgument(3)]
+// True if for some condition path c_path there are dominated uses in either the condition
+// (CallArgument(1)) or both conditional paths (CallArgument(2) and CallArgument(3)).
+//
+// We match downstream conditions to ensure that uses in each of these clauses are themselves
+// dominant.
+//
+// Overall, one of these subexpressions passes if it
+// - contains an instance of the common subexpression
+// - all downstream conditions are dominated by the subexpression
+//
+// args:
+// - conditions all conditions that contain the subexpression
+// - c_path is the path to the condition being considered
+// - instances is the list of all instances of the subexpression
 fn cse_is_covering(
     conditions: &[CSECondition],
     c_path: &[BodyformPathArc],
@@ -360,6 +371,7 @@ fn cse_is_covering(
     target_paths[1].push(BodyformPathArc::CallArgument(2));
     target_paths[2].push(BodyformPathArc::CallArgument(3));
 
+    // Find all the instances that are in this condition.
     let have_targets: Vec<Vec<CSEInstance>> = target_paths
         .iter()
         .map(|t| {
@@ -382,6 +394,8 @@ fn cse_is_covering(
                 .collect()
         })
         .collect();
+    // Detect conditions down the path that contain the subexpression but are not dominated
+    // by it.
     let undominated_conditions: Vec<Vec<CSECondition>> = applicable_conditions
         .iter()
         .map(|cs| {
@@ -391,6 +405,8 @@ fn cse_is_covering(
                 .collect()
         })
         .collect();
+    // Detect if there are uses down this path and there are no conditions down this path
+    // that contain the subexpression and aren't dominated by it.
     let dominated_or_populated: Vec<bool> = undominated_conditions
         .iter()
         .enumerate()
