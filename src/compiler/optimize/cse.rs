@@ -404,6 +404,7 @@ fn cse_is_covering(
         .map(|idx| {
             conditions
                 .iter()
+                // Use only conditions that overlap a cse instance.
                 .filter(|c| {
                     instances
                         .iter()
