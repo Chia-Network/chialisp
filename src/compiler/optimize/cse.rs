@@ -376,6 +376,16 @@ fn cse_is_covering(
     target_paths[1].push(BodyformPathArc::CallArgument(2));
     target_paths[2].push(BodyformPathArc::CallArgument(3));
 
+    // I had overlooked the idea that an inner condition not dominating invalidates dominance
+    // overall in part of a condition.  This preserves the original form.
+    if before_cse_dominance_fix(opts.clone()) {
+        let have_targets: Vec<bool> = target_paths
+            .iter()
+            .map(|t| instances.iter().any(|i| path_overlap_one_way(t, &i.path)))
+            .collect();
+        return have_targets[0] || (have_targets[1] && have_targets[2]);
+    }
+
     // Find all the instances that are in this condition.
     let have_targets: Vec<Vec<CSEInstance>> = target_paths
         .iter()
@@ -387,13 +397,6 @@ fn cse_is_covering(
                 .collect()
         })
         .collect();
-
-    // I had overlooked the idea that an inner condition not dominating invalidates dominance
-    // overall in part of a condition.  This preserves the original form.
-    if before_cse_dominance_fix(opts.clone()) {
-        return !have_targets[0].is_empty()
-            || (!have_targets[1].is_empty() && have_targets[2].is_empty());
-    }
 
     // Now we get the conditions that apply to each of the target paths and see if they're
     // covering.

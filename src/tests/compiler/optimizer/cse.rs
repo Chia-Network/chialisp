@@ -41,6 +41,7 @@ fn smoke_test_cse_optimization() {
     let bodyform = compile_bodyform(opts.clone(), parsed[0].clone()).expect("should compile");
     let cse_transformed = cse_optimize_bodyform(opts.clone(), &srcloc, b"test", true, &bodyform)
         .expect("should cse optimize");
+    eprintln!("cse_transformed {}", cse_transformed.to_sexp());
     let re_def = r"(let ((cse_[$]_[0-9]+ ([*] ([+] 1 Q) R))) (a (i Q (com (G (- Q 1) cse_[$]_[0-9]+)) (com cse_[$]_[0-9]+)) 1))".replace("(", r"\(").replace(")",r"\)");
     let re = Regex::new(&re_def).expect("should become a regex");
     assert!(re.is_match(&cse_transformed.to_sexp().to_string()));
