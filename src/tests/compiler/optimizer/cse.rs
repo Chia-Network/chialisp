@@ -98,6 +98,7 @@ fn test_cse_tricky_2() {
     .to_string();
     assert_eq!(run_result_11_15, "87");
     let _ = std::fs::remove_file("reosurces/tests/cse-complex-4.hex");
+    let _ = std::fs::remove_dir_all(".chialisp");
 }
 
 #[test]
