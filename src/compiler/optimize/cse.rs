@@ -437,15 +437,22 @@ fn detect_common_cse_root(instances: &[CSEInstance]) -> Vec<BodyformPathArc> {
         }
     }
 
-    // Back it up to the body of a let binding.
+    // Back it up to the body of a let binding or where we've removed a variable from
+    // its own scope, which can be true if an assign form is not in a body position.
     for (idx, f) in target_path.iter().enumerate().rev() {
         if f == &BodyformPathArc::BodyOf {
-            return target_path.iter().take(idx + 1).cloned().collect();
+            return Some(target_path.iter().take(idx + 1).cloned().collect());
+        }
+
+        if let Some(ceiling) = ceiling {
+            if ceiling.len() > idx || (ceiling.len() == idx && target_path[0..idx] != *ceiling) {
+                return None;
+            }
         }
     }
 
     // No internal root if there was no let traversal.
-    Vec::new()
+    Some(Vec::new())
 }
 
 // Finds lambdas that contain CSE detection instances from the provided list.
@@ -587,6 +594,31 @@ fn merge_cse_binding(body: &BodyForm, binding: Rc<Binding>) -> BodyForm {
     body.clone()
 }
 
+fn match_bindings(bindings: &[Rc<Binding>], used_names: &HashSet<Vec<u8>>) -> HashSet<Vec<u8>> {
+    let mut new_set = HashSet::new();
+    for b in bindings.iter() {
+        match &b.pattern {
+            BindingPattern::Name(n) => {
+                let n_ref: &[u8] = n;
+                if used_names.contains(n_ref) {
+                    new_set.insert(n.clone());
+                }
+            }
+            BindingPattern::Complex(p) => {
+                let names: HashSet<Vec<u8>> =
+                    collect_used_names_sexp(p.clone()).into_iter().collect();
+                for n in names.iter() {
+                    let n_ref: &[u8] = n;
+                    if used_names.contains(n_ref) {
+                        new_set.insert(n.clone());
+                    }
+                }
+            }
+        }
+    }
+    new_set
+}
+
 type CSEReplacementTargetAndBindings<'a> = Vec<&'a (Vec<BodyformPathArc>, Vec<BindingStackEntry>)>;
 
 /// Given a bodyform, CSE analyze and produce a semantically equivalent bodyform
@@ -670,6 +702,34 @@ pub fn cse_optimize_bodyform(
                 ));
             };
 
+            let used_names: HashSet<Vec<u8>> = collect_used_names_bodyform(&prototype_instance)
+                .into_iter()
+                .collect();
+            // Detect the ceiling for this cse move.  It can only go to the body of a
+            // containing assignment form that binds a name it needs.
+            //
+            // This fixes a bug.  The requirements for causing the bug now are that one use
+            // of the common subexpression is in a binding that uses other bound values.
+            let mut ceiling = None;
+            for instance in d.instances.iter() {
+                for (idx, _f) in instance.path.iter().enumerate().rev() {
+                    let want_path: Vec<BodyformPathArc> =
+                        instance.path.iter().take(idx).cloned().collect();
+                    if let Some(BodyForm::Let(_, data)) =
+                        retrieve_bodyform(&want_path, &function_body, &|b: &BodyForm| b.clone())
+                    {
+                        let names_provided_by_let_in_cse =
+                            match_bindings(&data.bindings, &used_names);
+                        if !names_provided_by_let_in_cse.is_empty() {
+                            let mut top_possible_body = want_path;
+                            top_possible_body.push(BodyformPathArc::BodyOf);
+                            ceiling = Some(top_possible_body);
+                            break;
+                        }
+                    }
+                }
+            }
+
             // We'll assign a fresh variable for each of the detections
             // that are applicable now.
             let new_variable_name = gensym(b"cse".to_vec());
@@ -692,7 +752,13 @@ pub fn cse_optimize_bodyform(
 
             // Detect the root of the CSE as the innermost expression that covers
             // all uses.
-            let replace_path = detect_common_cse_root(&d.instances);
+            let replace_path = match detect_common_cse_root(ceiling.as_ref(), &d.instances) {
+                Some(rp) => rp,
+                None => {
+                    // Can't do anything with this if there was no common root.
+                    continue;
+                }
+            };
 
             // Route the captured repeated subexpression into intervening lambdas.
             // This means that the lambdas will gain a capture on the left side of
