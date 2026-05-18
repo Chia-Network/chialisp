@@ -69,6 +69,32 @@ fn test_cse_tricky() {
 }
 
 #[test]
+fn test_cse_tricky_2() {
+    let filename = "resources/tests/cse-complex-4.clsp";
+    let program = do_basic_run(&vec!["run".to_string(), filename.to_string()])
+        .trim()
+        .to_string();
+
+    let run_result_11 = do_basic_brun(&vec![
+        "brun".to_string(),
+        program.clone(),
+        "(11)".to_string(),
+    ])
+    .trim()
+    .to_string();
+    assert_eq!(run_result_11, "2");
+
+    let run_result_11_15 = do_basic_brun(&vec![
+        "brun".to_string(),
+        program.clone(),
+        "(11 15)".to_string(),
+    ])
+    .trim()
+    .to_string();
+    assert_eq!(run_result_11_15, "87");
+}
+
+#[test]
 fn test_cse_tricky_lambda() {
     let filename = "resources/tests/strict/cse-complex-1-lambda.clsp";
     let program = do_basic_run(&vec!["run".to_string(), filename.to_string()])
