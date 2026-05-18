@@ -355,8 +355,6 @@ fn cse_is_covering(
     c_path: &[BodyformPathArc],
     instances: &[CSEInstance],
 ) -> bool {
-    let condition_paths: Vec<Vec<BodyformPathArc>> =
-        conditions.iter().map(|c| c.path.clone()).collect();
     let mut target_paths = [c_path.to_vec(), c_path.to_vec(), c_path.to_vec()];
     target_paths[0].push(BodyformPathArc::CallArgument(1));
     target_paths[1].push(BodyformPathArc::CallArgument(2));
@@ -440,7 +438,7 @@ pub fn cse_classify_by_conditions(
             // it encloses.
             let fully_canonical = applicable_conditions
                 .iter()
-                .all(|c| c.canonical && cse_is_covering(&conditions, &c.path, &d.instances));
+                .all(|c| c.canonical && cse_is_covering(conditions, &c.path, &d.instances));
 
             Some(CSEDetection {
                 hash: d.hash.clone(),
