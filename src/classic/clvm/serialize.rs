@@ -155,10 +155,7 @@ impl OpStackEntry for OpCons {
         _f: &mut Stream,
         to_sexp_f: Box<dyn TToSexpF<'a>>,
     ) -> Option<EvalErr> {
-        match val_stack
-            .pop()
-            .and_then(|r| val_stack.pop().map(|l| (l, r)))
-        {
+        match val_stack.pop().zip(val_stack.pop()) {
             None => None,
             Some((l, r)) => {
                 match to_sexp_f.invoke(allocator, CastableType::TupleOf(Rc::new(l), Rc::new(r))) {
