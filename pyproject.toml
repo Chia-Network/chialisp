@@ -5,6 +5,8 @@ build-backend = "maturin"
 [tool.maturin]
 bindings = "pyo3"
 features = ["extension-module"]
+python-source = "python"
+module-name = "chialisp._chialisp"
 
 [project]
 name = "chialisp"
