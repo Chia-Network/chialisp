@@ -2,7 +2,8 @@ use std::rc::Rc;
 
 use crate::compiler::clvm::sha256tree_from_atom;
 use crate::compiler::comptypes::{CompileErr, CompileForm, CompilerOpts};
-use crate::compiler::sexp::decode_string;
+use crate::compiler::sexp::{decode_string, parse_sexp, SExp};
+use crate::compiler::srcloc::Srcloc;
 
 fn cache_key(cf: &CompileForm) -> String {
     let mut include_fingerprints = Vec::new();
@@ -65,6 +66,40 @@ pub fn set_cache_element(
 #[cfg(test)]
 pub fn module_cache_key_hex(cf: &CompileForm) -> String {
     cache_key(cf)
+}
+
+pub(crate) fn function_cache_path(function_cache_key: &[u8]) -> String {
+    let key = hex::encode(sha256tree_from_atom(function_cache_key));
+    format!(".chialisp/function-cache/{key}.clvm")
+}
+
+pub(crate) fn try_function_from_cache(
+    opts: Rc<dyn CompilerOpts>,
+    loc: &Srcloc,
+    function_cache_key: &[u8],
+) -> Option<Rc<SExp>> {
+    let cache_path = function_cache_path(function_cache_key);
+    let (_, data) = opts.read_new_file(loc.file.to_string(), cache_path).ok()?;
+    let parsed = parse_sexp(
+        Srcloc::start("*function-cache*"),
+        decode_string(&data).bytes(),
+    )
+    .ok()?;
+    if parsed.len() == 1 {
+        Some(parsed[0].clone())
+    } else {
+        None
+    }
+}
+
+pub(crate) fn set_function_cache_element(
+    opts: Rc<dyn CompilerOpts>,
+    function_cache_key: &[u8],
+    code: &SExp,
+) {
+    let cache_path = function_cache_path(function_cache_key);
+    opts.write_new_file(&cache_path, code.to_string().as_bytes())
+        .ok();
 }
 
 #[cfg(test)]
@@ -140,6 +175,18 @@ mod tests {
         assert_ne!(
             k,
             "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        );
+    }
+
+    #[test]
+    fn function_cache_path_hashes_function_key() {
+        let key = b"function cache key";
+        assert_eq!(
+            function_cache_path(key),
+            format!(
+                ".chialisp/function-cache/{}.clvm",
+                hex::encode(sha256tree_from_atom(key))
+            )
         );
     }
 }

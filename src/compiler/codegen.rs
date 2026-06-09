@@ -18,6 +18,7 @@ use crate::compiler::comptypes::{
     LetFormKind, ModulePhase, PrimaryCodegen, RawCallSpec, SyntheticType,
 };
 use crate::compiler::debug::{build_swap_table_mut, relabel};
+use crate::compiler::diskcache::{set_function_cache_element, try_function_from_cache};
 use crate::compiler::evaluate::{is_apply_atom, Evaluator, EVAL_STACK_LIMIT};
 use crate::compiler::frontend::{compile_bodyform, make_provides_set};
 use crate::compiler::gensym::gensym;
@@ -26,7 +27,7 @@ use crate::compiler::lambda::lambda_codegen;
 use crate::compiler::optimize::depgraph::{DepgraphOptions, FunctionDependencyGraph};
 use crate::compiler::prims::{primapply, primcons, primquote};
 use crate::compiler::runtypes::RunFailure;
-use crate::compiler::sexp::{decode_string, printable, SExp};
+use crate::compiler::sexp::{decode_string, enlist, printable, SExp};
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::FunctionEntry;
 use crate::compiler::StartOfCodegenOptimization;
@@ -1252,24 +1253,16 @@ fn get_depended_on_forms(
 /// Compute a cache key for `helper`'s generated CLVM code inside `compiler`.
 ///
 /// **Preimage contents** (hashed via `sha256tree`):
-///   `(helper.to_sexp() . depended_on_forms)`
+///   `(funcache-v2 compile-settings helper-dependency-form)`
 /// where `depended_on_forms` is the s-expression representation of every
 /// inline, constant, and tabled-constant body that `helper` transitively
 /// depends on (via the dependency graph), plus the env shape filtered to
 /// only the names in the dependency closure.
 ///
-/// **Inputs NOT in the preimage** (callers must hold these constant for the
-/// lifetime of a single `Funcache` instance):
-///   - `opts.dialect()` (stepping, strict, int_fix)
-///   - `opts.module_phase()`
-///   - `compiler.parentfns`, `compiler.left_env`
-///   - Optimizer strategy
-///
-/// This is safe today because `Funcache` is created fresh inside each
-/// `deinline_opt` call, where all of the above are constant. If the cache is
-/// ever made longer-lived (e.g. across compilation units), those inputs must
-/// be added to the preimage.
+/// The compile settings are included because function cache entries can now be
+/// persisted across compiler invocations.
 pub(crate) fn get_function_cache_key(
+    opts: Rc<dyn CompilerOpts>,
     compiler: &PrimaryCodegen,
     dependency_graph: &FunctionDependencyGraph,
     helper: &HelperForm,
@@ -1285,7 +1278,28 @@ pub(crate) fn get_function_cache_key(
     );
     let depended_on =
         get_depended_on_forms(compiler, helper.loc(), filtered_env.clone(), &depends_on);
-    let hashable = Rc::new(SExp::Cons(helper.loc(), helper.to_sexp(), depended_on));
+    let helper_dependency_form = Rc::new(SExp::Cons(helper.loc(), helper.to_sexp(), depended_on));
+    let loc = helper.loc();
+    let atom = |s: String| Rc::new(SExp::Atom(loc.clone(), s.into_bytes()));
+    let mut parentfns: Vec<String> = compiler.parentfns.iter().map(hex::encode).collect();
+    parentfns.sort();
+    let hashable = Rc::new(enlist(
+        loc.clone(),
+        &[
+            atom("funcache-v2".to_string()),
+            atom(format!("dialect={:?}", opts.dialect())),
+            atom(format!("opts_module_phase={:?}", opts.module_phase())),
+            atom(format!("compiler_module_phase={:?}", compiler.module_phase)),
+            atom(format!("optimize={}", opts.optimize())),
+            atom(format!("frontend_opt={}", opts.frontend_opt())),
+            atom(format!("stdenv={}", opts.stdenv())),
+            atom(format!("in_defun={}", opts.in_defun())),
+            atom(format!("disassembly_ver={:?}", opts.disassembly_ver())),
+            atom(format!("left_env={}", compiler.left_env)),
+            atom(format!("parentfns={}", parentfns.join(","))),
+            helper_dependency_form,
+        ],
+    ));
     sha256tree(hashable)
 }
 
@@ -1320,14 +1334,39 @@ fn codegen_(
                 let cache_key = dependency_graph
                     .as_ref()
                     .filter(|_| context.funcache.is_some())
-                    .map(|d| get_function_cache_key(compiler, d, h));
+                    .map(|d| get_function_cache_key(opts.clone(), compiler, d, h));
 
-                if let Some(code) = cache_key.as_ref().and_then(|key| {
-                    context
-                        .funcache
-                        .as_ref()
-                        .and_then(|c| c.function_outputs.get(key).map(|e| e.code.clone()))
-                }) {
+                let cached_code = if let (Some(key), Some(fc)) =
+                    (cache_key.as_ref(), context.funcache.as_mut())
+                {
+                    match fc.function_outputs.get(key).map(|e| e.code.clone()) {
+                        Some(code) => {
+                            fc.hits += 1;
+                            Some(code)
+                        }
+                        None => match try_function_from_cache(opts.clone(), &h.loc(), key) {
+                            Some(code) => {
+                                fc.hits += 1;
+                                fc.function_outputs.insert(
+                                    key.to_vec(),
+                                    FunctionEntry {
+                                        code: code.clone(),
+                                        name: h.name().to_vec(),
+                                    },
+                                );
+                                Some(code)
+                            }
+                            None => {
+                                fc.misses += 1;
+                                None
+                            }
+                        },
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(code) = cached_code {
                     if !allow_redef {
                         check_already_present(code.clone())?;
                     }
@@ -1404,12 +1443,13 @@ fn codegen_(
 
                 if let (Some(fc), Some(hash)) = (&mut context.funcache, cache_key) {
                     fc.function_outputs.insert(
-                        hash,
+                        hash.clone(),
                         FunctionEntry {
                             code: code.clone(),
                             name: h.name().to_vec(),
                         },
                     );
+                    set_function_cache_element(opts.clone(), &hash, code.borrow());
                 }
 
                 Ok(compiler.add_defun(
