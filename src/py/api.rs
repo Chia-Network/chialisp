@@ -2,9 +2,9 @@
 // #[allow(clippy::borrow_deref_ref)]
 // Eventually this can be downgraded and applied just to compile_clvm
 // re: https://github.com/rust-lang/rust-clippy/issues/8971
-use pyo3::CastError;
 use pyo3::exceptions::PyException;
 use pyo3::types::{PyBool, PyDict, PyString, PyTuple};
+use pyo3::CastError;
 use pyo3::{create_exception, prelude::*, IntoPyObjectExt};
 
 use std::cmp::Ordering;
