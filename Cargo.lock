@@ -205,7 +205,7 @@ dependencies = [
 
 [[package]]
 name = "chialisp"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "binascii",
  "chia-bls 0.42.0",
