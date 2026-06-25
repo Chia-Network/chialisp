@@ -506,7 +506,7 @@ pub fn compose_run_function(
 }
 
 #[pymodule]
-fn chialisp(py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
+fn _chialisp(py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_submodule(&create_cmds_module(py)?)?;
     m.add_submodule(&create_binutils_module(py)?)?;
 

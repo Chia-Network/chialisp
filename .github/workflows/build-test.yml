@@ -350,6 +350,26 @@ jobs:
       - name: cargo fmt
         run: cargo fmt --all -- --files-with-diff --check
 
+  typing:
+    runs-on: ubuntu-22.04
+    name: typing
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: stubtest
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install maturin==1.10.2 mypy
+          maturin build --release
+          pip install target/wheels/chialisp-*.whl
+          stubtest --concise chialisp
+
   cargo_fmt:
     runs-on: ubuntu-22.04
     name: cargo fmt
