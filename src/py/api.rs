@@ -4,6 +4,7 @@
 // re: https://github.com/rust-lang/rust-clippy/issues/8971
 use pyo3::exceptions::PyException;
 use pyo3::types::{PyBool, PyDict, PyString, PyTuple};
+use pyo3::CastError;
 use pyo3::{create_exception, prelude::*, IntoPyObjectExt};
 
 use std::cmp::Ordering;
@@ -79,7 +80,7 @@ fn get_source_from_input(input_code: CompileClvmSource) -> PyResult<(String, Str
                     .and_then(|x| x.get_item(0))
                     .and_then(|x| x.str())
             } else {
-                input_path.extract()
+                input_path.extract().map_err(|e: CastError| e.into())
             }?;
 
             let mut path_string = real_input_path.to_string();
@@ -101,7 +102,7 @@ fn run_clvm_compilation(
     action: CompileClvmAction,
     search_paths: Vec<String>,
     export_symbols: Option<bool>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     // Resolve the input, get the indicated path and content.
     let (path_string, file_content) = get_source_from_input(input_code)?;
 
@@ -148,7 +149,7 @@ fn run_clvm_compilation(
 
             // Produce compiled output according to whether output with symbols
             // or just the standard result is required.
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 if export_symbols == Some(true) {
                     let mut result_dict = HashMap::new();
                     result_dict.insert("output".to_string(), compiled.into_py_any(py)?);
@@ -167,7 +168,7 @@ fn run_clvm_compilation(
                     .map(|rlist| rlist.iter().map(|i| decode_string(&i.name)).collect())?;
 
             // Return all visited files.
-            Python::with_gil(|py| result_deps.into_py_any(py))
+            Python::attach(|py| result_deps.into_py_any(py))
         }
     }
 }
@@ -179,7 +180,7 @@ fn compile_clvm(
     output_path: String,
     search_paths: Vec<String>,
     export_symbols: Option<bool>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     run_clvm_compilation(
         CompileClvmSource::SourcePath(input_path),
         CompileClvmAction::CompileCode(Some(output_path)),
@@ -194,7 +195,7 @@ fn compile(
     source: String,
     search_paths: Vec<String>,
     export_symbols: Option<bool>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     run_clvm_compilation(
         CompileClvmSource::SourceCode("*inline*".to_string(), source),
         CompileClvmAction::CompileCode(None),
@@ -208,7 +209,7 @@ fn compile(
 fn check_dependencies(
     input_path: Bound<'_, PyAny>,
     search_paths: Vec<String>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     run_clvm_compilation(
         CompileClvmSource::SourcePath(input_path),
         CompileClvmAction::CheckDependencies,
@@ -225,7 +226,7 @@ struct PythonRunStep {
     rx: Receiver<(bool, Option<BTreeMap<String, String>>)>,
 }
 
-fn runstep(myself: &mut PythonRunStep) -> PyResult<Option<PyObject>> {
+fn runstep(myself: &mut PythonRunStep) -> PyResult<Option<Py<PyAny>>> {
     if myself.ended {
         return Ok(None);
     }
@@ -249,7 +250,7 @@ fn runstep(myself: &mut PythonRunStep) -> PyResult<Option<PyObject>> {
     let dict_result = res
         .1
         .map(|m| {
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 let dict = PyDict::new(py);
                 for (k, v) in m.iter() {
                     let _ = dict.set_item(PyString::new(py, k), PyString::new(py, v));
@@ -272,8 +273,8 @@ impl PythonRunStep {
         let _ = self.tx.send(true);
     }
 
-    fn step(&mut self, py: Python) -> PyResult<Option<PyObject>> {
-        py.allow_threads(|| runstep(self))
+    fn step(&mut self, py: Python) -> PyResult<Option<Py<PyAny>>> {
+        py.detach(|| runstep(self))
     }
 }
 
@@ -289,7 +290,7 @@ impl CldbSinglePythonOverride {
 
 impl CldbSingleBespokeOverride for CldbSinglePythonOverride {
     fn get_override(&self, env: Rc<SExp>) -> Result<Rc<SExp>, RunFailure> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let arg_value = clvm_value_to_python(py, env.clone())
                 .map_err(|e| RunFailure::RunErr(env.loc(), format!("{}", e)))?;
             let res = self
@@ -317,7 +318,7 @@ fn start_clvm_program(
     let (command_tx, command_rx) = mpsc::channel();
     let (result_tx, result_rx) = mpsc::channel();
 
-    let print_only_value = Python::with_gil(|py| {
+    let print_only_value = Python::attach(|py| {
         let print_only_option = run_options
             .and_then(|h| h.get("print").map(|p| Ok(p.clone_ref(py))))
             .or_else(|| Some(PyBool::new(py, false).into_py_any(py)))
@@ -361,7 +362,7 @@ fn start_clvm_program(
             HashMap::new();
         if let Some(t) = overrides {
             for (k, v) in t.iter() {
-                let v_clone = Python::with_gil(|py| v.clone_ref(py));
+                let v_clone = Python::attach(|py| v.clone_ref(py));
                 let override_fun_callable = CldbSinglePythonOverride::new(v_clone);
                 overrides_table.insert(k.clone(), Box::new(override_fun_callable));
             }
@@ -506,7 +507,7 @@ pub fn compose_run_function(
 }
 
 #[pymodule]
-fn chialisp(py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
+fn _chialisp(py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_submodule(&create_cmds_module(py)?)?;
     m.add_submodule(&create_binutils_module(py)?)?;
 

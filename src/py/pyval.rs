@@ -18,7 +18,7 @@ pub fn map_err_to_pyerr<PA>(srcloc: Srcloc, r: PyResult<PA>) -> Result<PA, RunFa
 
 pub fn python_value_to_clvm(val: Bound<'_, PyAny>) -> Result<Rc<SExp>, RunFailure> {
     let srcloc = Srcloc::start("*python*");
-    val.downcast::<PyList>()
+    val.cast::<PyList>()
         .ok()
         .map(|l| {
             if l.is_empty() {
@@ -39,7 +39,7 @@ pub fn python_value_to_clvm(val: Bound<'_, PyAny>) -> Result<Rc<SExp>, RunFailur
         })
         .map(Some)
         .unwrap_or_else(|| {
-            val.downcast::<PyTuple>()
+            val.cast::<PyTuple>()
                 .map(|t| {
                     if t.len() != 2 {
                         Err(RunFailure::RunErr(
@@ -60,7 +60,7 @@ pub fn python_value_to_clvm(val: Bound<'_, PyAny>) -> Result<Rc<SExp>, RunFailur
         })
         .map(Some)
         .unwrap_or_else(|| {
-            val.downcast::<PyBytes>()
+            val.cast::<PyBytes>()
                 .map(|b| Ok(Rc::new(SExp::Atom(srcloc.clone(), b.as_bytes().to_vec()))))
                 .ok()
         })

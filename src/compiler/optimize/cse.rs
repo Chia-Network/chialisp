@@ -517,18 +517,24 @@ fn detect_common_cse_root(
     // Back it up to the body of a let binding or where we've removed a variable from
     // its own scope, which can be true if an assign form is not in a body position.
     for (idx, f) in target_path.iter().enumerate().rev() {
-        if f == &BodyformPathArc::BodyOf {
-            return Some(target_path.iter().take(idx + 1).cloned().collect());
-        }
-
         if let Some(ceiling) = ceiling {
             if ceiling.len() > idx || (ceiling.len() == idx && target_path[0..idx] != *ceiling) {
                 return None;
             }
         }
+        if f == &BodyformPathArc::BodyOf {
+            return Some(target_path.iter().take(idx + 1).cloned().collect());
+        }
     }
 
-    // No internal root if there was no let traversal.
+    // No internal root if there was no let traversal. If we found a ceiling,
+    // the top-level root would lift the CSE above a binding it depends on.
+    if let Some(ceiling) = ceiling {
+        if !ceiling.is_empty() {
+            return None;
+        }
+    }
+
     Some(Vec::new())
 }
 
@@ -1015,4 +1021,24 @@ pub fn cse_optimize_bodyform(
     }
 
     Ok(function_body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn common_cse_root_rejects_empty_path_above_ceiling() {
+        let ceiling = vec![BodyformPathArc::BodyOf];
+        let instances = vec![
+            CSEInstance {
+                path: vec![BodyformPathArc::LetBinding(1)],
+            },
+            CSEInstance {
+                path: vec![BodyformPathArc::BodyOf],
+            },
+        ];
+
+        assert_eq!(detect_common_cse_root(Some(&ceiling), &instances), None);
+    }
 }
