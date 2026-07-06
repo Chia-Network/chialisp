@@ -31,6 +31,7 @@ use crate::compiler::diskcache::{set_cache_element, try_element_from_cache};
 use crate::compiler::frontend::frontend;
 use crate::compiler::optimize::depgraph::{DepgraphOptions, FunctionDependencyGraph};
 use crate::compiler::optimize::get_optimizer;
+use crate::compiler::preprocessor::detect_chialisp_module;
 use crate::compiler::prims;
 use crate::compiler::resolve::{find_helper_target, resolve_namespaces};
 use crate::compiler::sexp::{decode_string, enlist, parse_sexp_flags, SExp};
@@ -398,11 +399,11 @@ pub fn compile_module(
     // Module style is new, so there will never be a time when we don't want every
     // bug fix that existed before it was released.
     dialect.int_fix = true;
+    dialect.cse_dominance = true;
     if let Some(stepping) = dialect.stepping {
         if stepping < 26 {
             dialect.stepping = Some(26);
         }
-        dialect.cse_dominance = true;
     }
     opts = opts.set_optimize(true).set_dialect(dialect);
 
@@ -827,9 +828,13 @@ fn add_inline_hash_for_constant(program: &mut CompileForm, loc: &Srcloc, fun_nam
 /// Given a set of untreated input forms, compile it as a clvm program.
 pub fn compile_pre_forms(
     context: &mut BasicCompileContext,
-    opts: Rc<dyn CompilerOpts>,
+    mut opts: Rc<dyn CompilerOpts>,
     pre_forms: &[Rc<SExp>],
 ) -> Result<CompilerOutput, CompileErr> {
+    if let Some(dialect) = detect_chialisp_module(Srcloc::start(&opts.filename()), pre_forms)? {
+        opts = opts.set_stdenv(dialect.strict).set_dialect(dialect);
+    }
+
     let p0 = frontend(opts.clone(), pre_forms)?;
 
     match p0 {
