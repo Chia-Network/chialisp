@@ -4,12 +4,25 @@ use crate::compiler::clvm::sha256tree_from_atom;
 use crate::compiler::comptypes::{CompileErr, CompileForm, CompilerOpts};
 use crate::compiler::sexp::decode_string;
 
-fn cache_key(cf: &CompileForm) -> String {
-    let mut include_fingerprints = Vec::new();
-    for include in cf.include_forms.iter() {
-        include_fingerprints.extend_from_slice(&include.fingerprint);
+fn cache_key(opts: Rc<dyn CompilerOpts>, cf: &CompileForm) -> String {
+    let dialect = opts.dialect();
+    let mut key_material = b"module-cache-v2".to_vec();
+
+    if let Some(stepping) = dialect.stepping {
+        key_material.push(1);
+        key_material.extend_from_slice(&stepping.to_le_bytes());
+    } else {
+        key_material.push(0);
     }
-    hex::encode(sha256tree_from_atom(&include_fingerprints))
+    key_material.push(u8::from(dialect.strict));
+    key_material.push(u8::from(dialect.int_fix));
+    key_material.push(u8::from(dialect.extra_numeric_constants));
+    key_material.push(u8::from(dialect.cse_dominance));
+
+    for include in cf.include_forms.iter() {
+        key_material.extend_from_slice(&include.fingerprint);
+    }
+    hex::encode(sha256tree_from_atom(&key_material))
 }
 
 /// Try to get an element from the cache, exposing errors.
@@ -30,7 +43,7 @@ pub fn try_element_from_cache(
     cf: &CompileForm,
     export_path: &str,
 ) -> Option<String> {
-    let key = cache_key(cf);
+    let key = cache_key(opts.clone(), cf);
     let hex_file_name = format!(".chialisp/{key}/{export_path}");
     opts.read_new_file(cf.loc().file.to_string(), hex_file_name.clone())
         .ok()
@@ -43,7 +56,7 @@ pub fn set_cache_element_error(
     export_path: &str,
     export_hex: &str,
 ) -> Result<(), CompileErr> {
-    let key = cache_key(cf);
+    let key = cache_key(opts.clone(), cf);
     let hex_file_name = format!(".chialisp/{key}/{export_path}");
     opts.write_new_file(&hex_file_name, export_hex.as_bytes())?;
     Ok(())
@@ -63,14 +76,16 @@ pub fn set_cache_element(
 
 /// Exposes the cache-key segment used under `.chialisp/<key>/` (tests and tooling only).
 #[cfg(test)]
-pub fn module_cache_key_hex(cf: &CompileForm) -> String {
-    cache_key(cf)
+pub fn module_cache_key_hex(opts: Rc<dyn CompilerOpts>, cf: &CompileForm) -> String {
+    cache_key(opts, cf)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compiler::compiler::DefaultCompilerOpts;
     use crate::compiler::comptypes::{BodyForm, CompileForm, IncludeDesc, IncludeProcessType};
+    use crate::compiler::dialect::AcceptedDialect;
     use crate::compiler::sexp::SExp;
     use crate::compiler::srcloc::Srcloc;
 
@@ -84,14 +99,18 @@ mod tests {
         }
     }
 
+    fn default_opts(filename: &str) -> Rc<dyn CompilerOpts> {
+        Rc::new(DefaultCompilerOpts::new(filename))
+    }
+
     #[test]
     fn cache_key_stable_for_empty_includes() {
         let loc = Srcloc::start(&"a.clsp".to_string());
         let cf = empty_compileform(loc);
-        let k = cache_key(&cf);
+        let k = cache_key(default_opts("a.clsp"), &cf);
         assert_eq!(
             k,
-            "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+            "bb1dfe276a7165264b23349a3d349c470f451aa964f89c172bfb5bc8fdf9d548"
         );
     }
 
@@ -112,13 +131,34 @@ mod tests {
             fingerprint: fp,
         };
         cf.include_forms.push(desc(fp(&[1, 2, 3])));
-        let k1 = cache_key(&cf);
+        let k1 = cache_key(default_opts("b.clsp"), &cf);
         cf.include_forms.push(desc(fp(&[4, 5])));
-        let k2 = cache_key(&cf);
+        let k2 = cache_key(default_opts("b.clsp"), &cf);
         assert_ne!(k1, k2);
         cf.include_forms.truncate(1);
-        let k1_again = cache_key(&cf);
+        let k1_again = cache_key(default_opts("b.clsp"), &cf);
         assert_eq!(k1, k1_again);
+    }
+
+    #[test]
+    fn cache_key_changes_with_cse_dominance() {
+        let loc = Srcloc::start(&"cse.clsp".to_string());
+        let cf = empty_compileform(loc);
+        let dialect_before = AcceptedDialect {
+            stepping: Some(26),
+            strict: true,
+            int_fix: true,
+            extra_numeric_constants: false,
+            cse_dominance: false,
+        };
+        let dialect_after = AcceptedDialect {
+            cse_dominance: true,
+            ..dialect_before.clone()
+        };
+        let before = default_opts("cse.clsp").set_dialect(dialect_before);
+        let after = default_opts("cse.clsp").set_dialect(dialect_after);
+
+        assert_ne!(cache_key(before, &cf), cache_key(after, &cf));
     }
 
     #[test]
@@ -135,7 +175,7 @@ mod tests {
             kind: Some(IncludeProcessType::Compiled),
             fingerprint: main_fp,
         });
-        let k = cache_key(&cf);
+        let k = cache_key(default_opts("c.clsp"), &cf);
         assert!(!k.is_empty());
         assert_ne!(
             k,
