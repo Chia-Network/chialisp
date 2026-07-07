@@ -387,14 +387,7 @@ fn populate_export_map(
 ///
 /// (export foo)
 /// (export bar)
-pub fn compile_module(
-    context: &mut BasicCompileContext,
-    mut opts: Rc<dyn CompilerOpts>,
-    standalone_constants: &HashSet<Vec<u8>>,
-    mut program: CompileForm,
-    exports: &[Export],
-) -> Result<CompileModuleOutput, CompileErr> {
-    let loc = program.loc();
+fn module_compile_opts(opts: Rc<dyn CompilerOpts>) -> Rc<dyn CompilerOpts> {
     let mut dialect = opts.dialect();
     // Module style is new, so there will never be a time when we don't want every
     // bug fix that existed before it was released.
@@ -405,7 +398,19 @@ pub fn compile_module(
             dialect.stepping = Some(26);
         }
     }
-    opts = opts.set_optimize(true).set_dialect(dialect);
+
+    opts.set_optimize(true).set_dialect(dialect)
+}
+
+pub fn compile_module(
+    context: &mut BasicCompileContext,
+    mut opts: Rc<dyn CompilerOpts>,
+    standalone_constants: &HashSet<Vec<u8>>,
+    mut program: CompileForm,
+    exports: &[Export],
+) -> Result<CompileModuleOutput, CompileErr> {
+    let loc = program.loc();
+    opts = module_compile_opts(opts);
 
     if exports.is_empty() {
         return Err(CompileErr(
@@ -844,19 +849,13 @@ pub fn compile_pre_forms(
         )),
         FrontendOutput::Module(mut cf, exports) => {
             add_main_fingerprint(&mut cf, pre_forms);
+            let opts = module_compile_opts(opts);
+
             // If we can read from cache, use that.  We'll use the actual form of the compileform
             // and opts (the dialect) to determine a cache hit.
             if let Some(result) = try_from_cache(opts.clone(), &cf, &exports)? {
                 return Ok(result);
             }
-
-            // cl23 always reflects optimization.
-            let dialect = opts.dialect();
-            let opts = if let Some(stepping) = dialect.stepping.as_ref() {
-                opts.set_optimize(*stepping > 21)
-            } else {
-                opts
-            };
 
             // We make a dependency graph of constants and functions.  There must
             // be a solveable hierarchy for constants, that is some must be top
