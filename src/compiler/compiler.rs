@@ -839,7 +839,8 @@ pub fn compile_pre_forms(
             return opts;
         }
 
-        if let Some(stepping) = opts.dialect().stepping.as_ref() {
+        let dialect = opts.dialect();
+        if let Some(stepping) = dialect.stepping.as_ref() {
             return opts.set_optimize(*stepping > 21);
         }
 
@@ -861,8 +862,6 @@ pub fn compile_pre_forms(
             if let Some(result) = try_from_cache(opts.clone(), &cf, &exports)? {
                 return Ok(result);
             }
-
-            let dialect = opts.dialect();
 
             // We make a dependency graph of constants and functions.  There must
             // be a solveable hierarchy for constants, that is some must be top
