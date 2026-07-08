@@ -832,8 +832,9 @@ pub fn compile_pre_forms(
 ) -> Result<CompilerOutput, CompileErr> {
     let p0 = frontend(opts.clone(), pre_forms)?;
 
-    // Allow a diag flag to verify that this upgrade affects binary output.
-    let opts_23_upgrade = || {
+    // cl23 always reflects optimization.
+    opts = (|| {
+        // Allow a diag flag to verify that this upgrade affects binary output.
         #[cfg(test)]
         if opts.diag_flags().contains(&DIAG_FLAG_NO_CL23_UPGRADE) {
             return opts;
@@ -845,10 +846,7 @@ pub fn compile_pre_forms(
         }
 
         opts
-    };
-
-    // cl23 always reflects optimization.
-    opts = opts_23_upgrade();
+    })();
 
     match p0 {
         FrontendOutput::CompileForm(p0) => Ok(CompilerOutput::Program(
