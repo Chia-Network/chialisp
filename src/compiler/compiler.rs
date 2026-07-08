@@ -844,7 +844,7 @@ pub fn compile_pre_forms(
             return opts.set_optimize(*stepping > 21);
         }
 
-        return opts;
+        opts
     };
 
     // cl23 always reflects optimization.
