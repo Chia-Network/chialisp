@@ -41,6 +41,7 @@ use crate::util::Number;
 pub const SHA256TREE_PROGRAM_CLVM: &str = "(2 (1 2 (3 (7 5) (1 11 (1 . 2) (2 2 (4 2 (4 9 ()))) (2 2 (4 2 (4 13 ())))) (1 11 (1 . 1) 5)) 1) (4 (1 2 (3 (7 5) (1 11 (1 . 2) (2 2 (4 2 (4 9 ()))) (2 2 (4 2 (4 13 ())))) (1 11 (1 . 1) 5)) 1) 1))";
 
 pub const FUZZ_TEST_PRE_CSE_MERGE_FIX_FLAG: usize = 1;
+pub const DIAG_FLAG_NO_CL23_UPGRADE: usize = 2;
 
 lazy_static! {
     pub static ref STANDARD_MACROS: String = {
@@ -826,10 +827,27 @@ fn add_inline_hash_for_constant(program: &mut CompileForm, loc: &Srcloc, fun_nam
 /// Given a set of untreated input forms, compile it as a clvm program.
 pub fn compile_pre_forms(
     context: &mut BasicCompileContext,
-    opts: Rc<dyn CompilerOpts>,
+    mut opts: Rc<dyn CompilerOpts>,
     pre_forms: &[Rc<SExp>],
 ) -> Result<CompilerOutput, CompileErr> {
     let p0 = frontend(opts.clone(), pre_forms)?;
+
+    // Allow a diag flag to verify that this upgrade affects binary output.
+    let opts_23_upgrade = || {
+        #[cfg(test)]
+        if opts.diag_flags().contains(&DIAG_FLAG_NO_CL23_UPGRADE) {
+            return opts;
+        }
+
+        if let Some(stepping) = opts.dialect().stepping.as_ref() {
+            return opts.set_optimize(*stepping > 21);
+        }
+
+        return opts;
+    };
+
+    // cl23 always reflects optimization.
+    opts = opts_23_upgrade();
 
     match p0 {
         FrontendOutput::CompileForm(p0) => Ok(CompilerOutput::Program(
@@ -844,13 +862,7 @@ pub fn compile_pre_forms(
                 return Ok(result);
             }
 
-            // cl23 always reflects optimization.
             let dialect = opts.dialect();
-            let opts = if let Some(stepping) = dialect.stepping.as_ref() {
-                opts.set_optimize(*stepping > 21)
-            } else {
-                opts
-            };
 
             // We make a dependency graph of constants and functions.  There must
             // be a solveable hierarchy for constants, that is some must be top

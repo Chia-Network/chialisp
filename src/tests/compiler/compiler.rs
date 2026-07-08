@@ -1,15 +1,17 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
 use clvm_rs::allocator::Allocator;
 
 use crate::classic::clvm::__type_compatibility__::bi_one;
-use crate::classic::clvm_tools::binutils::disassemble;
+use crate::classic::clvm_tools::binutils::{assemble, disassemble};
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
+use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 use crate::compiler::clvm::run;
 use crate::compiler::compiler::{compile_file, DefaultCompilerOpts};
+use crate::compiler::compiler::DIAG_FLAG_NO_CL23_UPGRADE;
 use crate::compiler::comptypes::{CompileErr, CompilerOpts};
-use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
+use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS, detect_modern};
 use crate::compiler::frontend::{collect_used_names_sexp, frontend};
 use crate::compiler::optimize::get_optimizer;
 use crate::compiler::rename::rename_in_cons;
@@ -2570,4 +2572,36 @@ fn test_odd_hex_works() {
     )
     .expect("should work");
     assert_eq!(res.to_string(), "16");
+}
+
+#[test]
+fn test_compile_opt_modes_old() {
+    let mut opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new("test.clsp")).set_optimize(false);
+    let mut allocator = Allocator::new();
+    let runner: Rc<dyn TRunProgram> = Rc::new(DefaultProgramRunner::new());
+    let program = "(mod (A) (include *standard-cl-23*) (+ 1 15))";
+    opts = opts.set_search_paths(&["resources/tests/module/".to_string(), ".".to_string()]);
+    opts = opts.set_dialect(AcceptedDialect {
+        stepping: Some(22),
+        strict: true,
+        int_fix: false,
+        extra_numeric_constants: false,
+    });
+    let cres_opt = compile_file(
+        &mut allocator,
+        runner.clone(),
+        opts.clone(),
+        program,
+        &mut HashMap::new()
+    ).unwrap().to_sexp();
+    let diag_flags: HashSet<usize> = [DIAG_FLAG_NO_CL23_UPGRADE].into_iter().collect();
+    opts = opts.set_diag_flags(Rc::new(diag_flags));
+    let cres_noopt = compile_file(
+        &mut allocator,
+        runner,
+        opts.clone(),
+        program,
+        &mut HashMap::new()
+    ).unwrap().to_sexp();
+    assert_ne!(cres_opt.to_string(), cres_noopt.to_string());
 }
