@@ -27,7 +27,7 @@ use crate::compiler::comptypes::{
     SyntheticType,
 };
 use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
-use crate::compiler::diskcache::{set_cache_element, try_element_from_cache};
+use crate::compiler::diskcache::{hash_file_name, set_cache_element, try_element_from_cache};
 use crate::compiler::frontend::frontend;
 use crate::compiler::optimize::depgraph::{DepgraphOptions, FunctionDependencyGraph};
 use crate::compiler::optimize::get_optimizer;
@@ -745,9 +745,8 @@ pub fn try_from_cache(
 
         let decoded_hex = hex_to_modern_sexp(&mut allocator, &empty_symbols, cf.loc(), &hex_data)?;
         let treehash = sha256tree(decoded_hex);
-        let hash_file_name = format!("{}_hash.hex", &hex_file_name[0..hex_file_name.len() - 4]);
         let treehash_hex = hex::encode(&treehash);
-        opts.write_new_file(&hash_file_name, treehash_hex.as_bytes())?;
+        opts.write_new_file(&hash_file_name(&hex_file_name), treehash_hex.as_bytes())?;
     }
 
     Ok(Some(CompilerOutput::Module(CompileModuleOutput {
