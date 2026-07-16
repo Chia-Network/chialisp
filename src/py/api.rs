@@ -408,19 +408,40 @@ fn start_clvm_program(
 
 #[pyfunction]
 #[pyo3(signature = (tool_name, args, default_stage=2))]
-fn launch_tool(tool_name: String, args: Vec<String>, default_stage: u32) -> Vec<u8> {
+fn launch_tool(
+    tool_name: String,
+    args: Vec<String>,
+    default_stage: u32,
+) -> PyResult<(u8, Vec<u8>, Vec<u8>)> {
     let mut stdout = Stream::new(None);
-    cmds::launch_tool(&mut stdout, &args, &tool_name, default_stage);
-    stdout.get_value().data().clone()
+    let mut stderr = Stream::new(None);
+    let raw_exit = cmds::launch_tool(&mut stdout, &mut stderr, &args, &tool_name, default_stage);
+    let exit_code = raw_exit.clamp(0, 255) as u8;
+    Ok((
+        exit_code,
+        stdout.get_value().data().clone(),
+        stderr.get_value().data().clone(),
+    ))
 }
 
 #[pyfunction]
-fn call_tool(tool_name: String, args: Vec<String>) -> PyResult<Vec<u8>> {
+fn call_tool(tool_name: String, args: Vec<String>) -> PyResult<(u8, Vec<u8>, Vec<u8>)> {
     let mut allocator = Allocator::new();
     let mut stdout = Stream::new(None);
-    cmds::call_tool(&mut stdout, &mut allocator, &tool_name, &args)
-        .map_err(|e| ToolError::new_err(e))?;
-    Ok(stdout.get_value().data().clone())
+    let mut stderr = Stream::new(None);
+    let exit_code =
+        match cmds::call_tool(&mut stdout, &mut stderr, &mut allocator, &tool_name, &args) {
+            Ok(_) => 0,
+            Err(e) => {
+                stderr.write_str(&e);
+                1
+            }
+        };
+    Ok((
+        exit_code,
+        stdout.get_value().data().clone(),
+        stderr.get_value().data().clone(),
+    ))
 }
 
 fn compile_err_to_cldb_err(err: &CompileErr) -> PyErr {

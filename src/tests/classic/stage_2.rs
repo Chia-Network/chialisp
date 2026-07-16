@@ -284,8 +284,10 @@ fn test_process_embed_file_as_hex() {
         process_embed_file(&mut allocator, runner, declaration_sexp).expect("should work");
     let matching_part_of_decl = rest(&mut allocator, content).expect("should be quoted");
     let mut outstream = Stream::new(None);
+    let mut errstream = Stream::new(None);
     call_tool(
         &mut outstream,
+        &mut errstream,
         &mut allocator,
         "opd",
         &[
