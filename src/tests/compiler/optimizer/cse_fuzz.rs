@@ -248,6 +248,7 @@ impl PropertyTestState<FuzzT> for TrickyAssignExpectation {
                 strict: true,
                 int_fix: false,
                 extra_numeric_constants: false,
+                cse_dominance: false,
             })
             .set_optimize(true),
         )

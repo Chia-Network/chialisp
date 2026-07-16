@@ -13,6 +13,7 @@ fn stepping_over_24_returns_true_for_module_compile_without_stepping() {
             strict: false,
             int_fix: false,
             extra_numeric_constants: false,
+            cse_dominance: false,
         });
     assert!(
         !stepping_over_24(opts.clone()),
@@ -34,6 +35,7 @@ fn stepping_over_24_returns_false_for_stepping_23() {
             strict: false,
             int_fix: false,
             extra_numeric_constants: false,
+            cse_dominance: false,
         });
     assert!(!stepping_over_24(opts));
 }
@@ -46,6 +48,7 @@ fn stepping_over_24_returns_true_for_stepping_25() {
             strict: true,
             int_fix: true,
             extra_numeric_constants: false,
+            cse_dominance: false,
         });
     assert!(stepping_over_24(opts));
 }
