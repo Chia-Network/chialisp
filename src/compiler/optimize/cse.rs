@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use crate::compiler::clvm::sha256tree;
 use crate::compiler::comptypes::{
-    Binding, BindingPattern, BodyForm, CompileErr, LambdaData, LetData, LetFormInlineHint,
-    LetFormKind,
+    Binding, BindingPattern, BodyForm, CompileErr, CompilerOpts, LambdaData, LetData,
+    LetFormInlineHint, LetFormKind,
 };
 use crate::compiler::evaluate::{is_apply_atom, is_i_atom};
 use crate::compiler::frontend::{collect_used_names_bodyform, collect_used_names_sexp};
@@ -67,6 +67,10 @@ pub struct CSECondition {
 pub struct BindingStackEntry {
     pub binding: Rc<Binding>,
     pub merge: bool,
+}
+
+fn before_cse_dominance_fix(opts: Rc<dyn CompilerOpts>) -> bool {
+    !opts.dialect().cse_dominance
 }
 
 // in a chain of conditions:
@@ -347,24 +351,94 @@ pub fn detect_conditions(bf: &BodyForm) -> Result<Vec<CSECondition>, CompileErr>
     Ok(results)
 }
 
-// True if for some condition path c_path there are matching instance paths
-// for either c_path + [CallArgument(1)] or both
-// c_path + [CallArgument(2)] and c_path + [CallArgument(3)]
-fn cse_is_covering(c_path: &[BodyformPathArc], instances: &[CSEInstance]) -> bool {
+// True if for some condition path c_path there are dominated uses in either the condition
+// (CallArgument(1)) or both conditional paths (CallArgument(2) and CallArgument(3)).
+//
+// We match downstream conditions to ensure that uses in each of these clauses are themselves
+// dominant.
+//
+// Overall, one of these subexpressions passes if it
+// - contains an instance of the common subexpression
+// - all downstream conditions are dominated by the subexpression
+//
+// args:
+// - conditions all conditions that contain the subexpression
+// - c_path is the path to the condition being considered
+// - instances is the list of all instances of the subexpression
+fn cse_is_covering(
+    opts: Rc<dyn CompilerOpts>,
+    conditions: &[CSECondition],
+    c_path: &[BodyformPathArc],
+    instances: &[CSEInstance],
+) -> bool {
     let mut target_paths = [c_path.to_vec(), c_path.to_vec(), c_path.to_vec()];
     target_paths[0].push(BodyformPathArc::CallArgument(1));
     target_paths[1].push(BodyformPathArc::CallArgument(2));
     target_paths[2].push(BodyformPathArc::CallArgument(3));
 
-    let have_targets: Vec<bool> = target_paths
+    // I had overlooked the idea that an inner condition not dominating invalidates dominance
+    // overall in part of a condition.  This preserves the original form.
+    if before_cse_dominance_fix(opts.clone()) {
+        let have_targets: Vec<bool> = target_paths
+            .iter()
+            .map(|t| instances.iter().any(|i| path_overlap_one_way(t, &i.path)))
+            .collect();
+        return have_targets[0] || (have_targets[1] && have_targets[2]);
+    }
+
+    // Find all the instances that are in this condition.
+    let have_targets: Vec<Vec<CSEInstance>> = target_paths
         .iter()
-        .map(|t| instances.iter().any(|i| path_overlap_one_way(t, &i.path)))
+        .map(|t| {
+            instances
+                .iter()
+                .filter(|i| path_overlap_one_way(t, &i.path))
+                .cloned()
+                .collect()
+        })
         .collect();
 
-    have_targets[0] || (have_targets[1] && have_targets[2])
+    // Now we get the conditions that apply to each of the target paths and see if they're
+    // covering.
+    let applicable_conditions: Vec<Vec<CSECondition>> = (0..3)
+        .map(|idx| {
+            conditions
+                .iter()
+                // Isolate conditions downstream of one of the taget expressions.
+                .filter(|c| c.path != c_path && path_overlap_one_way(&target_paths[idx], &c.path))
+                // Use only conditions that overlap a cse instance.
+                .filter(|c| {
+                    instances
+                        .iter()
+                        .any(|i| path_overlap_one_way(&c.path, &i.path))
+                })
+                .cloned()
+                .collect()
+        })
+        .collect();
+    // Detect conditions down the path that contain the subexpression but are not dominated
+    // by it.
+    let undominated_conditions: Vec<Vec<CSECondition>> = applicable_conditions
+        .iter()
+        .map(|cs| {
+            cs.iter()
+                .filter(|c| !cse_is_covering(opts.clone(), conditions, &c.path, instances))
+                .cloned()
+                .collect()
+        })
+        .collect();
+    // Detect if there are uses down this path and there are no conditions down this path
+    // that contain the subexpression and aren't dominated by it.
+    let dominated_or_populated: Vec<bool> = undominated_conditions
+        .iter()
+        .enumerate()
+        .map(|(i, cs)| !have_targets[i].is_empty() && cs.is_empty())
+        .collect();
+    dominated_or_populated[0] || (dominated_or_populated[1] && dominated_or_populated[2])
 }
 
 pub fn cse_classify_by_conditions(
+    opts: Rc<dyn CompilerOpts>,
     conditions: &[CSECondition],
     detections: &[CSEDetectionWithoutConditions],
 ) -> Vec<CSEDetection> {
@@ -401,9 +475,9 @@ pub fn cse_classify_by_conditions(
             // We don't need to delay the CSE if 1) all conditions below it
             // are canonical and 2) it appears downstream of all conditions
             // it encloses.
-            let fully_canonical = applicable_conditions
-                .iter()
-                .all(|c| c.canonical && cse_is_covering(&c.path, &d.instances));
+            let fully_canonical = applicable_conditions.iter().all(|c| {
+                c.canonical && cse_is_covering(opts.clone(), conditions, &c.path, &d.instances)
+            });
 
             Some(CSEDetection {
                 hash: d.hash.clone(),
@@ -636,6 +710,7 @@ type CSEReplacementTargetAndBindings<'a> = Vec<&'a (Vec<BodyformPathArc>, Vec<Bi
 ///
 /// Note: allow_merge is an option only for regression testing.
 pub fn cse_optimize_bodyform(
+    opts: Rc<dyn CompilerOpts>,
     loc: &Srcloc,
     name: &[u8],
     allow_merge: bool,
@@ -644,7 +719,7 @@ pub fn cse_optimize_bodyform(
     let conditions = detect_conditions(b)?;
     let cse_raw_detections = cse_detect(b)?;
 
-    let cse_detections = cse_classify_by_conditions(&conditions, &cse_raw_detections);
+    let cse_detections = cse_classify_by_conditions(opts, &conditions, &cse_raw_detections);
 
     // While we have them, apply any detections that overlap no others.
     let mut detections_with_dependencies: Vec<(usize, CSEDetection)> =

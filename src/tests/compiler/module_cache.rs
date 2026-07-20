@@ -67,7 +67,8 @@ fn function_export(name: &[u8], as_name: Option<Vec<u8>>) -> Export {
 }
 
 fn cache_dir_for(cf: &CompileForm) -> String {
-    format!(".chialisp/{}/", module_cache_key_hex(cf))
+    let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(TEST_CLSP));
+    format!(".chialisp/{}/", module_cache_key_hex(opts, cf))
 }
 
 #[test]

@@ -3,8 +3,8 @@ use crate::classic::clvm::sexp::equal_to;
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use std::collections::HashMap;
 
-pub const ATOM_MATCH: [u8; 1] = [b'$'];
-pub const SEXP_MATCH: [u8; 1] = [b':'];
+pub const ATOM_MATCH: [u8; 1] = *b"$";
+pub const SEXP_MATCH: [u8; 1] = *b":";
 
 pub fn unify_bindings(
     allocator: &mut Allocator,

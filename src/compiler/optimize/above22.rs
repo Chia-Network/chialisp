@@ -59,6 +59,7 @@ impl Optimization for Strategy23 {
         for h in p0.helpers.iter() {
             if let HelperForm::Defun(inline, d) = h {
                 let function_body = cse_optimize_bodyform(
+                    opts.clone(),
                     &h.loc(),
                     h.name(),
                     enable_merge_disable_for_tests,

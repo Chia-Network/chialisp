@@ -31,6 +31,7 @@ use crate::compiler::diskcache::{set_cache_element, try_element_from_cache};
 use crate::compiler::frontend::frontend;
 use crate::compiler::optimize::depgraph::{DepgraphOptions, FunctionDependencyGraph};
 use crate::compiler::optimize::get_optimizer;
+use crate::compiler::preprocessor::detect_chialisp_module;
 use crate::compiler::prims;
 use crate::compiler::resolve::{find_helper_target, resolve_namespaces};
 use crate::compiler::sexp::{decode_string, enlist, parse_sexp_flags, SExp};
@@ -386,6 +387,21 @@ fn populate_export_map(
 ///
 /// (export foo)
 /// (export bar)
+fn module_compile_opts(opts: Rc<dyn CompilerOpts>) -> Rc<dyn CompilerOpts> {
+    let mut dialect = opts.dialect();
+    // Module style is new, so there will never be a time when we don't want every
+    // bug fix that existed before it was released.
+    dialect.int_fix = true;
+    dialect.cse_dominance = true;
+    if let Some(stepping) = dialect.stepping {
+        if stepping < 26 {
+            dialect.stepping = Some(26);
+        }
+    }
+
+    opts.set_optimize(true).set_dialect(dialect)
+}
+
 pub fn compile_module(
     context: &mut BasicCompileContext,
     mut opts: Rc<dyn CompilerOpts>,
@@ -394,16 +410,7 @@ pub fn compile_module(
     exports: &[Export],
 ) -> Result<CompileModuleOutput, CompileErr> {
     let loc = program.loc();
-    let mut dialect = opts.dialect();
-    // Module style is new, so there will never be a time when we don't want every
-    // bug fix that existed before it was released.
-    dialect.int_fix = true;
-    if let Some(stepping) = dialect.stepping {
-        if stepping < 26 {
-            dialect.stepping = Some(26);
-        }
-    }
-    opts = opts.set_optimize(true).set_dialect(dialect);
+    opts = module_compile_opts(opts);
 
     if exports.is_empty() {
         return Err(CompileErr(
@@ -826,9 +833,13 @@ fn add_inline_hash_for_constant(program: &mut CompileForm, loc: &Srcloc, fun_nam
 /// Given a set of untreated input forms, compile it as a clvm program.
 pub fn compile_pre_forms(
     context: &mut BasicCompileContext,
-    opts: Rc<dyn CompilerOpts>,
+    mut opts: Rc<dyn CompilerOpts>,
     pre_forms: &[Rc<SExp>],
 ) -> Result<CompilerOutput, CompileErr> {
+    if let Some(dialect) = detect_chialisp_module(Srcloc::start(&opts.filename()), pre_forms)? {
+        opts = opts.set_stdenv(dialect.strict).set_dialect(dialect);
+    }
+
     let p0 = frontend(opts.clone(), pre_forms)?;
 
     match p0 {
@@ -838,19 +849,13 @@ pub fn compile_pre_forms(
         )),
         FrontendOutput::Module(mut cf, exports) => {
             add_main_fingerprint(&mut cf, pre_forms);
+            let opts = module_compile_opts(opts);
+
             // If we can read from cache, use that.  We'll use the actual form of the compileform
             // and opts (the dialect) to determine a cache hit.
             if let Some(result) = try_from_cache(opts.clone(), &cf, &exports)? {
                 return Ok(result);
             }
-
-            // cl23 always reflects optimization.
-            let dialect = opts.dialect();
-            let opts = if let Some(stepping) = dialect.stepping.as_ref() {
-                opts.set_optimize(*stepping > 21)
-            } else {
-                opts
-            };
 
             // We make a dependency graph of constants and functions.  There must
             // be a solveable hierarchy for constants, that is some must be top
