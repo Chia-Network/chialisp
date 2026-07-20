@@ -155,7 +155,7 @@ pub fn deinline_opt(
 
     // Make a set of root sets to coalesce them.
     let mut roots_set: HashSet<BTreeSet<Vec<u8>>> = HashSet::new();
-    for (_, common_roots) in roots.iter() {
+    for common_roots in roots.values() {
         roots_set.insert(common_roots.clone());
     }
 

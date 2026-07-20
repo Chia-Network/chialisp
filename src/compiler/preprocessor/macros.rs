@@ -383,7 +383,7 @@ impl PreprocessorExtension {
         let mut new_prim_map_cloned = old_prim_map_borrowed.clone();
         let srcloc = Srcloc::start("*defmac*");
 
-        for (f, _) in self.extfuns.iter() {
+        for f in self.extfuns.keys() {
             if !new_prim_map_cloned.contains_key(f) {
                 new_prim_map_cloned
                     .insert(f.clone(), Rc::new(SExp::Atom(srcloc.clone(), f.clone())));
