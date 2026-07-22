@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::compiler::codegen::codegen;
-use crate::compiler::optimize::depgraph::{DepgraphKind, DepgraphOptions, FunctionDependencyGraph};
+use crate::compiler::optimize::depgraph::{DepgraphKind, FunctionDependencyGraph};
 use crate::compiler::optimize::{sexp_scale, SyntheticType};
 use crate::compiler::{
     BasicCompileContext, CompileErr, CompileForm, CompilerOpts, Funcache, HelperForm,
@@ -61,16 +61,23 @@ pub fn deinline_opt(
     }
 
     let is_module_compile = opts.module_phase().is_some();
-    let depgraph = if is_module_compile {
-        FunctionDependencyGraph::new_with_options(
-            &compileform,
-            DepgraphOptions {
-                with_constants: true,
-            },
-        )
-    } else {
-        FunctionDependencyGraph::new(&compileform)
-    };
+
+    // In module phase the inline/deinline size search below is a guaranteed
+    // no-op, so skip it.  The `flip_helper` guard only permits the
+    // non-inline -> inline direction for `NoInlinePreference` synthetics when
+    // `is_module_compile` is true, and the module convention of keeping those
+    // synthetics non-inline means that direction is always strictly larger and
+    // therefore always rejected.  Running the search anyway still pays
+    // O(functions) full code generations per root set -- each itself superlinear
+    // in program size -- which dominates compile time on large multi-export
+    // modules to the point that compilation appears to hang.  Returning the
+    // unchanged program here is output-identical (the search never updates
+    // `best_compileform` in module phase) and removes the blow-up.
+    if is_module_compile {
+        return Ok(compileform);
+    }
+
+    let depgraph = FunctionDependencyGraph::new(&compileform);
 
     let mut best_compileform = compileform.clone();
     let generated_program = codegen(context, opts.clone(), Some(&depgraph), &best_compileform)?;
