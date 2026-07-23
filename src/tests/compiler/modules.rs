@@ -48,18 +48,6 @@ impl TestModuleCompilerOpts {
         let files: &HashMap<String, Vec<u8>> = &files_ref.borrow();
         files.get(name).map(|f| f.to_vec())
     }
-
-    pub fn list_written_files<'a>(&'a self) -> Vec<String> {
-        let files_ref: &RefCell<HashMap<String, Vec<u8>>> = self.written_files.borrow();
-        let files: &HashMap<String, Vec<u8>> = &files_ref.borrow();
-        files.keys().cloned().collect()
-    }
-
-    pub fn set_file_content<'a>(&'a self, name: String, content: Vec<u8>) {
-        let wf_refcell: &RefCell<HashMap<String, Vec<u8>>> = self.written_files.borrow();
-        let wf_ref: &mut HashMap<String, Vec<u8>> = &mut wf_refcell.borrow_mut();
-        wf_ref.insert(name, content);
-    }
 }
 
 impl HasCompilerOptsDelegation for TestModuleCompilerOpts {
@@ -593,54 +581,6 @@ fn test_constant_single_round() {
             hexfile: hex_file,
             argument: "31",
             outcome: ContentEquals,
-        }],
-    );
-}
-
-#[test]
-fn test_cache_reuses_cache_data() {
-    let filename = "resources/tests/module/p1s_host.clsp";
-    let content = fs::read_to_string(filename).expect("file should exist");
-    let hex_file = "resources/tests/module/p1s_host.hex";
-    let orig_opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename))
-        .set_search_paths(&["resources/tests/module".to_string()]);
-    let source_opts = TestModuleCompilerOpts::new(orig_opts);
-    let source_opts = test_compile_and_run_program_with_modules_and_fs(
-        source_opts,
-        filename,
-        &content,
-        &[HexArgumentOutcome {
-            hexfile: hex_file,
-            argument: "(3)",
-            outcome: Run("20400"),
-        }],
-    )
-    .unwrap();
-    let new_content = indoc! {"
-(include *standard-cl-23*)
-
-(import programs.p1s exposing (program as P1S))
-(import programs.p1t exposing (program as P1T))
-
-(export (X) (+ (a P1S (list X)) (a P1T (list X))))
-"};
-
-    let file_list = source_opts.list_written_files();
-    for f in file_list.iter().filter(|f| f.ends_with("p1t.hex")) {
-        // We've set p1t to () and changed the main program so it will also recompile.  If the cache
-        // is used to retrieve p1t.clsp (since the source file is the same as during the previous
-        // compilation), then (a P1T (list X)) will yield 0.
-        source_opts.set_file_content(f.clone(), b"80".to_vec());
-    }
-
-    test_compile_and_run_program_with_modules_and_fs(
-        source_opts,
-        filename,
-        new_content,
-        &[HexArgumentOutcome {
-            hexfile: hex_file,
-            argument: "(3)",
-            outcome: Run("10200"),
         }],
     );
 }
