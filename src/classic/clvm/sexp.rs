@@ -6,9 +6,11 @@ use chia_bls::PublicKey;
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::error::EvalErr;
 
+use crate::classic::clvm_tools::stages::stage_2::abstraction::{ASExp, ClassicAllocator, ClError};
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, Stream};
 use crate::classic::clvm::serialize::sexp_to_stream;
 use crate::util::{u8_from_number, Number};
+use crate::compiler::srcloc::Srcloc;
 
 #[derive(Debug)]
 pub enum CastableType {
@@ -344,21 +346,38 @@ pub fn non_nil(allocator: &Allocator, sexp: NodePtr) -> bool {
     }
 }
 
-pub fn first(allocator: &Allocator, sexp: NodePtr) -> Result<NodePtr, EvalErr> {
-    match allocator.sexp(sexp) {
-        SExp::Pair(f, _) => Ok(f),
-        _ => Err(EvalErr::InternalError(
-            sexp,
-            "first of non-cons".to_string(),
-        )),
+pub fn first<A: ClassicAllocator>(allocator: &A, sexp: &A::NodePtr) -> Result<A::NodePtr, ClError> {
+    let exported = allocator.export(sexp);
+    if let ASExp::Pair(f, _) = allocator.sexp(sexp) {
+        return Ok(f);
     }
+
+    Err(
+        ClError(
+            allocator.loc(sexp),
+            EvalErr::InternalError(
+                exported,
+                "first of non-cons".to_string(),
+            )
+        )
+    )
 }
 
-pub fn rest(allocator: &Allocator, sexp: NodePtr) -> Result<NodePtr, EvalErr> {
-    match allocator.sexp(sexp) {
-        SExp::Pair(_, r) => Ok(r),
-        _ => Err(EvalErr::InternalError(sexp, "rest of non-cons".to_string())),
+pub fn rest<A: ClassicAllocator>(allocator: &A, sexp: &A::NodePtr) -> Result<A::NodePtr, ClError> {
+    let exported = allocator.export(sexp);
+    if let ASExp::Pair(_, r) = allocator.sexp(sexp) {
+        return Ok(r);
     }
+
+    Err(
+        ClError(
+            allocator.loc(sexp),
+            EvalErr::InternalError(
+                exported,
+                "rest of non-cons".to_string(),
+            )
+        )
+    )
 }
 
 pub fn atom(allocator: &Allocator, sexp: NodePtr) -> Result<Vec<u8>, EvalErr> {
@@ -372,19 +391,26 @@ pub fn atom(allocator: &Allocator, sexp: NodePtr) -> Result<Vec<u8>, EvalErr> {
     }
 }
 
-pub fn proper_list(allocator: &Allocator, sexp: NodePtr, store: bool) -> Option<Vec<NodePtr>> {
+pub fn proper_list<A: ClassicAllocator>(
+    allocator: &A,
+    sexp: &A::NodePtr,
+    store: bool
+) -> Option<Vec<A::NodePtr>>
+where
+    A::NodePtr: Clone
+{
     let mut args = vec![];
-    let mut args_sexp = sexp;
+    let mut args_sexp = sexp.clone();
     loop {
-        match allocator.sexp(args_sexp) {
-            SExp::Atom => {
-                if !non_nil(allocator, args_sexp) {
+        match allocator.sexp(&args_sexp) {
+            ASExp::Atom => {
+                if allocator.is_nil(&args_sexp) {
                     return Some(args);
                 } else {
                     return None;
                 }
             }
-            SExp::Pair(f, r) => {
+            ASExp::Pair(f, r) => {
                 if store {
                     args.push(f);
                 }
@@ -394,21 +420,27 @@ pub fn proper_list(allocator: &Allocator, sexp: NodePtr, store: bool) -> Option<
     }
 }
 
-pub fn enlist(allocator: &mut Allocator, vec: &[NodePtr]) -> Result<NodePtr, EvalErr> {
-    let mut built = NodePtr::NIL;
+pub fn enlist<A: ClassicAllocator>(
+    allocator: &mut A, vec: &[A::NodePtr]
+) -> Result<A::NodePtr, ClError>
+where
+    A::NodePtr: Clone
+{
+    let mut built = allocator.import(Srcloc::start("*nil*"), NodePtr::NIL)?;
 
     for i_reverse in 0..vec.len() {
         let i = vec.len() - i_reverse - 1;
-        built = allocator.new_pair(vec[i], built)?;
+        let loc = allocator.loc(&vec[i]);
+        built = allocator.new_pair(loc, &vec[i], &built)?;
     }
     Ok(built)
 }
 
-pub fn map_m<T>(
-    allocator: &mut Allocator,
+pub fn map_m<T, A: ClassicAllocator>(
+    allocator: &mut A,
     iter: &mut impl Iterator<Item = T>,
-    f: &dyn Fn(&mut Allocator, T) -> Result<NodePtr, EvalErr>,
-) -> Result<Vec<NodePtr>, EvalErr> {
+    f: &dyn Fn(&mut A, T) -> Result<A::NodePtr, ClError>,
+) -> Result<Vec<A::NodePtr>, ClError> {
     let mut result = Vec::new();
     loop {
         match iter.next() {
@@ -427,9 +459,9 @@ pub fn map_m<T>(
     }
 }
 
-pub fn fold_m<A, B, E>(
-    allocator: &mut Allocator,
-    f: &dyn Fn(&mut Allocator, A, B) -> Result<A, E>,
+pub fn fold_m<A, B, E, CA: ClassicAllocator>(
+    allocator: &mut CA,
+    f: &dyn Fn(&mut CA, A, B) -> Result<A, E>,
     start_: A,
     iter: &mut impl Iterator<Item = B>,
 ) -> Result<A, E> {
@@ -451,21 +483,24 @@ pub fn fold_m<A, B, E>(
     }
 }
 
-pub fn equal_to(allocator: &mut Allocator, first_: NodePtr, second_: NodePtr) -> bool {
-    let mut first = first_;
-    let mut second = second_;
+pub fn equal_to<A: ClassicAllocator>(allocator: &mut A, first_: &A::NodePtr, second_: &A::NodePtr) -> bool
+where
+    A::NodePtr: Clone
+{
+    let mut first = first_.clone();
+    let mut second = second_.clone();
 
     loop {
-        if first == second {
+        if allocator.node_equal(&first, &second) {
             return true;
         }
-        match (allocator.sexp(first), allocator.sexp(second)) {
-            (SExp::Atom, SExp::Atom) => {
+        match (allocator.sexp(&first), allocator.sexp(&second)) {
+            (ASExp::Atom, ASExp::Atom) => {
                 // two atoms in scope, both are used
-                return allocator.atom(first) == allocator.atom(second);
+                return allocator.atom(&first) == allocator.atom(&second);
             }
-            (SExp::Pair(ff, fr), SExp::Pair(rf, rr)) => {
-                if !equal_to(allocator, ff, rf) {
+            (ASExp::Pair(ff, fr), ASExp::Pair(rf, rr)) => {
+                if !equal_to(allocator, &ff, &rf) {
                     return false;
                 }
                 first = fr;
@@ -478,19 +513,26 @@ pub fn equal_to(allocator: &mut Allocator, first_: NodePtr, second_: NodePtr) ->
     }
 }
 
-pub fn flatten(allocator: &mut Allocator, tree_: NodePtr, res: &mut Vec<NodePtr>) {
-    let mut tree = tree_;
+pub fn flatten<A: ClassicAllocator>(
+    allocator: &mut A,
+    tree_: &A::NodePtr,
+    res: &mut Vec<A::NodePtr>
+)
+where
+    A::NodePtr: Clone
+{
+    let mut tree = tree_.clone();
 
     loop {
-        match allocator.sexp(tree) {
-            SExp::Atom => {
-                if non_nil(allocator, tree) {
-                    res.push(tree);
+        match allocator.sexp(&tree) {
+            ASExp::Atom => {
+                if !allocator.is_nil(&tree) {
+                    res.push(tree.clone());
                 }
                 return;
             }
-            SExp::Pair(l, r) => {
-                flatten(allocator, l, res);
+            ASExp::Pair(l, r) => {
+                flatten(allocator, &l, res);
                 tree = r;
             }
         }
@@ -501,10 +543,10 @@ pub fn flatten(allocator: &mut Allocator, tree_: NodePtr, res: &mut Vec<NodePtr>
 // the classic chialisp code.
 pub fn nonempty_last<X>(nil: NodePtr, lst: &[X]) -> Result<X, EvalErr>
 where
-    X: Copy,
+    X: Clone,
 {
     lst.last()
-        .copied()
+        .cloned()
         .ok_or_else(|| EvalErr::InternalError(nil, "alist is empty and shouldn't be".to_string()))
 }
 
@@ -533,57 +575,57 @@ pub enum ThisNode {
     Here,
 }
 
-pub trait SelectNode<T> {
-    fn select_nodes(&self, allocator: &mut Allocator, n: NodePtr) -> Result<T, EvalErr>;
+pub trait SelectNode<T, A: ClassicAllocator> {
+    fn select_nodes(&self, allocator: &mut A, n: A::NodePtr) -> Result<T, ClError>;
 }
 
-impl SelectNode<NodePtr> for ThisNode {
-    fn select_nodes(&self, _allocator: &mut Allocator, n: NodePtr) -> Result<NodePtr, EvalErr> {
+impl<A: ClassicAllocator> SelectNode<A::NodePtr, A> for ThisNode {
+    fn select_nodes(&self, _allocator: &mut A, n: A::NodePtr) -> Result<A::NodePtr, ClError> {
         Ok(n)
     }
 }
 
-impl SelectNode<()> for () {
-    fn select_nodes(&self, _allocator: &mut Allocator, _n: NodePtr) -> Result<(), EvalErr> {
+impl<A: ClassicAllocator> SelectNode<(), A> for () {
+    fn select_nodes(&self, _allocator: &mut A, _n: A::NodePtr) -> Result<(), ClError> {
         Ok(())
     }
 }
 
-impl<R, T> SelectNode<First<T>> for First<R>
+impl<R, T, A: ClassicAllocator> SelectNode<First<T>, A> for First<R>
 where
-    R: SelectNode<T> + Clone,
+    R: SelectNode<T, A> + Clone,
 {
-    fn select_nodes(&self, allocator: &mut Allocator, n: NodePtr) -> Result<First<T>, EvalErr> {
+    fn select_nodes(&self, allocator: &mut A, n: A::NodePtr) -> Result<First<T>, ClError> {
         let First::Here(f) = &self;
         let NodeSel::Cons(first, ()) = NodeSel::Cons(f.clone(), ()).select_nodes(allocator, n)?;
         Ok(First::Here(first))
     }
 }
 
-impl<R, T> SelectNode<Rest<T>> for Rest<R>
+impl<R, T, A: ClassicAllocator> SelectNode<Rest<T>, A> for Rest<R>
 where
-    R: SelectNode<T> + Clone,
+    R: SelectNode<T, A> + Clone,
 {
-    fn select_nodes(&self, allocator: &mut Allocator, n: NodePtr) -> Result<Rest<T>, EvalErr> {
+    fn select_nodes(&self, allocator: &mut A, n: A::NodePtr) -> Result<Rest<T>, ClError> {
         let Rest::Here(f) = &self;
         let NodeSel::Cons((), rest) = NodeSel::Cons((), f.clone()).select_nodes(allocator, n)?;
         Ok(Rest::Here(rest))
     }
 }
 
-impl<R, S, T, U> SelectNode<NodeSel<T, U>> for NodeSel<R, S>
+impl<R, S, T, U, A: ClassicAllocator> SelectNode<NodeSel<T, U>, A> for NodeSel<R, S>
 where
-    R: SelectNode<T>,
-    S: SelectNode<U>,
+    R: SelectNode<T, A>,
+    S: SelectNode<U, A>,
 {
     fn select_nodes(
         &self,
-        allocator: &mut Allocator,
-        n: NodePtr,
-    ) -> Result<NodeSel<T, U>, EvalErr> {
+        allocator: &mut A,
+        n: A::NodePtr,
+    ) -> Result<NodeSel<T, U>, ClError> {
         let NodeSel::Cons(my_left, my_right) = &self;
-        let l = first(allocator, n)?;
-        let r = rest(allocator, n)?;
+        let l = first(allocator, &n)?;
+        let r = rest(allocator, &n)?;
         let first = my_left.select_nodes(allocator, l)?;
         let rest = my_right.select_nodes(allocator, r)?;
         Ok(NodeSel::Cons(first, rest))

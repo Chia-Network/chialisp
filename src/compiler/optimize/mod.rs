@@ -22,6 +22,7 @@ use crate::classic::clvm::__type_compatibility__::bi_one;
 use crate::classic::clvm::__type_compatibility__::bi_zero;
 
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
+use crate::classic::clvm_tools::stages::stage_2::abstraction::ClError;
 use crate::classic::clvm_tools::stages::stage_2::optimize::optimize_sexp;
 
 use crate::compiler::clvm::{convert_from_clvm_rs, convert_to_clvm_rs, run};
@@ -707,12 +708,12 @@ pub fn run_optimizer(
             RunFailure::RunExn(s, e) => CompileErr(s, format!("exception {e}\n")),
         })?;
 
-    let optimized = optimize_sexp(allocator, to_clvm_rs.1, runner)
+    let optimized = optimize_sexp(allocator, &to_clvm_rs.1, runner)
         .map_err(|e| {
             CompileErr(
                 to_clvm_rs.0.clone(),
                 match e {
-                    EvalErr::InternalError(_, e) => e.to_string(),
+                    ClError(l, EvalErr::InternalError(_, e)) => format!("{l}: {e}"),
                     _ => e.to_string(),
                 },
             )
