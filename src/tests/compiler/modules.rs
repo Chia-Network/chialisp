@@ -838,3 +838,41 @@ fn test_module_constant_cycle_deadlock() {
         "expected a compile error for cyclic constants"
     );
 }
+
+// Regression test for a module-phase compile-time blow-up in deinline_opt.
+//
+// A multi-export module whose exports share a chain of helpers, each containing
+// a deep nested `let` stack, produces many `NoInlinePreference` synthetic
+// helpers.  The module-phase deinline size search iterated over that whole
+// synthetic-function set, re-running full code generation per function per pass.
+// In module phase the search can never keep a flip (its guard only explores the
+// strictly-larger non-inline -> inline direction for these synthetics), so it is
+// a guaranteed no-op, yet it still costs O(functions) superlinear code
+// generations and on larger modules makes compilation appear to hang.
+//
+// This test simply compiles such a module and runs both exports.  Before the fix
+// it does not finish in any reasonable time; after the fix it compiles quickly
+// and produces the expected results.
+#[test]
+fn test_module_phase_deinline_does_not_blow_up() {
+    let filename = "resources/tests/module/deinline_module_blowup.clsp";
+    let content = fs::read_to_string(filename).expect("file should exist");
+    let a_hex = "resources/tests/module/deinline_module_blowup_entry_a.hex";
+    let b_hex = "resources/tests/module/deinline_module_blowup_entry_b.hex";
+    test_compile_and_run_program_with_modules(
+        filename,
+        &content,
+        &[
+            HexArgumentOutcome {
+                hexfile: a_hex,
+                argument: "(10)",
+                outcome: Run("7530"),
+            },
+            HexArgumentOutcome {
+                hexfile: b_hex,
+                argument: "(7)",
+                outcome: Run("6506"),
+            },
+        ],
+    );
+}
