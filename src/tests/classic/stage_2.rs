@@ -38,13 +38,13 @@ fn test_expand_macro(
     let symbols_source = assemble_from_ir(allocator, Rc::new(symbols_ir)).unwrap();
     let exp_res = try_expand_macro_for_atom(
         allocator,
-        macro_source,
-        prog_source,
-        macros_source,
-        symbols_source,
+        &macro_source,
+        &prog_source,
+        &macros_source,
+        &symbols_source,
     )
     .unwrap();
-    disassemble(allocator, exp_res.1, Some(0))
+    disassemble(allocator, exp_res, Some(0))
 }
 
 fn test_inner_expansion(
@@ -73,8 +73,8 @@ fn test_do_com_prog(
     let macro_lookup = assemble_from_ir(allocator, Rc::new(macro_ir)).unwrap();
     let sym_ir = read_ir(&symbol_table_src, 0).unwrap();
     let symbol_table = assemble_from_ir(allocator, Rc::new(sym_ir)).unwrap();
-    let result = do_com_prog(allocator, 849, program, macro_lookup, symbol_table, runner).unwrap();
-    disassemble(allocator, result.1, Some(0))
+    let result = do_com_prog(allocator, 849, &program, &macro_lookup, &symbol_table, runner).unwrap();
+    disassemble(allocator, result, Some(0))
 }
 
 #[test]
@@ -150,7 +150,7 @@ fn test_compile_assert_2() {
 fn test_stage_2_quote() {
     let mut allocator = Allocator::new();
     let assembled = assemble(&mut allocator, "(1 2 3)").unwrap();
-    let quoted = quote(&mut allocator, assembled).unwrap();
+    let quoted = quote(&mut allocator, &assembled).unwrap();
     assert_eq!(disassemble(&mut allocator, quoted, Some(0)), "(q 1 2 3)");
 }
 
@@ -159,7 +159,7 @@ fn test_stage_2_evaluate() {
     let mut allocator = Allocator::new();
     let prog = assemble(&mut allocator, "(q 16 2 3)").unwrap();
     let args = assemble(&mut allocator, "(q 9 15)").unwrap();
-    let to_eval = evaluate(&mut allocator, prog, args).unwrap();
+    let to_eval = evaluate(&mut allocator, &prog, &args).unwrap();
     assert_eq!(
         disassemble(&mut allocator, to_eval, Some(0)),
         "(a (q 16 2 3) (q 9 15))"
@@ -171,7 +171,7 @@ fn test_stage_2_run() {
     let mut allocator = Allocator::new();
     let prog = assemble(&mut allocator, "(q 16 2 3)").unwrap();
     let macro_lookup_throw = assemble(&mut allocator, "(q 9)").unwrap();
-    let to_eval = run(&mut allocator, prog, macro_lookup_throw).unwrap();
+    let to_eval = run(&mut allocator, &prog, &macro_lookup_throw).unwrap();
     assert_eq!(
         disassemble(&mut allocator, to_eval, Some(0)),
         "(a (\"com\" (q 16 2 3) (q 1 9)) 1)"
@@ -188,7 +188,7 @@ fn test_present_file_smoke_not_exists() {
     let res = read_file(
         runner,
         &mut allocator,
-        sexp_triggering_read,
+        &sexp_triggering_read,
         "test-embed-not-exist.clsp",
     );
     assert!(res.is_err());
@@ -201,7 +201,7 @@ fn test_present_file_smoke_exists() {
         run_program_for_search_paths("*test*", &vec!["resources/tests".to_string()], false, 0);
     let sexp_triggering_read = assemble(&mut allocator, "(embed-file test-file sexp embed.sexp)")
         .expect("should assemble");
-    let res = read_file(runner, &mut allocator, sexp_triggering_read, "embed.sexp")
+    let res = read_file(runner, &mut allocator, &sexp_triggering_read, "embed.sexp")
         .expect("should exist");
     assert_eq!(decode_string(&res.data), "(23 24 25)");
 }
@@ -215,7 +215,7 @@ fn test_process_embed_file_as_sexp() {
         .expect("should assemble");
     let want_exp = assemble(&mut allocator, "(q 23 24 25)").expect("should assemble");
     let (name, content) =
-        process_embed_file(&mut allocator, runner, declaration_sexp).expect("should work");
+        process_embed_file(&mut allocator, runner, &declaration_sexp).expect("should work");
     assert_eq!(
         disassemble(&mut allocator, want_exp, Some(0)),
         disassemble(&mut allocator, content, Some(0))
@@ -240,7 +240,7 @@ fn test_process_embed_file_as_sexp_in_an_unexpected_location() {
     let res = read_file(
         runner,
         &mut allocator,
-        sexp_triggering_read,
+        &sexp_triggering_read,
         "fact.clvm.hex",
     );
     assert!(res.is_err());
@@ -261,7 +261,7 @@ fn test_process_embed_file_as_sexp_in_an_expected_location() {
     let res = read_file(
         runner,
         &mut allocator,
-        sexp_triggering_read,
+        &sexp_triggering_read,
         "fact.clvm.hex",
     )
     .expect("should exist");
@@ -281,8 +281,8 @@ fn test_process_embed_file_as_hex() {
     )
     .expect("should assemble");
     let (name, content) =
-        process_embed_file(&mut allocator, runner, declaration_sexp).expect("should work");
-    let matching_part_of_decl = rest(&mut allocator, content).expect("should be quoted");
+        process_embed_file(&mut allocator, runner, &declaration_sexp).expect("should work");
+    let matching_part_of_decl = rest(&mut allocator, &content).expect("should be quoted");
     let mut outstream = Stream::new(None);
     call_tool(
         &mut outstream,

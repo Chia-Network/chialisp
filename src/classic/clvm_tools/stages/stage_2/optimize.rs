@@ -49,7 +49,7 @@ fn seems_constant_tail<A: ClassicAllocator>(allocator: &mut A, sexp_: A::NodePtr
     }
 }
 
-fn seems_constant<A: ClassicAllocator>(allocator: &mut A, sexp: &A::NodePtr) -> bool {
+pub fn seems_constant<A: ClassicAllocator>(allocator: &mut A, sexp: &A::NodePtr) -> bool {
     match allocator.sexp(&sexp) {
         ASExp::Atom => {
             return allocator.is_nil(&sexp);
