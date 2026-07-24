@@ -3,17 +3,19 @@ use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::error::EvalErr;
-use clvm_rs::reduction::{Reduction};
+use clvm_rs::reduction::Reduction;
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
 use crate::classic::clvm::sexp::{enlist, first, map_m, proper_list, rest};
 use crate::classic::clvm::OPERATORS_LATEST_VERSION;
 use crate::classic::clvm::{keyword_from_atom, keyword_to_atom};
 
-use crate::classic::clvm_tools::binutils::{assemble};
+use crate::classic::clvm_tools::binutils::assemble;
 use crate::classic::clvm_tools::node_path::NodePath;
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
-use crate::classic::clvm_tools::stages::stage_2::abstraction::{ASExp, BufCarrier, ClassicAllocator, ClError};
+use crate::classic::clvm_tools::stages::stage_2::abstraction::{
+    ASExp, BufCarrier, ClError, ClassicAllocator,
+};
 use crate::classic::clvm_tools::stages::stage_2::defaults::default_macro_lookup;
 use crate::classic::clvm_tools::stages::stage_2::helpers::{brun, evaluate, quote};
 use crate::classic::clvm_tools::stages::stage_2::module::compile_mod;
@@ -52,7 +54,7 @@ struct Closure<'a, A: ClassicAllocator> {
 
 fn compile_bindings<'a, A: ClassicAllocator>() -> HashMap<Vec<u8>, Closure<'a, A>>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let mut bindings = HashMap::new();
     let bindings_source = vec![
@@ -101,7 +103,7 @@ fn com_qq<A: ClassicAllocator>(
     sexp: &A::NodePtr,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     if DIAG_OUTPUT {
         println!("com_qq {} {}", ident, allocator.disassemble(sexp, None));
@@ -118,7 +120,7 @@ pub fn compile_qq<A: ClassicAllocator>(
     level: usize,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     /*
      * (qq ATOM) => (q . ATOM)
@@ -143,7 +145,14 @@ where
                 if op_atom.as_ref() == qq_atom() {
                     let op_loc = allocator.loc(&op);
                     let cons_atom = allocator.new_atom(op_loc, &[4])?;
-                    let subexp = compile_qq(allocator, &sexp_rest, macro_lookup, symbol_table, runner.clone(), level+1)?;
+                    let subexp = compile_qq(
+                        allocator,
+                        &sexp_rest,
+                        macro_lookup,
+                        symbol_table,
+                        runner.clone(),
+                        level + 1,
+                    )?;
                     let quoted_null = quote(allocator, &nil_import)?;
                     let consed = enlist(allocator, &[cons_atom.clone(), subexp, quoted_null])?;
                     let run_list = enlist(allocator, &[cons_atom, op, consed])?;
@@ -153,7 +162,7 @@ where
                         macro_lookup,
                         symbol_table,
                         runner,
-                        &run_list
+                        &run_list,
                     );
                 } else if op_atom.as_ref() == unquote_atom() {
                     // opbuf
@@ -166,15 +175,23 @@ where
                             macro_lookup,
                             symbol_table,
                             runner,
-                            &sexp_rf
+                            &sexp_rf,
                         );
                     }
 
                     // (qq (a . B)) => (c (qq a) (qq B))
                     let cons_atom = allocator.new_atom(op_loc, &[4])?;
-                    let subexp = compile_qq(allocator, &sexp_rest, macro_lookup, symbol_table, runner.clone(), level-1)?;
+                    let subexp = compile_qq(
+                        allocator,
+                        &sexp_rest,
+                        macro_lookup,
+                        symbol_table,
+                        runner.clone(),
+                        level - 1,
+                    )?;
                     let quoted_null = quote(allocator, &nil_import)?;
-                    let consed_subexp = enlist(allocator, &[cons_atom.clone(), subexp, quoted_null])?;
+                    let consed_subexp =
+                        enlist(allocator, &[cons_atom.clone(), subexp, quoted_null])?;
                     let run_list = enlist(allocator, &[cons_atom, op, consed_subexp])?;
 
                     return com_qq(
@@ -183,7 +200,7 @@ where
                         macro_lookup,
                         symbol_table,
                         runner,
-                        &run_list
+                        &run_list,
                     );
                 }
             }
@@ -193,8 +210,22 @@ where
             let qq = allocator.new_atom(loc, &qq_atom())?;
             let qq_l = enlist(allocator, &[qq.clone(), op])?;
             let qq_r = enlist(allocator, &[qq, sexp_rest])?;
-            let compiled_l = com_qq(allocator, "A".to_string(), macro_lookup, symbol_table, runner.clone(), &qq_l)?;
-            let compiled_r = com_qq(allocator, "B".to_string(), macro_lookup, symbol_table, runner, &qq_r)?;
+            let compiled_l = com_qq(
+                allocator,
+                "A".to_string(),
+                macro_lookup,
+                symbol_table,
+                runner.clone(),
+                &qq_l,
+            )?;
+            let compiled_r = com_qq(
+                allocator,
+                "B".to_string(),
+                macro_lookup,
+                symbol_table,
+                runner,
+                &qq_r,
+            )?;
             enlist(allocator, &[cons_atom, compiled_l, compiled_r])
         }
     }
@@ -209,7 +240,7 @@ pub fn compile_macros<A: ClassicAllocator>(
     _level: usize,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     quote(allocator, macro_lookup)
 }
@@ -223,16 +254,19 @@ pub fn compile_symbols<A: ClassicAllocator>(
     _level: usize,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     quote(allocator, symbol_table)
 }
 
 // # Transform "quote" to "q" everywhere. Note that quote will not be compiled if behind qq.
 // # Overrides symbol table defns.
-fn lower_quote_<A: ClassicAllocator>(allocator: &mut A, prog: &A::NodePtr) -> Result<A::NodePtr, ClError>
+fn lower_quote_<A: ClassicAllocator>(
+    allocator: &mut A,
+    prog: &A::NodePtr,
+) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let loc = allocator.loc(prog);
     let exported = allocator.export(prog);
@@ -288,9 +322,12 @@ where
     Ok(prog.clone())
 }
 
-pub fn lower_quote<A: ClassicAllocator>(allocator: &mut A, prog: &A::NodePtr) -> Result<A::NodePtr, ClError>
+pub fn lower_quote<A: ClassicAllocator>(
+    allocator: &mut A,
+    prog: &A::NodePtr,
+) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let res = lower_quote_(allocator, prog);
     if DIAG_OUTPUT {
@@ -315,35 +352,22 @@ fn try_expand_macro_for_atom_<A: ClassicAllocator>(
     symbol_table: &A::NodePtr,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let loc = allocator.loc(macro_code);
     let com_atom = allocator.new_atom(loc.clone(), "com".as_bytes())?;
     let exported_macro = allocator.export(macro_code);
     let exported_prog = allocator.export(prog_rest);
-    let post_prog = brun(
-        allocator.allocator(),
-        exported_macro,
-        exported_prog,
-    )?;
+    let post_prog = brun(allocator.allocator(), exported_macro, exported_prog)?;
     let imported_post = allocator.import(loc.clone(), post_prog)?;
     let quoted_macros = quote(allocator, macro_lookup)?;
     let quoted_symbols = quote(allocator, symbol_table)?;
     let to_eval = enlist(
         allocator,
-        &[
-            com_atom,
-            imported_post,
-            quoted_macros,
-            quoted_symbols
-        ]
+        &[com_atom, imported_post, quoted_macros, quoted_symbols],
     )?;
     let top_path = allocator.new_atom(loc, NodePath::new(None).as_path().data())?;
-    evaluate(
-        allocator,
-        &to_eval,
-        &top_path
-    ).map(|x| {
+    evaluate(allocator, &to_eval, &top_path).map(|x| {
         if DIAG_OUTPUT {
             print!(
                 "TRY_EXPAND_MACRO {} WITH {} GIVES {} MACROS {} SYMBOLS {}",
@@ -366,15 +390,9 @@ pub fn try_expand_macro_for_atom<A: ClassicAllocator>(
     symbol_table: &A::NodePtr,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
-    try_expand_macro_for_atom_(
-        allocator,
-        macro_code,
-        prog_rest,
-        macro_lookup,
-        symbol_table
-    )
+    try_expand_macro_for_atom_(allocator, macro_code, prog_rest, macro_lookup, symbol_table)
 }
 
 fn get_macro_program<A: ClassicAllocator>(
@@ -383,7 +401,7 @@ fn get_macro_program<A: ClassicAllocator>(
     macro_lookup: &A::NodePtr,
 ) -> Result<Option<A::NodePtr>, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     if let Some(mlist) = proper_list(allocator, &macro_lookup, true) {
         for macro_pair in mlist {
@@ -429,12 +447,11 @@ fn transform_program_atom<A: ClassicAllocator>(
     symbol_table: &A::NodePtr,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let loc = allocator.loc(prog);
     if a == b"@" {
-        return allocator
-            .new_atom(loc, NodePath::new(None).as_path().data())
+        return allocator.new_atom(loc, NodePath::new(None).as_path().data());
     }
 
     match proper_list(allocator, &symbol_table, true) {
@@ -484,7 +501,7 @@ fn compile_operator_atom<A: ClassicAllocator>(
     run_program: Rc<dyn TRunProgram>,
 ) -> Result<Option<A::NodePtr>, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let compile_bindings = compile_bindings();
 
@@ -500,13 +517,16 @@ where
             &macro_lookup,
             &symbol_table,
             run_program.clone(),
-            1
+            1,
         )?;
         let quoted_post_prog = quote(allocator, &post_prog)?;
         let loc = allocator.loc(prog);
         let top_atom = allocator.new_atom(loc, NodePath::new(None).as_path().data())?;
         let _ = if DIAG_OUTPUT {
-            print!("COMPILE_BINDINGS {}", allocator.disassemble(&quoted_post_prog, None));
+            print!(
+                "COMPILE_BINDINGS {}",
+                allocator.disassemble(&quoted_post_prog, None)
+            );
         };
         return evaluate(allocator, &quoted_post_prog, &top_atom).map(Some);
     }
@@ -526,7 +546,7 @@ fn find_symbol_match<A: ClassicAllocator>(
     symbol_table: &A::NodePtr,
 ) -> Result<Option<SymbolResult<A>>, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     if let Some(symlist) = proper_list(allocator, &symbol_table, true) {
         for sym in symlist {
@@ -574,24 +594,22 @@ fn compile_application<A: ClassicAllocator>(
     run_program: Rc<dyn TRunProgram>,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let mut compiled_args = vec![operator.clone()];
 
     let loc = allocator.loc(prog);
     let exported_prog = allocator.export(prog);
-    let error_result = Err(
-        ClError(
-            loc,
-            EvalErr::InternalError(
-                exported_prog,
-                format!(
-                    "can't compile {}, unknown operator",
-                    allocator.disassemble(&prog, None)
-                ),
-            )
-        )
-    );
+    let error_result = Err(ClError(
+        loc,
+        EvalErr::InternalError(
+            exported_prog,
+            format!(
+                "can't compile {}, unknown operator",
+                allocator.disassemble(&prog, None)
+            ),
+        ),
+    ));
 
     if *opbuf == vec![1] || *opbuf == vec![b'q'] {
         let rest_loc = allocator.loc(&rest);
@@ -617,42 +635,44 @@ where
             if PASS_THROUGH_OPERATORS.contains(opbuf) || (!opbuf.is_empty() && opbuf[0] == b'_') {
                 Ok(r)
             } else {
-                find_symbol_match(
-                    allocator,
-                    opbuf,
-                    &r,
-                    symbol_table
-                ).and_then(|x| match x {
-                    Some(SymbolResult::Direct(v)) => { Ok(v) },
-                    Some(SymbolResult::Matched(_symbol,value)) => {
+                find_symbol_match(allocator, opbuf, &r, symbol_table).and_then(|x| match x {
+                    Some(SymbolResult::Direct(v)) => Ok(v),
+                    Some(SymbolResult::Matched(_symbol, value)) => {
                         match proper_list(allocator, &rest, true) {
                             Some(proglist) => {
                                 let loc = allocator.loc(&value);
                                 let apply_atom = allocator.new_atom(loc.clone(), &[2])?;
-                                let list_atom = allocator.new_atom(loc.clone(), "list".as_bytes())?;
+                                let list_atom =
+                                    allocator.new_atom(loc.clone(), "list".as_bytes())?;
                                 let cons_atom = allocator.new_atom(loc.clone(), &[4])?;
                                 let com_atom = allocator.new_atom(loc.clone(), "com".as_bytes())?;
                                 let opt_atom = allocator.new_atom(loc.clone(), "opt".as_bytes())?;
-                                let top_atom = allocator.new_atom(loc.clone(), NodePath::new(None).as_path().data())?;
-                                let left_atom = allocator.new_atom(loc.clone(), NodePath::new(None).first().as_path().data())?;
+                                let top_atom = allocator
+                                    .new_atom(loc.clone(), NodePath::new(None).as_path().data())?;
+                                let left_atom = allocator.new_atom(
+                                    loc.clone(),
+                                    NodePath::new(None).first().as_path().data(),
+                                )?;
                                 let enlisted = enlist(allocator, &proglist)?;
-                                let list_application = allocator.new_pair(loc, &list_atom, &enlisted)?;
+                                let list_application =
+                                    allocator.new_pair(loc, &list_atom, &enlisted)?;
                                 let quoted_list = quote(allocator, &list_application)?;
                                 let quoted_macros = quote(allocator, &macro_lookup)?;
                                 let quoted_symbols = quote(allocator, &symbol_table)?;
-                                let compiled = enlist(allocator, &[com_atom, quoted_list, quoted_macros, quoted_symbols])?;
+                                let compiled = enlist(
+                                    allocator,
+                                    &[com_atom, quoted_list, quoted_macros, quoted_symbols],
+                                )?;
                                 let to_run = enlist(allocator, &[opt_atom, compiled])?;
                                 let new_args = evaluate(allocator, &to_run, &top_atom)?;
-                                let cons_enlisted = enlist(allocator, &[cons_atom, left_atom, new_args])?;
-                                enlist(
-                                    allocator,
-                                    &[apply_atom, value, cons_enlisted]
-                                )
-                            },
-                            None => { error_result }
+                                let cons_enlisted =
+                                    enlist(allocator, &[cons_atom, left_atom, new_args])?;
+                                enlist(allocator, &[apply_atom, value, cons_enlisted])
+                            }
+                            None => error_result,
                         }
-                    },
-                    None => { error_result }
+                    }
+                    None => error_result,
                 })
             }
         }
@@ -669,7 +689,7 @@ pub fn do_com_prog<A: ClassicAllocator>(
     run_program: Rc<dyn TRunProgram>,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     if DIAG_OUTPUT {
         println!(
@@ -702,7 +722,7 @@ fn do_com_prog_<A: ClassicAllocator>(
     run_program: Rc<dyn TRunProgram>,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     /*
      * Turn the given program `prog` into a clvm program using
@@ -803,7 +823,7 @@ pub fn do_com_prog_for_dialect<A: ClassicAllocator>(
     sexp: &A::NodePtr,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     match allocator.sexp(sexp) {
         ASExp::Pair(prog, extras) => {
@@ -851,15 +871,13 @@ where
         }
         _ => {
             let exported = allocator.export(&sexp);
-            Err(
-                ClError(
-                    allocator.loc(sexp),
-                    EvalErr::InternalError(
-                        exported,
-                        "Program is not a pair in do_com_prog".to_string(),
-                    )
-                )
-            )
+            Err(ClError(
+                allocator.loc(sexp),
+                EvalErr::InternalError(
+                    exported,
+                    "Program is not a pair in do_com_prog".to_string(),
+                ),
+            ))
         }
     }
 }
@@ -897,12 +915,13 @@ pub fn get_search_paths<A: ClassicAllocator>(
     allocator: &mut A,
 ) -> Result<Vec<String>, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let search_paths_result = ((|| {
         let search_paths_prog = assemble(allocator.allocator(), "(_get_include_paths)")?;
         runner.run_program(allocator.allocator(), search_paths_prog, NodePtr::NIL, None)
-    })()).map_err(|e| ClError(loc.clone(), e))?;
+    })())
+    .map_err(|e| ClError(loc.clone(), e))?;
     let mut res = Vec::new();
     let search_paths_result_import = allocator.import(loc, search_paths_result.1)?;
     if let Some(l) = proper_list(allocator, &search_paths_result_import, true) {

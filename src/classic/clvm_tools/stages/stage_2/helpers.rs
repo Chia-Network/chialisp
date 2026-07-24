@@ -2,7 +2,7 @@ use clvm_rs::allocator::{Allocator, NodePtr};
 
 use crate::classic::clvm::sexp::enlist;
 use crate::classic::clvm_tools::node_path::NodePath;
-use crate::classic::clvm_tools::stages::stage_2::abstraction::{ClassicAllocator, ClError};
+use crate::classic::clvm_tools::stages::stage_2::abstraction::{ClError, ClassicAllocator};
 
 lazy_static! {
     pub static ref QUOTE_ATOM: Vec<u8> = vec![1];
@@ -10,7 +10,10 @@ lazy_static! {
     pub static ref COM_ATOM: Vec<u8> = vec![b'c', b'o', b'm'];
 }
 
-pub fn quote<A: ClassicAllocator>(allocator: &mut A, sexp: &A::NodePtr) -> Result<A::NodePtr, ClError> {
+pub fn quote<A: ClassicAllocator>(
+    allocator: &mut A,
+    sexp: &A::NodePtr,
+) -> Result<A::NodePtr, ClError> {
     allocator
         .new_atom(allocator.loc(&sexp), &QUOTE_ATOM)
         .and_then(|q| allocator.new_pair(allocator.loc(&sexp), &q, &sexp))
@@ -24,7 +27,7 @@ pub fn evaluate<A: ClassicAllocator>(
     args: &A::NodePtr,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let loc = allocator.loc(prog);
     let a = allocator.new_atom(loc, &APPLY_ATOM)?;
@@ -37,7 +40,7 @@ pub fn run<A: ClassicAllocator>(
     macro_lookup: &A::NodePtr,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     /*
      * PROG => (e (com (q . PROG) (mac)) ARGS)

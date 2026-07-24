@@ -73,7 +73,15 @@ fn test_do_com_prog(
     let macro_lookup = assemble_from_ir(allocator, Rc::new(macro_ir)).unwrap();
     let sym_ir = read_ir(&symbol_table_src, 0).unwrap();
     let symbol_table = assemble_from_ir(allocator, Rc::new(sym_ir)).unwrap();
-    let result = do_com_prog(allocator, 849, &program, &macro_lookup, &symbol_table, runner).unwrap();
+    let result = do_com_prog(
+        allocator,
+        849,
+        &program,
+        &macro_lookup,
+        &symbol_table,
+        runner,
+    )
+    .unwrap();
     disassemble(allocator, result, Some(0))
 }
 

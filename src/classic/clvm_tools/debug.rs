@@ -10,7 +10,7 @@ use crate::classic::clvm::sexp::{enlist, proper_list, rest, First, SelectNode, T
 
 use crate::classic::clvm_tools::sha256tree::sha256tree;
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
-use crate::classic::clvm_tools::stages::stage_2::abstraction::{ClassicAllocator, ClError};
+use crate::classic::clvm_tools::stages::stage_2::abstraction::{ClError, ClassicAllocator};
 
 use crate::compiler::comptypes::{CompileErr, CompilerOpts};
 use crate::compiler::frontend::frontend;
@@ -51,7 +51,7 @@ use crate::compiler::usecheck::check_parameters_used_compileform;
 /// These can be passed on and used by debuggers and such.
 pub struct FunctionExtraInfo<A: ClassicAllocator>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     /// The form of the original arguments from the source code.
     pub args: A::NodePtr,
@@ -62,12 +62,12 @@ where
 
 impl<A: ClassicAllocator> Clone for FunctionExtraInfo<A>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     fn clone(&self) -> Self {
         FunctionExtraInfo {
             args: self.args.clone(),
-            has_constants_tree: self.has_constants_tree
+            has_constants_tree: self.has_constants_tree,
         }
     }
 }
@@ -114,19 +114,16 @@ pub fn build_symbol_dump<A: ClassicAllocator>(
     extra_info: bool,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let mut map_result: Vec<A::NodePtr> = Vec::new();
 
     for (k, v) in constants_lookup.iter() {
         let v_export = allocator.export(v);
         let vloc = allocator.loc(v);
-        let run_result = run_program.run_program(
-            allocator.allocator(),
-            v_export,
-            NodePtr::NIL,
-            None
-        ).map_err(|e| allocator.map_err(vloc.clone(), e))?;
+        let run_result = run_program
+            .run_program(allocator.allocator(), v_export, NodePtr::NIL, None)
+            .map_err(|e| allocator.map_err(vloc.clone(), e))?;
 
         let sha256 = sha256tree(allocator.allocator(), run_result.1).hex();
         let sha_atom = allocator.new_atom(vloc.clone(), sha256.as_bytes())?;
@@ -151,12 +148,22 @@ where
             let left_env_name_atom = allocator.new_atom(vloc.clone(), &left_env_atom)?;
 
             let serialized_args = allocator.disassemble(&extra.args, Some(0));
-            let serialized_args_atom = allocator.new_atom(vloc.clone(), serialized_args.as_bytes())?;
+            let serialized_args_atom =
+                allocator.new_atom(vloc.clone(), serialized_args.as_bytes())?;
 
-            let left_env_value = allocator.new_atom(vloc.clone(), &[extra.has_constants_tree as u8])?;
+            let left_env_value =
+                allocator.new_atom(vloc.clone(), &[extra.has_constants_tree as u8])?;
 
-            map_result.push(allocator.new_pair(vloc.clone(), &args_name_atom, &serialized_args_atom)?);
-            map_result.push(allocator.new_pair(vloc.clone(), &left_env_name_atom, &left_env_value)?);
+            map_result.push(allocator.new_pair(
+                vloc.clone(),
+                &args_name_atom,
+                &serialized_args_atom,
+            )?);
+            map_result.push(allocator.new_pair(
+                vloc.clone(),
+                &left_env_name_atom,
+                &left_env_value,
+            )?);
         }
     }
 

@@ -6,11 +6,11 @@ use chia_bls::PublicKey;
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::error::EvalErr;
 
-use crate::classic::clvm_tools::stages::stage_2::abstraction::{ASExp, ClassicAllocator, ClError};
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, Stream};
 use crate::classic::clvm::serialize::sexp_to_stream;
-use crate::util::{u8_from_number, Number};
+use crate::classic::clvm_tools::stages::stage_2::abstraction::{ASExp, ClError, ClassicAllocator};
 use crate::compiler::srcloc::Srcloc;
+use crate::util::{u8_from_number, Number};
 
 #[derive(Debug)]
 pub enum CastableType {
@@ -352,15 +352,10 @@ pub fn first<A: ClassicAllocator>(allocator: &A, sexp: &A::NodePtr) -> Result<A:
         return Ok(f);
     }
 
-    Err(
-        ClError(
-            allocator.loc(sexp),
-            EvalErr::InternalError(
-                exported,
-                "first of non-cons".to_string(),
-            )
-        )
-    )
+    Err(ClError(
+        allocator.loc(sexp),
+        EvalErr::InternalError(exported, "first of non-cons".to_string()),
+    ))
 }
 
 pub fn rest<A: ClassicAllocator>(allocator: &A, sexp: &A::NodePtr) -> Result<A::NodePtr, ClError> {
@@ -369,15 +364,10 @@ pub fn rest<A: ClassicAllocator>(allocator: &A, sexp: &A::NodePtr) -> Result<A::
         return Ok(r);
     }
 
-    Err(
-        ClError(
-            allocator.loc(sexp),
-            EvalErr::InternalError(
-                exported,
-                "rest of non-cons".to_string(),
-            )
-        )
-    )
+    Err(ClError(
+        allocator.loc(sexp),
+        EvalErr::InternalError(exported, "rest of non-cons".to_string()),
+    ))
 }
 
 pub fn atom(allocator: &Allocator, sexp: NodePtr) -> Result<Vec<u8>, EvalErr> {
@@ -394,10 +384,10 @@ pub fn atom(allocator: &Allocator, sexp: NodePtr) -> Result<Vec<u8>, EvalErr> {
 pub fn proper_list<A: ClassicAllocator>(
     allocator: &A,
     sexp: &A::NodePtr,
-    store: bool
+    store: bool,
 ) -> Option<Vec<A::NodePtr>>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let mut args = vec![];
     let mut args_sexp = sexp.clone();
@@ -421,10 +411,11 @@ where
 }
 
 pub fn enlist<A: ClassicAllocator>(
-    allocator: &mut A, vec: &[A::NodePtr]
+    allocator: &mut A,
+    vec: &[A::NodePtr],
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let mut built = allocator.import(Srcloc::start("*nil*"), NodePtr::NIL)?;
 
@@ -483,9 +474,13 @@ pub fn fold_m<A, B, E, CA: ClassicAllocator>(
     }
 }
 
-pub fn equal_to<A: ClassicAllocator>(allocator: &mut A, first_: &A::NodePtr, second_: &A::NodePtr) -> bool
+pub fn equal_to<A: ClassicAllocator>(
+    allocator: &mut A,
+    first_: &A::NodePtr,
+    second_: &A::NodePtr,
+) -> bool
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let mut first = first_.clone();
     let mut second = second_.clone();
@@ -516,10 +511,9 @@ where
 pub fn flatten<A: ClassicAllocator>(
     allocator: &mut A,
     tree_: &A::NodePtr,
-    res: &mut Vec<A::NodePtr>
-)
-where
-    A::NodePtr: Clone
+    res: &mut Vec<A::NodePtr>,
+) where
+    A::NodePtr: Clone,
 {
     let mut tree = tree_.clone();
 
@@ -618,11 +612,7 @@ where
     R: SelectNode<T, A>,
     S: SelectNode<U, A>,
 {
-    fn select_nodes(
-        &self,
-        allocator: &mut A,
-        n: A::NodePtr,
-    ) -> Result<NodeSel<T, U>, ClError> {
+    fn select_nodes(&self, allocator: &mut A, n: A::NodePtr) -> Result<NodeSel<T, U>, ClError> {
         let NodeSel::Cons(my_left, my_right) = &self;
         let l = first(allocator, &n)?;
         let r = rest(allocator, &n)?;

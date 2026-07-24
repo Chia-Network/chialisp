@@ -8,7 +8,7 @@ use crate::compiler::srcloc::Srcloc;
 
 pub enum ASExp<T> {
     Pair(T, T),
-    Atom
+    Atom,
 }
 
 #[derive(Debug)]
@@ -57,7 +57,12 @@ pub trait ClassicAllocator {
     fn node_equal(&self, a: &Self::NodePtr, b: &Self::NodePtr) -> bool;
     fn map_err(&self, loc: Srcloc, err: EvalErr) -> ClError;
     fn new_atom(&mut self, loc: Srcloc, value: &[u8]) -> Result<Self::NodePtr, ClError>;
-    fn new_pair(&mut self, loc: Srcloc, a: &Self::NodePtr, b: &Self::NodePtr) -> Result<Self::NodePtr, ClError>;
+    fn new_pair(
+        &mut self,
+        loc: Srcloc,
+        a: &Self::NodePtr,
+        b: &Self::NodePtr,
+    ) -> Result<Self::NodePtr, ClError>;
     fn import(&mut self, loc: Srcloc, node: NodePtr) -> Result<Self::NodePtr, ClError>;
     fn export(&self, node: &Self::NodePtr) -> NodePtr;
 }
@@ -74,10 +79,8 @@ impl ClassicAllocator for Allocator {
     }
     fn sexp(&self, node: &Self::NodePtr) -> ASExp<Self::NodePtr> {
         match clvmr::Allocator::sexp(self, *node) {
-            SExp::Pair(a, b) => {
-                ASExp::Pair(a, b)
-            }
-            SExp::Atom => ASExp::Atom
+            SExp::Pair(a, b) => ASExp::Pair(a, b),
+            SExp::Atom => ASExp::Atom,
         }
     }
     fn atom<'a>(&'a self, node: &Self::NodePtr) -> BufHolder<'a> {
@@ -99,11 +102,18 @@ impl ClassicAllocator for Allocator {
         ClError(loc, err)
     }
     fn new_atom(&mut self, loc: Srcloc, value: &[u8]) -> Result<Self::NodePtr, ClError> {
-        let new_atom = clvmr::Allocator::new_atom(self, value).map_err(|e| self.map_err(loc.clone(), e))?;
+        let new_atom =
+            clvmr::Allocator::new_atom(self, value).map_err(|e| self.map_err(loc.clone(), e))?;
         self.import(loc, new_atom)
     }
-    fn new_pair(&mut self, loc: Srcloc, a: &Self::NodePtr, b: &Self::NodePtr) -> Result<Self::NodePtr, ClError> {
-        let new_pair = clvmr::Allocator::new_pair(self, *a, *b).map_err(|e| self.map_err(loc.clone(), e))?;
+    fn new_pair(
+        &mut self,
+        loc: Srcloc,
+        a: &Self::NodePtr,
+        b: &Self::NodePtr,
+    ) -> Result<Self::NodePtr, ClError> {
+        let new_pair =
+            clvmr::Allocator::new_pair(self, *a, *b).map_err(|e| self.map_err(loc.clone(), e))?;
         self.import(loc, new_pair)
     }
     fn import(&mut self, _loc: Srcloc, node: NodePtr) -> Result<Self::NodePtr, ClError> {

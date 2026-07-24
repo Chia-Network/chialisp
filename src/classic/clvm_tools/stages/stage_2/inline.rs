@@ -1,7 +1,9 @@
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
 use crate::classic::clvm::sexp::{enlist, proper_list};
+use crate::classic::clvm_tools::stages::stage_2::abstraction::{
+    ASExp, BufCarrier, ClError, ClassicAllocator,
+};
 use crate::compiler::gensym::gensym;
-use crate::classic::clvm_tools::stages::stage_2::abstraction::{ASExp, BufCarrier, ClassicAllocator, ClError};
 
 use crate::util::Number;
 use num_bigint::ToBigInt;
@@ -16,7 +18,7 @@ pub fn is_at_capture<A: ClassicAllocator>(
     tree_rest: &A::NodePtr,
 ) -> Option<(A::NodePtr, A::NodePtr)>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     if let (ASExp::Atom, Some(spec)) = (
         allocator.sexp(tree_first),
@@ -32,9 +34,12 @@ where
 }
 
 // (unquote X)
-fn wrap_in_unquote<A: ClassicAllocator>(allocator: &mut A, code: &A::NodePtr) -> Result<A::NodePtr, ClError>
+fn wrap_in_unquote<A: ClassicAllocator>(
+    allocator: &mut A,
+    code: &A::NodePtr,
+) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let loc = allocator.loc(code);
     let unquote_atom = allocator.new_atom(loc, "unquote".as_bytes())?;
@@ -42,9 +47,12 @@ where
 }
 
 // (__chia__enlist X)
-fn wrap_in_compile_time_list<A: ClassicAllocator>(allocator: &mut A, code: &A::NodePtr) -> Result<A::NodePtr, ClError>
+fn wrap_in_compile_time_list<A: ClassicAllocator>(
+    allocator: &mut A,
+    code: &A::NodePtr,
+) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let loc = allocator.loc(code);
     let chia_enlist_atom = allocator.new_atom(loc, "__chia__enlist".as_bytes())?;
@@ -69,7 +77,7 @@ fn wrap_path_selection<A: ClassicAllocator>(
     wrapped: &A::NodePtr,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let mut operator_stack = Vec::new();
     let mut tail = wrapped.clone();
@@ -101,7 +109,7 @@ fn formulate_path_selections_for_destructuring_arg<A: ClassicAllocator>(
     selections: &mut HashMap<Vec<u8>, A::NodePtr>,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let loc = allocator.loc(arg_sexp);
     match allocator.sexp(&arg_sexp) {
@@ -109,15 +117,16 @@ where
             let next_depth = arg_depth.clone() * 2_u32.to_bigint().unwrap();
             if let Some((capture, substructure)) = is_at_capture(allocator, &a, &b) {
                 if let ASExp::Atom = allocator.sexp(&capture) {
-                    let (new_arg_path, new_arg_depth, tail) =
-                        if let Some(prev_ref) = referenced_from {
-                            (arg_path, arg_depth, prev_ref)
-                        } else {
-                            let capture_code = wrap_in_unquote(allocator, &capture)?;
-                            let qtail =
-                                wrap_path_selection(allocator, arg_path + arg_depth, &capture_code)?;
-                            (bi_zero(), bi_one(), qtail)
-                        };
+                    let (new_arg_path, new_arg_depth, tail) = if let Some(prev_ref) =
+                        referenced_from
+                    {
+                        (arg_path, arg_depth, prev_ref)
+                    } else {
+                        let capture_code = wrap_in_unquote(allocator, &capture)?;
+                        let qtail =
+                            wrap_path_selection(allocator, arg_path + arg_depth, &capture_code)?;
+                        (bi_zero(), bi_one(), qtail)
+                    };
 
                     // Was cbuf from capture.
                     let capture_atom = allocator.atom(&capture);
@@ -246,7 +255,7 @@ pub fn formulate_path_selections_for_destructuring<A: ClassicAllocator>(
     selections: &mut HashMap<Vec<u8>, A::NodePtr>,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     if let ASExp::Pair(a, b) = allocator.sexp(args_sexp) {
         if let Some((capture, substructure)) = is_at_capture(allocator, &a, &b) {
@@ -288,7 +297,7 @@ where
 // are passed down to the macro body that gets created for the inline function.
 pub fn is_inline_destructure<A: ClassicAllocator>(
     allocator: &mut A,
-    args_sexp: &A::NodePtr
+    args_sexp: &A::NodePtr,
 ) -> bool {
     if let ASExp::Pair(a, b) = allocator.sexp(args_sexp) {
         if let ASExp::Pair(_, _) = allocator.sexp(&a) {

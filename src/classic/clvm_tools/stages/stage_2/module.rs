@@ -2,19 +2,21 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use clvm_rs::allocator::{NodePtr};
+use clvm_rs::allocator::NodePtr;
 use clvm_rs::error::EvalErr;
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
 use crate::classic::clvm::sexp::{
-    enlist, first, flatten, fold_m, map_m, nonempty_last, proper_list, rest, First,
-    NodeSel, Rest, SelectNode, ThisNode,
+    enlist, first, flatten, fold_m, map_m, nonempty_last, proper_list, rest, First, NodeSel, Rest,
+    SelectNode, ThisNode,
 };
 use crate::classic::clvm_tools::debug::{build_symbol_dump, FunctionExtraInfo};
 use crate::classic::clvm_tools::node_path::NodePath;
 use crate::classic::clvm_tools::stages::assemble;
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
-use crate::classic::clvm_tools::stages::stage_2::abstraction::{ASExp, BufCarrier, ClassicAllocator, ClError};
+use crate::classic::clvm_tools::stages::stage_2::abstraction::{
+    ASExp, BufCarrier, ClError, ClassicAllocator,
+};
 use crate::classic::clvm_tools::stages::stage_2::helpers::{evaluate, quote};
 use crate::classic::clvm_tools::stages::stage_2::inline::{
     formulate_path_selections_for_destructuring, is_at_capture, is_inline_destructure,
@@ -35,7 +37,7 @@ struct CollectionResult<A: ClassicAllocator> {
 
 struct CompileOutput<A: ClassicAllocator>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     pub functions: HashMap<Vec<u8>, A::NodePtr>,
     pub symbols_extra_info: HashMap<Vec<u8>, FunctionExtraInfo<A>>,
@@ -43,7 +45,7 @@ where
 
 impl<A: ClassicAllocator> Default for CompileOutput<A>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     fn default() -> Self {
         CompileOutput {
@@ -55,11 +57,11 @@ where
 
 impl<A: ClassicAllocator> CompileOutput<A>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     pub fn add_definitions(&mut self, other: &CompileOutput<A>)
     where
-        A::NodePtr: Clone
+        A::NodePtr: Clone,
     {
         for (n, v) in other.functions.iter() {
             self.functions.insert(n.to_vec(), v.clone());
@@ -73,10 +75,10 @@ where
 // export type TBuildTree = Bytes | Tuple<TBuildTree, TBuildTree> | [];
 fn build_tree<A: ClassicAllocator>(
     allocator: &mut A,
-    items: &[Vec<u8>]
+    items: &[Vec<u8>],
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     if items.is_empty() {
         let imported_nil = allocator.import(Srcloc::start("*nil*"), NodePtr::NIL)?;
@@ -93,9 +95,12 @@ where
 }
 
 // export type TBuildTreeProgram = SExp | [Bytes, TBuildTree, TBuildTree] | [Tuple<Bytes, SExp>];
-fn build_tree_program<A: ClassicAllocator>(allocator: &mut A, items: &[A::NodePtr]) -> Result<A::NodePtr, ClError>
+fn build_tree_program<A: ClassicAllocator>(
+    allocator: &mut A,
+    items: &[A::NodePtr],
+) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     // This function takes a Python list of items and turns it into a program that
     //  a binary tree of the items, suitable for casting to an s-expression.
@@ -126,7 +131,7 @@ fn build_used_constants_names<A: ClassicAllocator>(
     macros: &[(Vec<u8>, A::NodePtr)],
 ) -> Result<Vec<Vec<u8>>, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     /*
     Do a naïve pruning of unused symbols. It may be too big, but it shouldn't
@@ -215,20 +220,15 @@ fn parse_include<A: ClassicAllocator>(
     run_program: Rc<dyn TRunProgram>,
 ) -> Result<(), ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let loc = allocator.loc(name);
-    let prog = assemble(
-        allocator.allocator(),
-        "(_read (_full_path_for_name 1))"
-    ).map_err(|e| ClError(loc.clone(), e))?;
+    let prog = assemble(allocator.allocator(), "(_read (_full_path_for_name 1))")
+        .map_err(|e| ClError(loc.clone(), e))?;
     let name_export = allocator.export(name);
-    let assembled_sexp = run_program.run_program(
-        allocator.allocator(),
-        prog,
-        name_export,
-        None
-    ).map_err(|e| ClError(loc.clone(), e))?;
+    let assembled_sexp = run_program
+        .run_program(allocator.allocator(), prog, name_export, None)
+        .map_err(|e| ClError(loc.clone(), e))?;
     let assembled_sexp_import = allocator.import(loc.clone(), assembled_sexp.1)?;
     if let Some(assembled) = proper_list(allocator, &assembled_sexp_import, true) {
         for sexp in assembled {
@@ -240,18 +240,16 @@ where
                 constants,
                 delayed_constants,
                 macros,
-                run_program.clone()
+                run_program.clone(),
             )?;
-        };
+        }
         return Ok(());
     }
 
-    Err(
-        ClError(
-            loc,
-            EvalErr::InternalError(name_export, "include returned malformed result".to_string())
-        )
-    )
+    Err(ClError(
+        loc,
+        EvalErr::InternalError(name_export, "include returned malformed result".to_string()),
+    ))
 }
 
 fn unquote_args<A: ClassicAllocator>(
@@ -261,7 +259,7 @@ fn unquote_args<A: ClassicAllocator>(
     matches: &HashMap<Vec<u8>, A::NodePtr>,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     match allocator.sexp(code) {
         ASExp::Atom => {
@@ -300,7 +298,7 @@ fn defun_inline_to_macro<A: ClassicAllocator>(
     declaration_sexp: &A::NodePtr,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let Rest::Here(NodeSel::Cons(name, NodeSel::Cons(arg_spec, First::Here(code)))) =
         Rest::Here(NodeSel::Cons(
@@ -366,7 +364,7 @@ fn parse_mod_sexp<A: ClassicAllocator>(
     run_program: Rc<dyn TRunProgram>,
 ) -> Result<(), ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let NodeSel::Cons(op_node, First::Here(name_node)) =
         NodeSel::Cons(ThisNode::Here, First::Here(ThisNode::Here))
@@ -408,18 +406,16 @@ where
     } else if namespace.contains(&name) {
         let loc = allocator.loc(declaration_sexp);
         let dec_export = allocator.export(declaration_sexp);
-        Err(
-            ClError(
-                loc,
-                EvalErr::InternalError(
-                    dec_export,
-                    format!(
-                        "symbol \"{}\" redefined",
-                        Bytes::new(Some(BytesFromType::Raw(name))).decode()
-                    ),
-                )
-            )
-        )
+        Err(ClError(
+            loc,
+            EvalErr::InternalError(
+                dec_export,
+                format!(
+                    "symbol \"{}\" redefined",
+                    Bytes::new(Some(BytesFromType::Raw(name))).decode()
+                ),
+            ),
+        ))
     } else {
         namespace.insert(name.to_vec());
 
@@ -428,7 +424,8 @@ where
             Ok(())
         } else if op == "defun".as_bytes() {
             let Rest::Here(Rest::Here(declaration_sexp_rr)) =
-                Rest::Here(Rest::Here(ThisNode::Here)).select_nodes(allocator, declaration_sexp.clone())?;
+                Rest::Here(Rest::Here(ThisNode::Here))
+                    .select_nodes(allocator, declaration_sexp.clone())?;
             functions.insert(name, declaration_sexp_rr);
             Ok(())
         } else if op == "defun-inline".as_bytes() {
@@ -452,15 +449,13 @@ where
         } else {
             let loc = allocator.loc(declaration_sexp);
             let export_sexp = allocator.export(declaration_sexp);
-            Err(
-                ClError(
-                    loc,
-                    EvalErr::InternalError(
-                        export_sexp,
-                        "expected defun, defmacro, defconst, compile-file or defconstant".to_string(),
-                    )
-                )
-            )
+            Err(ClError(
+                loc,
+                EvalErr::InternalError(
+                    export_sexp,
+                    "expected defun, defmacro, defconst, compile-file or defconstant".to_string(),
+                ),
+            ))
         }
     }
 }
@@ -473,7 +468,7 @@ fn compile_mod_stage_1<A: ClassicAllocator>(
     produce_extra_info: bool,
 ) -> Result<CollectionResult<A>, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     // stage 1: collect up names of globals (functions, constants, macros)
     m! {
@@ -648,7 +643,7 @@ fn symbol_table_for_tree<A: ClassicAllocator>(
     root_node: &NodePath,
 ) -> Result<Vec<(A::NodePtr, Vec<u8>)>, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     if allocator.is_nil(tree) {
         return Ok(Vec::new());
@@ -661,14 +656,16 @@ where
             let right_bytes = NodePath::new(None).rest();
 
             let NodeSel::Cons(tree_first, tree_rest) =
-                NodeSel::Cons(ThisNode::Here, ThisNode::Here).select_nodes(allocator, tree.clone())?;
+                NodeSel::Cons(ThisNode::Here, ThisNode::Here)
+                    .select_nodes(allocator, tree.clone())?;
 
             // Allow haskell-like @ capture for destructuring.
             // If we encounter a form like (@ name substructure) then
             // treat it as though name captures the current path but
             // we also continue evaluating at the current position.
             let mut result_fin = Vec::new();
-            if let Some((capture, destructure)) = is_at_capture(allocator, &tree_first, &tree_rest) {
+            if let Some((capture, destructure)) = is_at_capture(allocator, &tree_first, &tree_rest)
+            {
                 // Push the given name here.
                 result_fin.push((capture, root_node.as_path().data().to_vec()));
 
@@ -697,7 +694,7 @@ fn build_macro_lookup_program<A: ClassicAllocator>(
     run_program: Rc<dyn TRunProgram>,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let loc = allocator.loc(macro_lookup);
     let com_atom = allocator.new_atom(loc.clone(), "com".as_bytes())?;
@@ -709,17 +706,19 @@ where
     fold_m(
         allocator,
         &|allocator, macro_lookup_program, macro_def: &(Vec<u8>, A::NodePtr)| {
-            let cons_list =
-                enlist(
-                    allocator,
-                    &[cons_atom.clone(), macro_def.1.clone(), macro_lookup_program.clone()]
-                )?;
+            let cons_list = enlist(
+                allocator,
+                &[
+                    cons_atom.clone(),
+                    macro_def.1.clone(),
+                    macro_lookup_program.clone(),
+                ],
+            )?;
             let quoted_to_compile = quote(allocator, &cons_list)?;
-            let compile_form =
-                enlist(
-                    allocator,
-                    &[com_atom.clone(), quoted_to_compile, macro_lookup_program]
-                )?;
+            let compile_form = enlist(
+                allocator,
+                &[com_atom.clone(), quoted_to_compile, macro_lookup_program],
+            )?;
             let opt_form = enlist(allocator, &[opt_atom.clone(), compile_form])?;
             let loc = allocator.loc(&opt_form);
             let top_atom = allocator.new_atom(loc, NodePath::new(None).as_path().data())?;
@@ -727,7 +726,7 @@ where
             optimize_sexp(allocator, &macro_evaluated, runner())
         },
         macro_lookup_program,
-        &mut macros.iter()
+        &mut macros.iter(),
     )
 }
 
@@ -797,7 +796,7 @@ fn compile_functions<A: ClassicAllocator>(
     has_constants_tree: bool,
 ) -> Result<CompileOutput<A>, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let mut compiled: CompileOutput<A> = Default::default();
 
@@ -824,7 +823,8 @@ fn add_main_args<A: ClassicAllocator>(
     symbols: &A::NodePtr,
 ) -> Result<A::NodePtr, ClError> {
     let entry_value_loc = allocator.loc(args);
-    let entry_name = allocator.new_atom(entry_value_loc.clone(), "__chia__main_arguments".as_bytes())?;
+    let entry_name =
+        allocator.new_atom(entry_value_loc.clone(), "__chia__main_arguments".as_bytes())?;
     let entry_value_string = allocator.disassemble(args, None);
     let entry_value = allocator.new_atom(entry_value_loc, entry_value_string.as_bytes())?;
     let entry_cons_loc = allocator.loc(args);
@@ -842,7 +842,7 @@ fn finish_compile_from_collection<A: ClassicAllocator>(
     produce_extra_info: bool,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let loc = allocator.loc(macro_lookup);
     let a_atom = allocator.new_atom(loc.clone(), &[2])?;
@@ -934,15 +934,13 @@ where
             } else {
                 "(_set_symbol_table 1)"
             },
-        ).map_err(|e| ClError(loc.clone(), e))?;
+        )
+        .map_err(|e| ClError(loc.clone(), e))?;
 
         let exported_symbols = allocator.export(&symbols);
-        run_program.run_program(
-            allocator.allocator(),
-            to_run,
-            exported_symbols,
-            None
-        ).map_err(|e| ClError(loc, e))?;
+        run_program
+            .run_program(allocator.allocator(), to_run, exported_symbols, None)
+            .map_err(|e| ClError(loc, e))?;
 
         Ok(opt_list)
     } else {
@@ -962,18 +960,21 @@ pub fn compile_mod<A: ClassicAllocator>(
     _level: usize,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     // Deal with the "mod" keyword.
     let loc = allocator.loc(macro_lookup);
-    let produce_extra_info_prog = assemble(allocator.allocator(), "(_symbols_extra_info)").map_err(|e| ClError(loc.clone(), e))?;
+    let produce_extra_info_prog = assemble(allocator.allocator(), "(_symbols_extra_info)")
+        .map_err(|e| ClError(loc.clone(), e))?;
     let produce_extra_info_null = NodePtr::NIL;
-    let extra_info_res = run_program.run_program(
-        allocator.allocator(),
-        produce_extra_info_prog,
-        produce_extra_info_null,
-        None,
-    ).map_err(|e| ClError(loc.clone(), e))?;
+    let extra_info_res = run_program
+        .run_program(
+            allocator.allocator(),
+            produce_extra_info_prog,
+            produce_extra_info_null,
+            None,
+        )
+        .map_err(|e| ClError(loc.clone(), e))?;
     let imported_extra_info = allocator.import(loc, extra_info_res.1)?;
     let produce_extra_info = !allocator.is_nil(&imported_extra_info);
 

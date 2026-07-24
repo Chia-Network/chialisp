@@ -25,7 +25,7 @@ use crate::classic::clvm_tools::sha256tree::TreeHash;
 use crate::classic::clvm_tools::stages::stage_0::{
     DefaultProgramRunner, OriginalDialect, RunProgramOption, TRunProgram,
 };
-use crate::classic::clvm_tools::stages::stage_2::abstraction::{ClassicAllocator, ClError};
+use crate::classic::clvm_tools::stages::stage_2::abstraction::{ClError, ClassicAllocator};
 use crate::classic::clvm_tools::stages::stage_2::compile::do_com_prog_for_dialect;
 use crate::classic::clvm_tools::stages::stage_2::optimize::do_optimize;
 
@@ -102,15 +102,10 @@ pub fn full_path_for_filename<A: ClassicAllocator>(
         }
     }
 
-    Err(
-        ClError(
-            loc,
-            EvalErr::InternalError(
-                exported,
-                "can't open file".to_string(),
-            )
-        )
-    )
+    Err(ClError(
+        loc,
+        EvalErr::InternalError(exported, "can't open file".to_string()),
+    ))
 }
 
 pub struct CompilerOperators {
@@ -341,7 +336,8 @@ impl CompilerOperatorsInternal {
                     return convert_filename(allocator, &filename);
                 }
 
-                let full_name = full_path_for_filename(allocator, &sexp, &filename, &self.search_paths)?;
+                let full_name =
+                    full_path_for_filename(allocator, &sexp, &filename, &self.search_paths)?;
                 return convert_filename(allocator, &full_name);
             }
         }

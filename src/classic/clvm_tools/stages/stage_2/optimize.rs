@@ -6,18 +6,18 @@ use std::rc::Rc;
 use clvm_rs::error::EvalErr;
 use num_bigint::ToBigInt;
 
-use clvm_rs::allocator::{NodePtr};
+use clvm_rs::allocator::NodePtr;
 use clvm_rs::cost::Cost;
 
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
-use crate::classic::clvm::sexp::{
-    enlist, equal_to, first, fold_m, map_m, proper_list,
-};
+use crate::classic::clvm::sexp::{enlist, equal_to, first, fold_m, map_m, proper_list};
 use crate::classic::clvm_tools::node_path::NodePath;
 use crate::classic::clvm_tools::pattern_match::match_sexp;
 use crate::classic::clvm_tools::stages::assemble;
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
-use crate::classic::clvm_tools::stages::stage_2::abstraction::{ASExp, BufCarrier, ClassicAllocator, ClError};
+use crate::classic::clvm_tools::stages::stage_2::abstraction::{
+    ASExp, BufCarrier, ClError, ClassicAllocator,
+};
 use crate::classic::clvm_tools::stages::stage_2::helpers::quote;
 use crate::classic::clvm_tools::stages::stage_2::operators::AllocatorRefOrTreeHash;
 use crate::compiler::srcloc::Srcloc;
@@ -32,7 +32,7 @@ const DIAG_OPTIMIZATIONS: bool = false;
 
 fn seems_constant_tail<A: ClassicAllocator>(allocator: &mut A, sexp_: &A::NodePtr) -> bool
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let mut sexp = sexp_.clone();
 
@@ -54,7 +54,7 @@ where
 
 pub fn seems_constant<A: ClassicAllocator>(allocator: &mut A, sexp: &A::NodePtr) -> bool
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     match allocator.sexp(&sexp) {
         ASExp::Atom => {
@@ -94,7 +94,7 @@ pub fn constant_optimizer<A: ClassicAllocator>(
     runner: Rc<dyn TRunProgram>,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     /*
      * If the expression does not depend upon @ anywhere,
@@ -124,12 +124,9 @@ where
     }
     if sc_r && nn_r {
         let r_export = allocator.export(&r);
-        let res = runner.run_program(
-            allocator.allocator(),
-            r_export,
-            NodePtr::NIL,
-            None
-        ).map_err(|e| ClError(allocator.loc(&r), e))?;
+        let res = runner
+            .run_program(allocator.allocator(), r_export, NodePtr::NIL, None)
+            .map_err(|e| ClError(allocator.loc(&r), e))?;
         let r1 = allocator.import(allocator.loc(&r), res.1)?;
         let _ = if DIAG_OPTIMIZATIONS {
             println!(
@@ -156,7 +153,9 @@ pub fn is_args_call<A: ClassicAllocator>(allocator: &A, r: &A::NodePtr) -> bool 
 
 pub fn cons_q_a_optimizer_pattern<A: ClassicAllocator>(allocator: &mut A) -> A::NodePtr {
     let assembled = assemble(allocator.allocator(), "(a (q . (: . sexp)) (: . args))").unwrap();
-    allocator.import(Srcloc::start("*cons_q_a_optimizer_pattern*"), assembled).unwrap()
+    allocator
+        .import(Srcloc::start("*cons_q_a_optimizer_pattern*"), assembled)
+        .unwrap()
 }
 
 pub fn cons_q_a_optimizer<A: ClassicAllocator>(
@@ -166,7 +165,7 @@ pub fn cons_q_a_optimizer<A: ClassicAllocator>(
     _eval_f: Rc<dyn TRunProgram>,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let cons_q_a_optimizer_pattern = cons_q_a_optimizer_pattern(allocator);
 
@@ -194,16 +193,20 @@ where
 
 fn cons_pattern<A: ClassicAllocator>(allocator: &mut A) -> A::NodePtr {
     let assembled = assemble(allocator.allocator(), "(c (: . first) (: . rest)))").unwrap();
-    allocator.import(Srcloc::start("*cons_pattern*"), assembled).unwrap()
+    allocator
+        .import(Srcloc::start("*cons_pattern*"), assembled)
+        .unwrap()
 }
 
 fn cons_f<A: ClassicAllocator>(allocator: &mut A, args: &A::NodePtr) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let cons_pattern = cons_pattern(allocator);
     let pair_loc = allocator.loc(&args);
-    if let Some(first) = match_sexp(allocator, &cons_pattern, &args, HashMap::new()).and_then(|t| t.get("first").cloned()) {
+    if let Some(first) = match_sexp(allocator, &cons_pattern, &args, HashMap::new())
+        .and_then(|t| t.get("first").cloned())
+    {
         Ok(first)
     } else {
         let first_loc = allocator.loc(&args);
@@ -216,11 +219,13 @@ where
 
 fn cons_r<A: ClassicAllocator>(allocator: &mut A, args: &A::NodePtr) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let cons_pattern = cons_pattern(allocator);
     let pair_loc = allocator.loc(&args);
-    if let Some(rest) = match_sexp(allocator, &cons_pattern, &args, HashMap::new()).and_then(|t| t.get("rest").cloned()) {
+    if let Some(rest) = match_sexp(allocator, &cons_pattern, &args, HashMap::new())
+        .and_then(|t| t.get("rest").cloned())
+    {
         Ok(rest)
     } else {
         let rest_loc = allocator.loc(&args);
@@ -237,7 +242,7 @@ fn path_from_args<A: ClassicAllocator>(
     new_args: &A::NodePtr,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     match allocator.sexp(&sexp) {
         ASExp::Atom => {
@@ -268,7 +273,7 @@ pub fn sub_args<A: ClassicAllocator>(
     new_args: &A::NodePtr,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     match allocator.sexp(sexp) {
         ASExp::Atom => path_from_args(allocator, &sexp, &new_args),
@@ -292,28 +297,24 @@ where
 
             match proper_list(allocator, &rest, true) {
                 Some(tail_args) => {
-                    let res = map_m(
-                        allocator,
-                        &mut tail_args.iter(),
-                        &|allocator, elt| {
-                            Ok(sub_args(allocator, elt, new_args)?)
-                        }
-                    )?;
+                    let res = map_m(allocator, &mut tail_args.iter(), &|allocator, elt| {
+                        Ok(sub_args(allocator, elt, new_args)?)
+                    })?;
                     let tail_list = enlist(allocator, &res)?;
                     let first_loc = allocator.loc(&first);
                     allocator.new_pair(first_loc, &first, &tail_list)
-                },
+                }
                 None => path_from_args(allocator, sexp, new_args),
             }
         }
     }
 }
 
-fn var_change_optimizer_cons_eval_pattern<A: ClassicAllocator>(
-    allocator: &mut A
-) -> A::NodePtr {
+fn var_change_optimizer_cons_eval_pattern<A: ClassicAllocator>(allocator: &mut A) -> A::NodePtr {
     let a = assemble(allocator.allocator(), "(a (q . (: . sexp)) (: . args))").unwrap();
-    allocator.import(Srcloc::start("*var_change_optimizer_cons_eval_pattern*"), a).unwrap()
+    allocator
+        .import(Srcloc::start("*var_change_optimizer_cons_eval_pattern*"), a)
+        .unwrap()
 }
 
 pub fn var_change_optimizer_cons_eval<A: ClassicAllocator>(
@@ -323,7 +324,7 @@ pub fn var_change_optimizer_cons_eval<A: ClassicAllocator>(
     eval_f: Rc<dyn TRunProgram>,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     /*
      * This applies the transform
@@ -342,7 +343,10 @@ where
         None => Ok(r.clone()),
         Some(t1) => {
             let original_args = t1.get("args").ok_or_else(|| {
-                ClError(allocator.loc(&r), EvalErr::InternalError(export_r, "bad pattern match on args".to_string()))
+                ClError(
+                    allocator.loc(&r),
+                    EvalErr::InternalError(export_r, "bad pattern match on args".to_string()),
+                )
             })?;
 
             if DIAG_OPTIMIZATIONS {
@@ -352,7 +356,10 @@ where
                 );
             };
             let original_call = t1.get("sexp").ok_or_else(|| {
-                ClError(allocator.loc(&r), EvalErr::InternalError(export_r, "bad pattern match on sexp".to_string()))
+                ClError(
+                    allocator.loc(&r),
+                    EvalErr::InternalError(export_r, "bad pattern match on sexp".to_string()),
+                )
             })?;
 
             if DIAG_OPTIMIZATIONS {
@@ -447,7 +454,7 @@ pub fn children_optimizer<A: ClassicAllocator>(
     eval_f: Rc<dyn TRunProgram>,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     // Recursively apply optimizations to all non-quoted child nodes.
     match proper_list(allocator, r, true) {
@@ -485,20 +492,18 @@ where
     }
 }
 
-fn cons_optimizer_pattern_first<A: ClassicAllocator>(
-    allocator: &mut A
-) -> A::NodePtr
-{
+fn cons_optimizer_pattern_first<A: ClassicAllocator>(allocator: &mut A) -> A::NodePtr {
     let a = assemble(allocator.allocator(), "(f (c (: . first) (: . rest)))").unwrap();
-    allocator.import(Srcloc::start("*cons_optimizer_pattern_first*"), a).unwrap()
+    allocator
+        .import(Srcloc::start("*cons_optimizer_pattern_first*"), a)
+        .unwrap()
 }
 
-fn cons_optimizer_pattern_rest<A: ClassicAllocator>(
-    allocator: &mut A
-) -> A::NodePtr
-{
+fn cons_optimizer_pattern_rest<A: ClassicAllocator>(allocator: &mut A) -> A::NodePtr {
     let a = assemble(allocator.allocator(), "(r (c (: . first) (: . rest)))").unwrap();
-    allocator.import(Srcloc::start("*cons_optimizer_pattern_rest*"), a).unwrap()
+    allocator
+        .import(Srcloc::start("*cons_optimizer_pattern_rest*"), a)
+        .unwrap()
 }
 
 fn cons_optimizer<A: ClassicAllocator>(
@@ -508,7 +513,7 @@ fn cons_optimizer<A: ClassicAllocator>(
     _eval_f: Rc<dyn TRunProgram>,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     /*
      * This applies the transform
@@ -542,12 +547,16 @@ where
 
 fn first_atom_pattern<A: ClassicAllocator>(allocator: &mut A) -> A::NodePtr {
     let a = assemble(allocator.allocator(), "(f ($ . atom))").unwrap();
-    allocator.import(Srcloc::start("*first_atom_pattern*"), a).unwrap()
+    allocator
+        .import(Srcloc::start("*first_atom_pattern*"), a)
+        .unwrap()
 }
 
 fn rest_atom_pattern<A: ClassicAllocator>(allocator: &mut A) -> A::NodePtr {
     let a = assemble(allocator.allocator(), "(r ($ . atom))").unwrap();
-    allocator.import(Srcloc::start("*first_atom_pattern*"), a).unwrap()
+    allocator
+        .import(Srcloc::start("*first_atom_pattern*"), a)
+        .unwrap()
 }
 
 fn path_optimizer<A: ClassicAllocator>(
@@ -557,7 +566,7 @@ fn path_optimizer<A: ClassicAllocator>(
     _eval_f: Rc<dyn TRunProgram>,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let first_atom_pattern = first_atom_pattern(allocator);
     let rest_atom_pattern = rest_atom_pattern(allocator);
@@ -607,7 +616,9 @@ where
 
 fn quote_pattern_1<A: ClassicAllocator>(allocator: &mut A) -> A::NodePtr {
     let a = assemble(allocator.allocator(), "(q . 0)").unwrap();
-    allocator.import(Srcloc::start("*quote_pattern_1*"), a).unwrap()
+    allocator
+        .import(Srcloc::start("*quote_pattern_1*"), a)
+        .unwrap()
 }
 
 fn quote_null_optimizer<A: ClassicAllocator>(
@@ -617,7 +628,7 @@ fn quote_null_optimizer<A: ClassicAllocator>(
     _eval_f: Rc<dyn TRunProgram>,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let quote_pattern_1 = quote_pattern_1(allocator);
 
@@ -628,11 +639,11 @@ where
     Ok(t1.map(|_| imported_nil).unwrap_or_else(|| r.clone()))
 }
 
-fn apply_null_pattern_1<A: ClassicAllocator>(
-    allocator: &mut A
-) -> A::NodePtr {
+fn apply_null_pattern_1<A: ClassicAllocator>(allocator: &mut A) -> A::NodePtr {
     let a = assemble(allocator.allocator(), "(a 0 . (: . rest))").unwrap();
-    allocator.import(Srcloc::start("*apply_null_pattern_1*"), a).unwrap()
+    allocator
+        .import(Srcloc::start("*apply_null_pattern_1*"), a)
+        .unwrap()
 }
 
 fn apply_null_optimizer<A: ClassicAllocator>(
@@ -642,7 +653,7 @@ fn apply_null_optimizer<A: ClassicAllocator>(
     _eval_f: Rc<dyn TRunProgram>,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let apply_null_pattern_1 = apply_null_pattern_1(allocator);
 
@@ -655,7 +666,7 @@ where
 
 struct OptimizerRunner<'a, A: ClassicAllocator>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     pub name: String,
     #[allow(clippy::type_complexity)]
@@ -669,7 +680,7 @@ where
 
 impl<'a, A: ClassicAllocator> OptimizerRunner<'a, A>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     pub fn invoke(
         &self,
@@ -705,7 +716,7 @@ pub fn optimize_sexp_<A: ClassicAllocator>(
     eval_f: Rc<dyn TRunProgram>,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     // First compare the NodePtr to see if we've cached this exact one.
     // Note that this scoping is here to prevent the borrowed mutable ref from
@@ -785,7 +796,10 @@ where
                         swap(&mut work, mr);
                         work.insert(footprint.clone(), start_r_export);
                         let r_export = allocator.export(&r);
-                        work.insert(AllocatorRefOrTreeHash::new_from_nodeptr(r_export), start_r_export);
+                        work.insert(
+                            AllocatorRefOrTreeHash::new_from_nodeptr(r_export),
+                            start_r_export,
+                        );
                         work
                     });
 
@@ -811,7 +825,7 @@ pub fn optimize_sexp<A: ClassicAllocator>(
     eval_f: Rc<dyn TRunProgram>,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let optimized = RefCell::new(HashMap::new());
 
@@ -836,7 +850,7 @@ pub fn do_optimize<A: ClassicAllocator>(
     r: &A::NodePtr,
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let r_first = first(allocator, &r)?;
     optimize_sexp_(allocator, memo, &r_first, runner.clone())

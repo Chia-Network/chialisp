@@ -2,17 +2,19 @@ use std::fs;
 use std::rc::Rc;
 
 use clvm_rs::error::EvalErr;
-use clvmr::allocator::{NodePtr};
+use clvmr::allocator::NodePtr;
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, Stream, UnvalidatedBytesFromType};
 use crate::classic::clvm::serialize::{sexp_from_stream, SimpleCreateCLVMObject};
 use crate::classic::clvm::sexp::{proper_list, rest};
 use crate::classic::clvm_tools::stages::assemble;
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
+use crate::classic::clvm_tools::stages::stage_2::abstraction::{
+    ASExp, BufCarrier, ClError, ClassicAllocator,
+};
 use crate::classic::clvm_tools::stages::stage_2::compile::get_search_paths;
 use crate::classic::clvm_tools::stages::stage_2::helpers::quote;
 use crate::classic::clvm_tools::stages::stage_2::operators::full_path_for_filename;
-use crate::classic::clvm_tools::stages::stage_2::abstraction::{ASExp, BufCarrier, ClassicAllocator, ClError};
 
 use crate::compiler::sexp::decode_string;
 
@@ -32,23 +34,25 @@ pub fn convert_hex_to_sexp<A: ClassicAllocator>(
     file_data: &[u8],
 ) -> Result<A::NodePtr, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let loc = allocator.loc(parent_sexp);
     let content_bytes = Bytes::new_validated(Some(UnvalidatedBytesFromType::Hex(decode_string(
         file_data,
     ))))
     .map_err(|e| {
-        ClError(loc.clone(), EvalErr::InternalError(NodePtr::NIL, e.to_string()))
+        ClError(
+            loc.clone(),
+            EvalErr::InternalError(NodePtr::NIL, e.to_string()),
+        )
     })?;
     let mut reader_stream = Stream::new(Some(content_bytes));
     let incoming_data = sexp_from_stream(
         allocator.allocator(),
         &mut reader_stream,
         Box::new(SimpleCreateCLVMObject {}),
-    ).map_err(|e| {
-        ClError(loc.clone(), e)
-    })?;
+    )
+    .map_err(|e| ClError(loc.clone(), e))?;
     allocator.import(loc, incoming_data.1)
 }
 
@@ -64,7 +68,7 @@ pub fn read_file<A: ClassicAllocator>(
     filename: &str,
 ) -> Result<PresentFile, ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     let loc = allocator.loc(parent_sexp);
     let search_paths = get_search_paths(runner, loc.clone(), allocator)?;
@@ -73,7 +77,10 @@ where
     let export = allocator.export(parent_sexp);
     fs::read(full_path.clone())
         .map_err(|x| {
-            ClError(loc, EvalErr::InternalError(export, format!("error reading {full_path}: {x:?}")))
+            ClError(
+                loc,
+                EvalErr::InternalError(export, format!("error reading {full_path}: {x:?}")),
+            )
         })
         .map(|data| PresentFile {
             data,
@@ -93,7 +100,7 @@ pub fn process_embed_file<A: ClassicAllocator>(
     declaration_sexp: &A::NodePtr,
 ) -> Result<(Vec<u8>, A::NodePtr), ClError>
 where
-    A::NodePtr: Clone
+    A::NodePtr: Clone,
 {
     // Include the file's contents in the constant pool.
     // The user can specify the format to read:
@@ -108,15 +115,10 @@ where
         if l.len() != 3 {
             let loc = allocator.loc(declaration_sexp);
             let dec_export = allocator.export(declaration_sexp);
-            return Err(
-                ClError(
-                    loc,
-                    EvalErr::InternalError(
-                        dec_export,
-                        "must have a type and a name".to_string(),
-                    )
-                )
-            );
+            return Err(ClError(
+                loc,
+                EvalErr::InternalError(dec_export, "must have a type and a name".to_string()),
+            ));
         }
 
         if let (ASExp::Atom, ASExp::Atom, ASExp::Atom) = (
@@ -155,41 +157,27 @@ where
                     declaration_sexp,
                     &decode_string(&filename_buf),
                 )?;
-                let assembled = assemble(allocator.allocator(), &decode_string(&file.data)).map_err(|e| ClError(loc.clone(), e))?;
+                let assembled = assemble(allocator.allocator(), &decode_string(&file.data))
+                    .map_err(|e| ClError(loc.clone(), e))?;
                 allocator.import(loc, assembled)?
             } else {
-                return Err(
-                    ClError(
-                        loc,
-                        EvalErr::InternalError(
-                            export,
-                            "no such embed kind".to_string(),
-                        )
-                    )
-                );
+                return Err(ClError(
+                    loc,
+                    EvalErr::InternalError(export, "no such embed kind".to_string()),
+                ));
             };
 
             Ok((name_buf.to_vec(), quote(allocator, &file_data)?))
         } else {
-            Err(
-                ClError(
-                    loc,
-                    EvalErr::InternalError(
-                        export,
-                        "malformed embed-file".to_string(),
-                    )
-                )
-            )
+            Err(ClError(
+                loc,
+                EvalErr::InternalError(export, "malformed embed-file".to_string()),
+            ))
         }
     } else {
-        Err(
-            ClError(
-                loc,
-                EvalErr::InternalError(
-                    export,
-                    "must be a proper list".to_string(),
-                )
-            )
-        )
+        Err(ClError(
+            loc,
+            EvalErr::InternalError(export, "must be a proper list".to_string()),
+        ))
     }
 }

@@ -1,10 +1,10 @@
 use std::rc::Rc;
 
-use clvm_rs::allocator::{NodePtr};
+use clvm_rs::allocator::NodePtr;
 
 use crate::classic::clvm_tools::binutils::assemble;
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
-use crate::classic::clvm_tools::stages::stage_2::abstraction::{ClassicAllocator};
+use crate::classic::clvm_tools::stages::stage_2::abstraction::ClassicAllocator;
 use crate::compiler::srcloc::Srcloc;
 
 /*
@@ -115,17 +115,33 @@ fn build_default_macro_lookup<A: ClassicAllocator>(
         let macro_sexp = assemble(allocator.allocator(), macro_src).unwrap();
         let imported_macro_sexp = allocator.import(macro_loc.clone(), macro_sexp).unwrap();
         let env = allocator
-            .new_pair(macro_loc.clone(), &imported_macro_sexp, &default_macro_lookup)
+            .new_pair(
+                macro_loc.clone(),
+                &imported_macro_sexp,
+                &default_macro_lookup,
+            )
             .unwrap();
         let exported_env = allocator.export(&env);
-        let new_macro = eval_f.run_program(allocator.allocator(), run, exported_env, None).unwrap().1;
+        let new_macro = eval_f
+            .run_program(allocator.allocator(), run, exported_env, None)
+            .unwrap()
+            .1;
         let imported_new_macro = allocator.import(macro_loc.clone(), new_macro).unwrap();
-        default_macro_lookup = allocator.new_pair(macro_loc.clone(), &imported_new_macro, &default_macro_lookup).unwrap();
+        default_macro_lookup = allocator
+            .new_pair(
+                macro_loc.clone(),
+                &imported_new_macro,
+                &default_macro_lookup,
+            )
+            .unwrap();
     }
     default_macro_lookup
 }
 
-pub fn default_macro_lookup<A: ClassicAllocator>(allocator: &mut A, runner: Rc<dyn TRunProgram>) -> A::NodePtr {
+pub fn default_macro_lookup<A: ClassicAllocator>(
+    allocator: &mut A,
+    runner: Rc<dyn TRunProgram>,
+) -> A::NodePtr {
     let macro_srcs: Vec<String> = default_macros_src().iter().map(|s| s.to_string()).collect();
     build_default_macro_lookup(allocator, runner.clone(), &macro_srcs)
 }
