@@ -56,9 +56,9 @@ pub fn seems_constant<A: ClassicAllocator>(allocator: &mut A, sexp: &A::NodePtr)
 where
     A::NodePtr: Clone,
 {
-    match allocator.sexp(&sexp) {
+    match allocator.sexp(sexp) {
         ASExp::Atom => {
-            return allocator.is_nil(&sexp);
+            return allocator.is_nil(sexp);
         }
         ASExp::Pair(operator, r) => {
             match allocator.sexp(&operator) {
@@ -101,7 +101,7 @@ where
      * it's a constant. So we can simply evaluate it and
      * return the quoted result.
      */
-    if let ASExp::Pair(first, _) = allocator.sexp(&r) {
+    if let ASExp::Pair(first, _) = allocator.sexp(r) {
         // first relevant in scope.
         if let ASExp::Atom = allocator.sexp(&first) {
             let buf = allocator.atom(&first);
@@ -112,26 +112,26 @@ where
         }
     }
 
-    let sc_r = seems_constant(allocator, &r);
-    let nn_r = !allocator.is_nil(&r);
+    let sc_r = seems_constant(allocator, r);
+    let nn_r = !allocator.is_nil(r);
     if DIAG_OPTIMIZATIONS {
         println!(
             "COPT SC_R {} NN_R {} {}",
             sc_r,
             nn_r,
-            allocator.disassemble(&r, None),
+            allocator.disassemble(r, None),
         );
     }
     if sc_r && nn_r {
-        let r_export = allocator.export(&r);
+        let r_export = allocator.export(r);
         let res = runner
             .run_program(allocator.allocator(), r_export, NodePtr::NIL, None)
-            .map_err(|e| ClError(allocator.loc(&r), e))?;
-        let r1 = allocator.import(allocator.loc(&r), res.1)?;
-        let _ = if DIAG_OPTIMIZATIONS {
+            .map_err(|e| ClError(allocator.loc(r), e))?;
+        let r1 = allocator.import(allocator.loc(r), res.1)?;
+        if DIAG_OPTIMIZATIONS {
             println!(
                 "CONSTANT_OPTIMIZER {} TO {}",
-                allocator.disassemble(&r, None),
+                allocator.disassemble(r, None),
                 allocator.disassemble(&r1, None)
             );
         };
@@ -174,7 +174,7 @@ where
      * (a (q . SEXP) @) => SEXP
      */
 
-    let matched = match_sexp(allocator, &cons_q_a_optimizer_pattern, &r, HashMap::new());
+    let matched = match_sexp(allocator, &cons_q_a_optimizer_pattern, r, HashMap::new());
 
     match (
         matched.as_ref().and_then(|t1| t1.get("args").cloned()),
@@ -203,13 +203,13 @@ where
     A::NodePtr: Clone,
 {
     let cons_pattern = cons_pattern(allocator);
-    let pair_loc = allocator.loc(&args);
-    if let Some(first) = match_sexp(allocator, &cons_pattern, &args, HashMap::new())
+    let pair_loc = allocator.loc(args);
+    if let Some(first) = match_sexp(allocator, &cons_pattern, args, HashMap::new())
         .and_then(|t| t.get("first").cloned())
     {
         Ok(first)
     } else {
-        let first_loc = allocator.loc(&args);
+        let first_loc = allocator.loc(args);
         let first_atom = allocator.new_atom(first_loc.clone(), &[5])?;
         let nil = allocator.import(first_loc, NodePtr::NIL)?;
         let tail = allocator.new_pair(pair_loc.clone(), args, &nil)?;
@@ -222,13 +222,13 @@ where
     A::NodePtr: Clone,
 {
     let cons_pattern = cons_pattern(allocator);
-    let pair_loc = allocator.loc(&args);
-    if let Some(rest) = match_sexp(allocator, &cons_pattern, &args, HashMap::new())
+    let pair_loc = allocator.loc(args);
+    if let Some(rest) = match_sexp(allocator, &cons_pattern, args, HashMap::new())
         .and_then(|t| t.get("rest").cloned())
     {
         Ok(rest)
     } else {
-        let rest_loc = allocator.loc(&args);
+        let rest_loc = allocator.loc(args);
         let rest_atom = allocator.new_atom(rest_loc.clone(), &[6])?;
         let nil = allocator.import(rest_loc, NodePtr::NIL)?;
         let tail = allocator.new_pair(pair_loc.clone(), args, &nil)?;
@@ -244,7 +244,7 @@ fn path_from_args<A: ClassicAllocator>(
 where
     A::NodePtr: Clone,
 {
-    match allocator.sexp(&sexp) {
+    match allocator.sexp(sexp) {
         ASExp::Atom => {
             // Only sexp in scope.
             let atom = allocator.atom(sexp);
@@ -252,13 +252,13 @@ where
             if v <= bi_one() {
                 Ok(new_args.clone())
             } else {
-                let loc = allocator.loc(&sexp);
+                let loc = allocator.loc(sexp);
                 let sexp = allocator.new_atom(loc, &u8_from_number(v.clone() >> 1).to_vec())?;
                 if (v & 1_u32.to_bigint().unwrap()) != bi_zero() {
-                    let cons_r_res = cons_r(allocator, &new_args)?;
+                    let cons_r_res = cons_r(allocator, new_args)?;
                     path_from_args(allocator, &sexp, &cons_r_res)
                 } else {
-                    let cons_f_res = cons_f(allocator, &new_args)?;
+                    let cons_f_res = cons_f(allocator, new_args)?;
                     path_from_args(allocator, &sexp, &cons_f_res)
                 }
             }
@@ -276,13 +276,13 @@ where
     A::NodePtr: Clone,
 {
     match allocator.sexp(sexp) {
-        ASExp::Atom => path_from_args(allocator, &sexp, &new_args),
+        ASExp::Atom => path_from_args(allocator, sexp, new_args),
         ASExp::Pair(first_pre, rest) => {
             let first;
 
             match allocator.sexp(&first_pre) {
                 ASExp::Pair(_, _) => {
-                    first = sub_args(allocator, &first_pre, &new_args)?;
+                    first = sub_args(allocator, &first_pre, new_args)?;
                 }
                 ASExp::Atom => {
                     // Atom is a reflection of first_pre.
@@ -298,7 +298,7 @@ where
             match proper_list(allocator, &rest, true) {
                 Some(tail_args) => {
                     let res = map_m(allocator, &mut tail_args.iter(), &|allocator, elt| {
-                        Ok(sub_args(allocator, elt, new_args)?)
+                        sub_args(allocator, elt, new_args)
                     })?;
                     let tail_list = enlist(allocator, &res)?;
                     let first_loc = allocator.loc(&first);
@@ -339,12 +339,12 @@ where
 
     let pattern = var_change_optimizer_cons_eval_pattern(allocator);
     let export_r = allocator.export(r);
-    match match_sexp(allocator, &pattern, &r, HashMap::new()).as_ref() {
+    match match_sexp(allocator, &pattern, r, HashMap::new()).as_ref() {
         None => Ok(r.clone()),
         Some(t1) => {
             let original_args = t1.get("args").ok_or_else(|| {
                 ClError(
-                    allocator.loc(&r),
+                    allocator.loc(r),
                     EvalErr::InternalError(export_r, "bad pattern match on args".to_string()),
                 )
             })?;
@@ -357,7 +357,7 @@ where
             };
             let original_call = t1.get("sexp").ok_or_else(|| {
                 ClError(
-                    allocator.loc(&r),
+                    allocator.loc(r),
                     EvalErr::InternalError(export_r, "bad pattern match on sexp".to_string()),
                 )
             })?;
@@ -533,7 +533,7 @@ where
             _ => {
                 m! {
                     let t2 = match_sexp(
-                        allocator, &cons_optimizer_pattern_rest, &r, HashMap::new()
+                        allocator, &cons_optimizer_pattern_rest, r, HashMap::new()
                     );
                     match t2.and_then(|t| t.get("rest").cloned()) {
                         Some(rest) => Ok(rest),
@@ -578,8 +578,8 @@ where
      *   (r N) => B
      */
 
-    let first_match = match_sexp(allocator, &first_atom_pattern, &r, HashMap::new());
-    let rest_match = match_sexp(allocator, &rest_atom_pattern, &r, HashMap::new());
+    let first_match = match_sexp(allocator, &first_atom_pattern, r, HashMap::new());
+    let rest_match = match_sexp(allocator, &rest_atom_pattern, r, HashMap::new());
 
     match (first_match, rest_match) {
         (Some(first), _) => {
@@ -633,7 +633,7 @@ where
     let quote_pattern_1 = quote_pattern_1(allocator);
 
     // This applies the transform `(q . 0)` => `0`
-    let t1 = match_sexp(allocator, &quote_pattern_1, &r, HashMap::new());
+    let t1 = match_sexp(allocator, &quote_pattern_1, r, HashMap::new());
     let loc = allocator.loc(r);
     let imported_nil = allocator.import(loc, NodePtr::NIL)?;
     Ok(t1.map(|_| imported_nil).unwrap_or_else(|| r.clone()))
@@ -830,13 +830,13 @@ where
     let optimized = RefCell::new(HashMap::new());
 
     if DIAG_OPTIMIZATIONS {
-        println!("START OPTIMIZE {}", allocator.disassemble(&r, None));
+        println!("START OPTIMIZE {}", allocator.disassemble(r, None));
     }
     optimize_sexp_(allocator, &optimized, r, eval_f).inspect(|x| {
         if DIAG_OPTIMIZATIONS {
             println!(
                 "OPTIMIZE_SEXP {} GIVING {}",
-                allocator.disassemble(&r, None),
+                allocator.disassemble(r, None),
                 allocator.disassemble(x, None)
             );
         }
@@ -852,6 +852,6 @@ pub fn do_optimize<A: ClassicAllocator>(
 where
     A::NodePtr: Clone,
 {
-    let r_first = first(allocator, &r)?;
+    let r_first = first(allocator, r)?;
     optimize_sexp_(allocator, memo, &r_first, runner.clone())
 }

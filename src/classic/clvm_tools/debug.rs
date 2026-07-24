@@ -326,7 +326,7 @@ pub fn trace_pre_eval(
         Ok(None)
     } else {
         let log_entry = enlist(allocator, &[sexp, args])?;
-        let _ = append_log(allocator, log_entry);
+        append_log(allocator, log_entry);
         Ok(Some(log_entry))
     }
 }

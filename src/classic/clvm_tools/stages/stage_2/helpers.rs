@@ -15,8 +15,8 @@ pub fn quote<A: ClassicAllocator>(
     sexp: &A::NodePtr,
 ) -> Result<A::NodePtr, ClError> {
     allocator
-        .new_atom(allocator.loc(&sexp), &QUOTE_ATOM)
-        .and_then(|q| allocator.new_pair(allocator.loc(&sexp), &q, &sexp))
+        .new_atom(allocator.loc(sexp), &QUOTE_ATOM)
+        .and_then(|q| allocator.new_pair(allocator.loc(sexp), &q, sexp))
 }
 
 // In original python code, the name of this function is `eval`,
@@ -50,7 +50,7 @@ where
      */
     let args = NodePath::new(None).as_path();
     let loc = allocator.loc(prog);
-    let mac = quote(allocator, &macro_lookup)?;
+    let mac = quote(allocator, macro_lookup)?;
     let com_sexp = allocator.new_atom(loc.clone(), &COM_ATOM)?;
     let arg_sexp = allocator.new_atom(loc, args.data())?;
     let to_eval = enlist(allocator, &[com_sexp, prog.clone(), mac])?;

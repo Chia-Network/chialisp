@@ -427,10 +427,12 @@ where
     Ok(built)
 }
 
-pub fn map_m<T, A: ClassicAllocator>(
+type MapMTransform<'a, A, T> = &'a dyn Fn(&mut A, T) -> Result<<A as ClassicAllocator>::NodePtr, ClError>;
+
+pub fn map_m<'a, T, A: ClassicAllocator>(
     allocator: &mut A,
     iter: &mut impl Iterator<Item = T>,
-    f: &dyn Fn(&mut A, T) -> Result<A::NodePtr, ClError>,
+    f: MapMTransform<'a, A, T>, 
 ) -> Result<Vec<A::NodePtr>, ClError> {
     let mut result = Vec::new();
     loop {

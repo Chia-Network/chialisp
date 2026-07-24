@@ -22,7 +22,7 @@ where
 {
     if let (ASExp::Atom, Some(spec)) = (
         allocator.sexp(tree_first),
-        proper_list(allocator, &tree_rest, true),
+        proper_list(allocator, tree_rest, true),
     ) {
         let first_atom = allocator.atom(tree_first);
         if first_atom.as_ref() == b"@" && spec.len() == 2 {
@@ -62,9 +62,7 @@ where
 // Create the sequence of individual tree moves that will translate to
 // (f ...) and (r ...) wrapping to select the given path from a larger structure.
 fn create_path_selection_plan(path: Number, operators: &mut Vec<bool>) {
-    if path <= bi_one() {
-        return;
-    } else {
+    if path > bi_one() {
         operators.push(path.clone() % 2_u32.to_bigint().unwrap() == bi_one());
         create_path_selection_plan(path / 2_u32.to_bigint().unwrap(), operators)
     }
@@ -112,7 +110,7 @@ where
     A::NodePtr: Clone,
 {
     let loc = allocator.loc(arg_sexp);
-    match allocator.sexp(&arg_sexp) {
+    match allocator.sexp(arg_sexp) {
         ASExp::Pair(a, b) => {
             let next_depth = arg_depth.clone() * 2_u32.to_bigint().unwrap();
             if let Some((capture, substructure)) = is_at_capture(allocator, &a, &b) {

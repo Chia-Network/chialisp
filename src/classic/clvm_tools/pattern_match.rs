@@ -25,7 +25,7 @@ where
     let new_key_str = Bytes::new(Some(BytesFromType::Raw(new_key.to_vec()))).decode();
     match bindings.get(&new_key_str) {
         Some(binding) => {
-            if !equal_to(allocator, binding, &new_value) {
+            if !equal_to(allocator, binding, new_value) {
                 return None;
             }
             Some(bindings)

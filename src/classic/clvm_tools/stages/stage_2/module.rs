@@ -480,7 +480,7 @@ where
 
         // eslint-disable-next-line no-constant-condition
         let loc = allocator.loc(args);
-        match proper_list(allocator, &args, true) {
+        match proper_list(allocator, args, true) {
             None => {
                 let export_args = allocator.export(args);
                 Err(
@@ -636,12 +636,13 @@ where
 }
 
 // export type TSymbolTable = Array<[SExp, Bytes]>;
+pub type Symbol<A> = (<A as ClassicAllocator>::NodePtr, Vec<u8>);
 
 fn symbol_table_for_tree<A: ClassicAllocator>(
     allocator: &mut A,
     tree: &A::NodePtr,
     root_node: &NodePath,
-) -> Result<Vec<(A::NodePtr, Vec<u8>)>, ClError>
+) -> Result<Vec<Symbol<A>>, ClError>
 where
     A::NodePtr: Clone,
 {
@@ -702,7 +703,7 @@ where
     let opt_atom = allocator.new_atom(loc.clone(), "opt".as_bytes())?;
 
     let runner = || run_program.clone();
-    let macro_lookup_program = quote(allocator, &macro_lookup)?;
+    let macro_lookup_program = quote(allocator, macro_lookup)?;
     fold_m(
         allocator,
         &|allocator, macro_lookup_program, macro_def: &(Vec<u8>, A::NodePtr)| {
@@ -735,7 +736,7 @@ fn add_one_function<A: ClassicAllocator>(
     allocator: &mut A,
     args_root_node: &NodePath,
     macro_lookup_program: &A::NodePtr,
-    constants_symbol_table: &[(A::NodePtr, Vec<u8>)],
+    constants_symbol_table: &[Symbol<A>],
     name: &[u8],
     lambda_expression: &A::NodePtr,
     has_constants_tree: bool,
@@ -748,11 +749,11 @@ where
     let com_atom = allocator.new_atom(loc.clone(), "com".as_bytes())?;
     let opt_atom = allocator.new_atom(loc.clone(), "opt".as_bytes())?;
 
-    let function_args = first(allocator, &lambda_expression)?;
+    let function_args = first(allocator, lambda_expression)?;
     let local_symbol_table = symbol_table_for_tree(allocator, &function_args, args_root_node)?;
     let mut all_symbols = local_symbol_table;
     all_symbols.append(&mut constants_symbol_table.to_owned());
-    let lambda_form_content = rest(allocator, &lambda_expression)?;
+    let lambda_form_content = rest(allocator, lambda_expression)?;
     let lambda_body = first(allocator, &lambda_form_content)?;
     let quoted_lambda_expr = quote(allocator, &lambda_body)?;
     let all_symbols_list_sexp = map_m(allocator, &mut all_symbols.iter(), &|allocator, pair| {
@@ -791,7 +792,7 @@ fn compile_functions<A: ClassicAllocator>(
     allocator: &mut A,
     functions: &HashMap<Vec<u8>, A::NodePtr>,
     macro_lookup_program: &A::NodePtr,
-    constants_symbol_table: &[(A::NodePtr, Vec<u8>)],
+    constants_symbol_table: &[Symbol<A>],
     args_root_node: &NodePath,
     has_constants_tree: bool,
 ) -> Result<CompileOutput<A>, ClError>
