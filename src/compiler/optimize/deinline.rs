@@ -4,9 +4,7 @@ use std::rc::Rc;
 use crate::compiler::codegen::codegen;
 use crate::compiler::optimize::depgraph::{DepgraphKind, FunctionDependencyGraph};
 use crate::compiler::optimize::{sexp_scale, SyntheticType};
-use crate::compiler::{
-    BasicCompileContext, CompileErr, CompileForm, CompilerOpts, Funcache, HelperForm,
-};
+use crate::compiler::{BasicCompileContext, CompileErr, CompileForm, CompilerOpts, HelperForm};
 
 // Find the roots for the given function.
 fn find_roots(
@@ -56,10 +54,6 @@ pub fn deinline_opt(
         return Ok(compileform);
     }
 
-    if context.funcache.is_none() {
-        context.funcache = Some(Funcache::default());
-    }
-
     let is_module_compile = opts.module_phase().is_some();
 
     // In module phase the inline/deinline size search below is a guaranteed
@@ -80,7 +74,7 @@ pub fn deinline_opt(
     let depgraph = FunctionDependencyGraph::new(&compileform);
 
     let mut best_compileform = compileform.clone();
-    let generated_program = codegen(context, opts.clone(), Some(&depgraph), &best_compileform)?;
+    let generated_program = codegen(context, opts.clone(), &best_compileform)?;
     let mut metric = sexp_scale(&generated_program);
 
     let flip_helper = |h: &mut HelperForm| {
@@ -260,8 +254,7 @@ pub fn deinline_opt(
                     continue;
                 }
 
-                let maybe_smaller_program =
-                    codegen(context, opts.clone(), Some(&depgraph), &compileform)?;
+                let maybe_smaller_program = codegen(context, opts.clone(), &compileform)?;
                 let new_metric = sexp_scale(&maybe_smaller_program);
 
                 // Don't keep this change if it made things worse.

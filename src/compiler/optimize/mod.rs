@@ -330,7 +330,7 @@ fn constant_fun_result(
                     )),
                 };
 
-                let depgraph = if opts.module_phase().is_some() {
+                if opts.module_phase().is_some() {
                     let depgraph = FunctionDependencyGraph::new_with_options(
                         &to_compile,
                         DepgraphOptions {
@@ -345,10 +345,7 @@ fn constant_fun_result(
                         .filter(|h| depended_on.contains(h.name()))
                         .cloned()
                         .collect();
-                    Some(depgraph)
-                } else {
-                    None
-                };
+                }
 
                 let optimizer = if let Ok(res) = get_optimizer(&call_spec.loc, opts.clone()) {
                     res
@@ -360,12 +357,7 @@ fn constant_fun_result(
                 let mut wrapper =
                     CompileContextWrapper::new(runner.clone(), &mut symbols, optimizer);
 
-                if let Ok(code) = codegen(
-                    wrapper.context(),
-                    opts.clone(),
-                    depgraph.as_ref(),
-                    &to_compile,
-                ) {
+                if let Ok(code) = codegen(wrapper.context(), opts.clone(), &to_compile) {
                     code
                 } else {
                     return None;
