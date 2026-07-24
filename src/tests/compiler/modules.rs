@@ -48,18 +48,6 @@ impl TestModuleCompilerOpts {
         let files: &HashMap<String, Vec<u8>> = &files_ref.borrow();
         files.get(name).map(|f| f.to_vec())
     }
-
-    pub fn list_written_files<'a>(&'a self) -> Vec<String> {
-        let files_ref: &RefCell<HashMap<String, Vec<u8>>> = self.written_files.borrow();
-        let files: &HashMap<String, Vec<u8>> = &files_ref.borrow();
-        files.keys().cloned().collect()
-    }
-
-    pub fn set_file_content<'a>(&'a self, name: String, content: Vec<u8>) {
-        let wf_refcell: &RefCell<HashMap<String, Vec<u8>>> = self.written_files.borrow();
-        let wf_ref: &mut HashMap<String, Vec<u8>> = &mut wf_refcell.borrow_mut();
-        wf_ref.insert(name, content);
-    }
 }
 
 impl HasCompilerOptsDelegation for TestModuleCompilerOpts {
@@ -598,54 +586,6 @@ fn test_constant_single_round() {
 }
 
 #[test]
-fn test_cache_reuses_cache_data() {
-    let filename = "resources/tests/module/p1s_host.clsp";
-    let content = fs::read_to_string(filename).expect("file should exist");
-    let hex_file = "resources/tests/module/p1s_host.hex";
-    let orig_opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename))
-        .set_search_paths(&["resources/tests/module".to_string()]);
-    let source_opts = TestModuleCompilerOpts::new(orig_opts);
-    let source_opts = test_compile_and_run_program_with_modules_and_fs(
-        source_opts,
-        filename,
-        &content,
-        &[HexArgumentOutcome {
-            hexfile: hex_file,
-            argument: "(3)",
-            outcome: Run("20400"),
-        }],
-    )
-    .unwrap();
-    let new_content = indoc! {"
-(include *standard-cl-23*)
-
-(import programs.p1s exposing (program as P1S))
-(import programs.p1t exposing (program as P1T))
-
-(export (X) (+ (a P1S (list X)) (a P1T (list X))))
-"};
-
-    let file_list = source_opts.list_written_files();
-    for f in file_list.iter().filter(|f| f.ends_with("p1t.hex")) {
-        // We've set p1t to () and changed the main program so it will also recompile.  If the cache
-        // is used to retrieve p1t.clsp (since the source file is the same as during the previous
-        // compilation), then (a P1T (list X)) will yield 0.
-        source_opts.set_file_content(f.clone(), b"80".to_vec());
-    }
-
-    test_compile_and_run_program_with_modules_and_fs(
-        source_opts,
-        filename,
-        new_content,
-        &[HexArgumentOutcome {
-            hexfile: hex_file,
-            argument: "(3)",
-            outcome: Run("10200"),
-        }],
-    );
-}
-
-#[test]
 fn test_three_outputs_common() {
     let filename = "resources/tests/module/programs/three-outputs-common.clsp";
     let content = fs::read_to_string(filename).expect("file should exist");
@@ -836,5 +776,43 @@ fn test_module_constant_cycle_deadlock() {
     assert!(
         result.is_err(),
         "expected a compile error for cyclic constants"
+    );
+}
+
+// Regression test for a module-phase compile-time blow-up in deinline_opt.
+//
+// A multi-export module whose exports share a chain of helpers, each containing
+// a deep nested `let` stack, produces many `NoInlinePreference` synthetic
+// helpers.  The module-phase deinline size search iterated over that whole
+// synthetic-function set, re-running full code generation per function per pass.
+// In module phase the search can never keep a flip (its guard only explores the
+// strictly-larger non-inline -> inline direction for these synthetics), so it is
+// a guaranteed no-op, yet it still costs O(functions) superlinear code
+// generations and on larger modules makes compilation appear to hang.
+//
+// This test simply compiles such a module and runs both exports.  Before the fix
+// it does not finish in any reasonable time; after the fix it compiles quickly
+// and produces the expected results.
+#[test]
+fn test_module_phase_deinline_does_not_blow_up() {
+    let filename = "resources/tests/module/deinline_module_blowup.clsp";
+    let content = fs::read_to_string(filename).expect("file should exist");
+    let a_hex = "resources/tests/module/deinline_module_blowup_entry_a.hex";
+    let b_hex = "resources/tests/module/deinline_module_blowup_entry_b.hex";
+    test_compile_and_run_program_with_modules(
+        filename,
+        &content,
+        &[
+            HexArgumentOutcome {
+                hexfile: a_hex,
+                argument: "(10)",
+                outcome: Run("7530"),
+            },
+            HexArgumentOutcome {
+                hexfile: b_hex,
+                argument: "(7)",
+                outcome: Run("6506"),
+            },
+        ],
     );
 }

@@ -47,7 +47,7 @@ fn compile_program_get_result(
         HashMap::new(),
         get_optimizer(&loc, opts.clone())?,
     );
-    let generated = codegen(&mut context, opts.clone(), None, &desugared)?;
+    let generated = codegen(&mut context, opts.clone(), &desugared)?;
     run(
         &mut context.allocator,
         context.runner.clone(),
