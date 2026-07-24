@@ -72,7 +72,7 @@ where
                     }
                 }
                 ASExp::Pair(_, _) => {
-                    if !seems_constant_tail(allocator, &operator) {
+                    if !seems_constant(allocator, &operator) {
                         return false;
                     }
                 }
