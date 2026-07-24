@@ -30,13 +30,16 @@ pub struct DoOptProg {}
 const DEBUG_OPTIMIZATIONS: bool = false;
 const DIAG_OPTIMIZATIONS: bool = false;
 
-fn seems_constant_tail<A: ClassicAllocator>(allocator: &mut A, sexp_: A::NodePtr) -> bool {
-    let mut sexp = sexp_;
+fn seems_constant_tail<A: ClassicAllocator>(allocator: &mut A, sexp_: &A::NodePtr) -> bool
+where
+    A::NodePtr: Clone
+{
+    let mut sexp = sexp_.clone();
 
     loop {
         match allocator.sexp(&sexp) {
             ASExp::Pair(l, r) => {
-                if !seems_constant_tail(allocator, l) {
+                if !seems_constant(allocator, &l) {
                     return false;
                 }
 
@@ -49,7 +52,10 @@ fn seems_constant_tail<A: ClassicAllocator>(allocator: &mut A, sexp_: A::NodePtr
     }
 }
 
-pub fn seems_constant<A: ClassicAllocator>(allocator: &mut A, sexp: &A::NodePtr) -> bool {
+pub fn seems_constant<A: ClassicAllocator>(allocator: &mut A, sexp: &A::NodePtr) -> bool
+where
+    A::NodePtr: Clone
+{
     match allocator.sexp(&sexp) {
         ASExp::Atom => {
             return allocator.is_nil(&sexp);
@@ -66,13 +72,13 @@ pub fn seems_constant<A: ClassicAllocator>(allocator: &mut A, sexp: &A::NodePtr)
                     }
                 }
                 ASExp::Pair(_, _) => {
-                    if !seems_constant(allocator, &operator) {
+                    if !seems_constant_tail(allocator, &operator) {
                         return false;
                     }
                 }
             }
 
-            if !seems_constant_tail(allocator, r) {
+            if !seems_constant_tail(allocator, &r) {
                 return false;
             }
         }
@@ -110,10 +116,10 @@ where
     let nn_r = !allocator.is_nil(&r);
     if DIAG_OPTIMIZATIONS {
         println!(
-            "COPT {} SC_R {} NN_R {}",
-            allocator.disassemble(&r, None),
+            "COPT SC_R {} NN_R {} {}",
             sc_r,
-            nn_r
+            nn_r,
+            allocator.disassemble(&r, None),
         );
     }
     if sc_r && nn_r {
@@ -705,7 +711,7 @@ where
     // Note that this scoping is here to prevent the borrowed mutable ref from
     // preventing us from using memo downstream when we've done one optimize
     // pass and need to cache the result.
-    let exported_r = allocator.export(&r_);
+    let exported_r = allocator.export(r_);
     {
         let memo_ref: Ref<HashMap<AllocatorRefOrTreeHash, NodePtr>> = memo.borrow();
         let memo: &HashMap<AllocatorRefOrTreeHash, NodePtr> = &memo_ref;
