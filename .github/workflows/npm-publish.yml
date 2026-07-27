@@ -38,7 +38,7 @@ jobs:
       - name: Set up rusts
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: 1.94.1
+          toolchain: 1.97.1
           components: rustfmt, clippy
 
       - name: install wasm-pack
