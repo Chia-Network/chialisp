@@ -64,4 +64,7 @@ jobs:
     - name: Run chia-gaming chialisp tests
       run: |
         cd chia-gaming
-        ./tools/run-clsp-tests.sh
+        # Build without sim-tests to ensure that configuration compiles
+        cargo test --no-run
+        # Run simulator tests (matches local ct.sh)
+        cargo test --lib --features sim-tests,sim-server -- --nocapture
