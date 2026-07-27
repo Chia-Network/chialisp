@@ -46,7 +46,7 @@ jobs:
 
       - name: wasm-pack build and pack
         run: |
-          export RUSTFLAGS='--cfg=getrandom_backend="custom" -Ctarget-cpu=mvp'
+          export RUSTFLAGS='-Ctarget-cpu=mvp'
           wasm-pack build --release --target=nodejs wasm && wasm-pack pack wasm
 
       - name: Setup Node 24.x
