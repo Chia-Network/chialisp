@@ -27,7 +27,7 @@ jobs:
         python: ['3.10', 3.11, 3.12]
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
@@ -254,7 +254,7 @@ jobs:
     needs: build_wheels
     steps:
     - name: Checkout code
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
@@ -315,7 +315,7 @@ jobs:
 
     - name: Configure AWS credentials
       if: steps.check_secrets.outputs.HAS_AWS_SECRET
-      uses: aws-actions/configure-aws-credentials@v6
+      uses: aws-actions/configure-aws-credentials@v6.2.0
       with:
         role-to-assume: arn:aws:iam::${{ secrets.CHIA_AWS_ACCOUNT_ID }}:role/installer-upload
         aws-region: us-west-2
@@ -335,7 +335,7 @@ jobs:
     runs-on: ubuntu-22.04
     name: clippy
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 1
       - name: Install rust
@@ -350,11 +350,31 @@ jobs:
       - name: cargo fmt
         run: cargo fmt --all -- --files-with-diff --check
 
+  typing:
+    runs-on: ubuntu-22.04
+    name: typing
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: stubtest
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install maturin==1.10.2 mypy
+          maturin build --release
+          pip install target/wheels/chialisp-*.whl
+          stubtest --concise chialisp
+
   cargo_fmt:
     runs-on: ubuntu-22.04
     name: cargo fmt
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 1
       - name: Install rust
@@ -369,7 +389,7 @@ jobs:
     runs-on: ubuntu-22.04
     name: Unit tests
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 1
       - name: Install rust
@@ -383,7 +403,7 @@ jobs:
   coverage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions-rs/toolchain@v1
         with:
             toolchain: stable

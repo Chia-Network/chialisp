@@ -16,6 +16,7 @@ fn get_depgraph_for_program(prog: &str) -> FunctionDependencyGraph {
         strict: true,
         int_fix: false,
         extra_numeric_constants: false,
+        cse_dominance: false,
     });
     let compileform = frontend(opts.clone(), &forms).expect("should frontend");
 

@@ -39,8 +39,8 @@ fn smoke_test_cse_optimization() {
     let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename));
     let parsed = parse_sexp(srcloc.clone(), source.bytes()).expect("should parse");
     let bodyform = compile_bodyform(opts.clone(), parsed[0].clone()).expect("should compile");
-    let cse_transformed =
-        cse_optimize_bodyform(&srcloc, b"test", true, &bodyform).expect("should cse optimize");
+    let cse_transformed = cse_optimize_bodyform(opts.clone(), &srcloc, b"test", true, &bodyform)
+        .expect("should cse optimize");
     let re_def = r"(let ((cse_[$]_[0-9]+ ([*] ([+] 1 Q) R))) (a (i Q (com (G (- Q 1) cse_[$]_[0-9]+)) (com cse_[$]_[0-9]+)) 1))".replace("(", r"\(").replace(")",r"\)");
     let re = Regex::new(&re_def).expect("should become a regex");
     assert!(re.is_match(&cse_transformed.to_sexp().to_string()));
@@ -66,6 +66,39 @@ fn test_cse_tricky() {
         .trim()
         .to_string();
     assert_eq!(run_result_41, "15375");
+}
+
+#[test]
+fn test_cse_tricky_2() {
+    let filename = "resources/tests/cse-complex-4.clsp";
+    do_basic_run(&vec![
+        "run".to_string(),
+        "-i".to_string(),
+        "./resources/tests/module".to_string(),
+        filename.to_string(),
+    ]);
+
+    let run_result_11 = do_basic_brun(&vec![
+        "brun".to_string(),
+        "-x".to_string(),
+        "resources/tests/cse-complex-4.hex".to_string(),
+        "ff0b80".to_string(),
+    ])
+    .trim()
+    .to_string();
+    assert_eq!(run_result_11, "2");
+
+    let run_result_11_15 = do_basic_brun(&vec![
+        "brun".to_string(),
+        "-x".to_string(),
+        "resources/tests/cse-complex-4.hex".to_string(),
+        "ff0bff0f80".to_string(),
+    ])
+    .trim()
+    .to_string();
+    assert_eq!(run_result_11_15, "87");
+    let _ = std::fs::remove_file("resources/tests/cse-complex-4.hex");
+    let _ = std::fs::remove_dir_all(".chialisp");
 }
 
 #[test]
@@ -854,6 +887,7 @@ fn test_generated_cse(n: u32) {
         strict: true,
         int_fix: false,
         extra_numeric_constants: false,
+        cse_dominance: false,
     });
     let opts23 = opts
         .set_dialect(AcceptedDialect {
@@ -861,6 +895,7 @@ fn test_generated_cse(n: u32) {
             strict: true,
             int_fix: false,
             extra_numeric_constants: false,
+            cse_dominance: false,
         })
         .set_optimize(true);
     let mut symbols = HashMap::new();

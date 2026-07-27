@@ -1,0 +1,39 @@
+;; Regression: a multi-export module whose exports share a chain of helpers,
+;; each containing a deep nested `let` stack.  Every let binding becomes a
+;; `NoInlinePreference` synthetic helper, so the module-phase deinline size
+;; search iterates over a large synthetic-function set and re-runs full code
+;; generation for each one.  Before the fix this is superlinear and effectively
+;; hangs; after the fix (the search is skipped in module phase, where it is a
+;; guaranteed no-op) the module compiles quickly and correctly.
+;;
+;; Arithmetic is addition-only so the export results stay small and exactly
+;; assertable while the let-stack still produces the synthetic helpers that
+;; drive the search.
+(include *standard-cl-25*)
+
+(defun h0 (x)
+  (let ((a (+ (h1 x) 1)) (b (+ (h1 x) 2)))
+    (let ((c (+ a b)) (d (+ a 3)))
+      (let ((e (+ c d)) (f (+ c 4)))
+        (let ((g (+ e f)) (i (+ e 5)))
+          (+ g i))))))
+
+(defun h1 (x)
+  (let ((a (+ (h2 x) 1)) (b (+ (h2 x) 2)))
+    (let ((c (+ a b)) (d (+ a 3)))
+      (let ((e (+ c d)) (f (+ c 4)))
+        (let ((g (+ e f)) (i (+ e 5)))
+          (+ g i))))))
+
+(defun h2 (x)
+  (let ((a (+ x 1)) (b (+ x 2)))
+    (let ((c (+ a b)) (d (+ a 3)))
+      (let ((e (+ c d)) (f (+ c 4)))
+        (let ((g (+ e f)) (i (+ e 5)))
+          (+ g i))))))
+
+(defun entry_a (x) (h0 (+ x 1)))
+(defun entry_b (x) (h0 (+ x 2)))
+
+(export entry_a)
+(export entry_b)

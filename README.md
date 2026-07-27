@@ -191,4 +191,3 @@ Use with chia-blockchain
 
     # Activate your venv, then
     $ maturin develop --release
-

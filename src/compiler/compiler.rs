@@ -17,7 +17,6 @@ use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 
 use crate::classic::clvm::__type_compatibility__::Stream;
 use crate::classic::clvm::sexp::sexp_as_bin;
-use crate::compiler::cldb::hex_to_modern_sexp;
 use crate::compiler::clvm::{convert_to_clvm_rs, run, sha256tree, NewStyleIntConversion};
 use crate::compiler::codegen::{codegen, hoist_body_let_binding, process_helper_let_bindings};
 use crate::compiler::comptypes::{
@@ -27,10 +26,10 @@ use crate::compiler::comptypes::{
     SyntheticType,
 };
 use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
-use crate::compiler::diskcache::{set_cache_element, try_element_from_cache};
 use crate::compiler::frontend::frontend;
 use crate::compiler::optimize::depgraph::{DepgraphOptions, FunctionDependencyGraph};
 use crate::compiler::optimize::get_optimizer;
+use crate::compiler::preprocessor::detect_chialisp_module;
 use crate::compiler::prims;
 use crate::compiler::resolve::{find_helper_target, resolve_namespaces};
 use crate::compiler::sexp::{decode_string, enlist, parse_sexp_flags, SExp};
@@ -162,7 +161,7 @@ pub fn finish_compilation(
     let p3 = context.post_desugar_optimization(opts.clone(), p2)?;
 
     // generate code from AST, optionally with optimization
-    let generated = codegen(context, opts.clone(), None, &p3)?;
+    let generated = codegen(context, opts.clone(), &p3)?;
 
     let g2 = context.post_codegen_output_optimize(opts, generated)?;
 
@@ -255,24 +254,6 @@ fn capture_standalone_constants(
             if constant_is_depended.is_empty() {
                 standalone_constants.insert(h.name().to_vec());
             }
-        }
-    }
-}
-
-fn get_hex_name_of_export(
-    opts: Rc<dyn CompilerOpts>,
-    loc: &Srcloc,
-    export: &Export,
-) -> Result<String, CompileErr> {
-    match export {
-        Export::MainProgram(_) => {
-            let mut output_path = PathBuf::from(&opts.filename());
-            output_path.set_extension("hex");
-            Ok(output_path.into_os_string().to_string_lossy().to_string())
-        }
-        Export::Function(desc) => {
-            let use_name = decode_string(&desc.as_name.as_ref().unwrap_or(&desc.name).value);
-            create_hex_output_path(loc.clone(), &opts.filename(), &use_name)
         }
     }
 }
@@ -386,6 +367,21 @@ fn populate_export_map(
 ///
 /// (export foo)
 /// (export bar)
+fn module_compile_opts(opts: Rc<dyn CompilerOpts>) -> Rc<dyn CompilerOpts> {
+    let mut dialect = opts.dialect();
+    // Module style is new, so there will never be a time when we don't want every
+    // bug fix that existed before it was released.
+    dialect.int_fix = true;
+    dialect.cse_dominance = true;
+    if let Some(stepping) = dialect.stepping {
+        if stepping < 26 {
+            dialect.stepping = Some(26);
+        }
+    }
+
+    opts.set_optimize(true).set_dialect(dialect)
+}
+
 pub fn compile_module(
     context: &mut BasicCompileContext,
     mut opts: Rc<dyn CompilerOpts>,
@@ -394,16 +390,7 @@ pub fn compile_module(
     exports: &[Export],
 ) -> Result<CompileModuleOutput, CompileErr> {
     let loc = program.loc();
-    let mut dialect = opts.dialect();
-    // Module style is new, so there will never be a time when we don't want every
-    // bug fix that existed before it was released.
-    dialect.int_fix = true;
-    if let Some(stepping) = dialect.stepping {
-        if stepping < 26 {
-            dialect.stepping = Some(26);
-        }
-    }
-    opts = opts.set_optimize(true).set_dialect(dialect);
+    opts = module_compile_opts(opts);
 
     if exports.is_empty() {
         return Err(CompileErr(
@@ -434,7 +421,6 @@ pub fn compile_module(
             let mut stream = Stream::new(None);
             stream.write(sexp_as_bin(context.allocator(), converted));
             let hex_data = stream.get_value().hex();
-            set_cache_element(opts.clone(), &program, &output_path_str, &hex_data);
             opts.write_new_file(&output_path_str, hex_data.as_bytes())?;
 
             let (hash, summary) = compute_export_summary(
@@ -652,7 +638,6 @@ pub fn compile_module(
         let converted_func = convert_to_clvm_rs(context.allocator(), m.content.clone())?;
         stream.write(sexp_as_bin(context.allocator(), converted_func));
         let hex_data = stream.get_value().hex();
-        set_cache_element(opts.clone(), &program, &output_path, &hex_data);
         opts.write_new_file(&output_path, hex_data.as_bytes())?;
 
         components.push(m);
@@ -684,77 +669,6 @@ fn compute_export_summary(
             list_tail,
         )),
     )
-}
-
-pub fn try_from_cache(
-    opts: Rc<dyn CompilerOpts>,
-    cf: &CompileForm,
-    exports: &[Export],
-) -> Result<Option<CompilerOutput>, CompileErr> {
-    let mut allocator = Allocator::new();
-    let mut components = Vec::new();
-    let mut summary = Rc::new(SExp::Nil(cf.loc.clone()));
-    let mut data_to_write = Vec::new();
-
-    for e in exports.iter() {
-        let hex_file_name = { get_hex_name_of_export(opts.clone(), &cf.loc(), e) }?;
-        let hex_data = if let Some(hd) = try_element_from_cache(opts.clone(), cf, &hex_file_name) {
-            hd
-        } else {
-            return Ok(None);
-        };
-
-        let loaded_hex_data =
-            // Don't fail on failure to load cache.  We can compile and regenerate.
-            if let Ok(lh) = hex_to_modern_sexp(&mut allocator, &HashMap::new(), cf.loc.clone(), &hex_data) {
-                lh
-            } else {
-                return Ok(None);
-            };
-
-        data_to_write.push((hex_file_name.clone(), hex_data.clone()));
-
-        let shortname = if let Export::Function(desc) = e {
-            desc.name.value.clone()
-        } else {
-            b"program".to_vec()
-        };
-
-        let (hash, new_summary) =
-            compute_export_summary(cf.loc(), summary, &shortname, loaded_hex_data.clone());
-        summary = new_summary;
-
-        components.push(CompileModuleComponent {
-            shortname,
-            filename: hex_file_name,
-            content: loaded_hex_data,
-            hash,
-        });
-    }
-
-    // if we got here, then we loaded all exports.
-    // write (or rewrite) any hex files that were outputs of the elided build steps.
-    let mut allocator = Allocator::new();
-    let empty_symbols = HashMap::new();
-    for (hex_file_name, hex_data) in data_to_write.into_iter() {
-        opts.write_new_file(&hex_file_name, hex_data.as_bytes())?;
-        // Write a hash file alongside.
-        if !hex_file_name.ends_with(".hex") {
-            continue;
-        }
-
-        let decoded_hex = hex_to_modern_sexp(&mut allocator, &empty_symbols, cf.loc(), &hex_data)?;
-        let treehash = sha256tree(decoded_hex);
-        let hash_file_name = format!("{}_hash.hex", &hex_file_name[0..hex_file_name.len() - 4]);
-        let treehash_hex = hex::encode(&treehash);
-        opts.write_new_file(&hash_file_name, treehash_hex.as_bytes())?;
-    }
-
-    Ok(Some(CompilerOutput::Module(CompileModuleOutput {
-        summary,
-        components,
-        includes: cf.include_forms.clone(),
-    })))
 }
 
 fn add_main_fingerprint(cf: &mut CompileForm, forms: &[Rc<SExp>]) {
@@ -826,9 +740,13 @@ fn add_inline_hash_for_constant(program: &mut CompileForm, loc: &Srcloc, fun_nam
 /// Given a set of untreated input forms, compile it as a clvm program.
 pub fn compile_pre_forms(
     context: &mut BasicCompileContext,
-    opts: Rc<dyn CompilerOpts>,
+    mut opts: Rc<dyn CompilerOpts>,
     pre_forms: &[Rc<SExp>],
 ) -> Result<CompilerOutput, CompileErr> {
+    if let Some(dialect) = detect_chialisp_module(Srcloc::start(&opts.filename()), pre_forms)? {
+        opts = opts.set_stdenv(dialect.strict).set_dialect(dialect);
+    }
+
     let p0 = frontend(opts.clone(), pre_forms)?;
 
     match p0 {
@@ -838,19 +756,7 @@ pub fn compile_pre_forms(
         )),
         FrontendOutput::Module(mut cf, exports) => {
             add_main_fingerprint(&mut cf, pre_forms);
-            // If we can read from cache, use that.  We'll use the actual form of the compileform
-            // and opts (the dialect) to determine a cache hit.
-            if let Some(result) = try_from_cache(opts.clone(), &cf, &exports)? {
-                return Ok(result);
-            }
-
-            // cl23 always reflects optimization.
-            let dialect = opts.dialect();
-            let opts = if let Some(stepping) = dialect.stepping.as_ref() {
-                opts.set_optimize(*stepping > 21)
-            } else {
-                opts
-            };
+            let opts = module_compile_opts(opts);
 
             // We make a dependency graph of constants and functions.  There must
             // be a solveable hierarchy for constants, that is some must be top

@@ -17,9 +17,9 @@ fn convert_to_external<'a>(
     cons: Bound<'a, PyAny>,
     from_bytes: Bound<'a, PyAny>,
     root_node: NodePtr,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let mut stack: Vec<NodePtr> = vec![root_node];
-    let mut finished = HashMap::<NodePtr, PyObject>::new();
+    let mut finished = HashMap::<NodePtr, Py<PyAny>>::new();
 
     while let Some(node) = stack.last() {
         let node = *node; // To avoid borrowing issues with the stack
@@ -31,11 +31,10 @@ fn convert_to_external<'a>(
                 if left_finished && right_finished {
                     stack.pop();
 
-                    let result: PyObject = Python::with_gil(|py| {
+                    let result: Py<PyAny> = Python::attach(|py| {
                         let a = finished.get(&left).unwrap();
                         let b = finished.get(&right).unwrap();
-                        let args = PyTuple::new(py, &[a, b])?;
-                        cons.call1(args).and_then(|value| value.into_py_any(py))
+                        cons.call1((a, b)).and_then(|value| value.into_py_any(py))
                     })?
                     .into();
 
@@ -53,15 +52,14 @@ fn convert_to_external<'a>(
                 stack.pop();
 
                 if !finished.contains_key(&node) {
-                    let converted: PyObject = Python::with_gil(|py| {
+                    let converted: Py<PyAny> = Python::attach(|py| {
                         let atom = allocator.atom(node);
                         let bytes = PyBytes::new(py, atom.as_ref());
                         let args = PyTuple::new(py, &[bytes])?;
                         from_bytes
                             .call1(args)
                             .and_then(|value| value.into_py_any(py))
-                    })?
-                    .into();
+                    })?;
                     finished.insert(node, converted);
                 }
             }
@@ -80,7 +78,7 @@ pub fn assemble_generic(
     cons: Bound<'_, PyAny>,
     from_bytes: Bound<'_, PyAny>,
     args: String,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let mut allocator = Allocator::new();
     let assembled =
         binutils::assemble(&mut allocator, &args).map_err(|e| ConvError::new_err(e.to_string()))?;

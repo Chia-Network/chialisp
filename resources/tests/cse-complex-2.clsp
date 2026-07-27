@@ -1,0 +1,14 @@
+(mod (X)
+  (include *standard-cl-26*)
+
+  (defun F (X)
+    (strlen
+      (assign
+        A (+ X 1)
+        B (+ A 1)
+        (+ A 1)
+        )
+      )
+    )
+  (F X)
+  )

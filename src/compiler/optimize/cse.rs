@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use crate::compiler::clvm::sha256tree;
 use crate::compiler::comptypes::{
-    Binding, BindingPattern, BodyForm, CompileErr, LambdaData, LetData, LetFormInlineHint,
-    LetFormKind,
+    Binding, BindingPattern, BodyForm, CompileErr, CompilerOpts, LambdaData, LetData,
+    LetFormInlineHint, LetFormKind,
 };
 use crate::compiler::evaluate::{is_apply_atom, is_i_atom};
 use crate::compiler::frontend::{collect_used_names_bodyform, collect_used_names_sexp};
@@ -67,6 +67,10 @@ pub struct CSECondition {
 pub struct BindingStackEntry {
     pub binding: Rc<Binding>,
     pub merge: bool,
+}
+
+fn before_cse_dominance_fix(opts: Rc<dyn CompilerOpts>) -> bool {
+    !opts.dialect().cse_dominance
 }
 
 // in a chain of conditions:
@@ -347,24 +351,94 @@ pub fn detect_conditions(bf: &BodyForm) -> Result<Vec<CSECondition>, CompileErr>
     Ok(results)
 }
 
-// True if for some condition path c_path there are matching instance paths
-// for either c_path + [CallArgument(1)] or both
-// c_path + [CallArgument(2)] and c_path + [CallArgument(3)]
-fn cse_is_covering(c_path: &[BodyformPathArc], instances: &[CSEInstance]) -> bool {
+// True if for some condition path c_path there are dominated uses in either the condition
+// (CallArgument(1)) or both conditional paths (CallArgument(2) and CallArgument(3)).
+//
+// We match downstream conditions to ensure that uses in each of these clauses are themselves
+// dominant.
+//
+// Overall, one of these subexpressions passes if it
+// - contains an instance of the common subexpression
+// - all downstream conditions are dominated by the subexpression
+//
+// args:
+// - conditions all conditions that contain the subexpression
+// - c_path is the path to the condition being considered
+// - instances is the list of all instances of the subexpression
+fn cse_is_covering(
+    opts: Rc<dyn CompilerOpts>,
+    conditions: &[CSECondition],
+    c_path: &[BodyformPathArc],
+    instances: &[CSEInstance],
+) -> bool {
     let mut target_paths = [c_path.to_vec(), c_path.to_vec(), c_path.to_vec()];
     target_paths[0].push(BodyformPathArc::CallArgument(1));
     target_paths[1].push(BodyformPathArc::CallArgument(2));
     target_paths[2].push(BodyformPathArc::CallArgument(3));
 
-    let have_targets: Vec<bool> = target_paths
+    // I had overlooked the idea that an inner condition not dominating invalidates dominance
+    // overall in part of a condition.  This preserves the original form.
+    if before_cse_dominance_fix(opts.clone()) {
+        let have_targets: Vec<bool> = target_paths
+            .iter()
+            .map(|t| instances.iter().any(|i| path_overlap_one_way(t, &i.path)))
+            .collect();
+        return have_targets[0] || (have_targets[1] && have_targets[2]);
+    }
+
+    // Find all the instances that are in this condition.
+    let have_targets: Vec<Vec<CSEInstance>> = target_paths
         .iter()
-        .map(|t| instances.iter().any(|i| path_overlap_one_way(t, &i.path)))
+        .map(|t| {
+            instances
+                .iter()
+                .filter(|i| path_overlap_one_way(t, &i.path))
+                .cloned()
+                .collect()
+        })
         .collect();
 
-    have_targets[0] || (have_targets[1] && have_targets[2])
+    // Now we get the conditions that apply to each of the target paths and see if they're
+    // covering.
+    let applicable_conditions: Vec<Vec<CSECondition>> = (0..3)
+        .map(|idx| {
+            conditions
+                .iter()
+                // Isolate conditions downstream of one of the taget expressions.
+                .filter(|c| c.path != c_path && path_overlap_one_way(&target_paths[idx], &c.path))
+                // Use only conditions that overlap a cse instance.
+                .filter(|c| {
+                    instances
+                        .iter()
+                        .any(|i| path_overlap_one_way(&c.path, &i.path))
+                })
+                .cloned()
+                .collect()
+        })
+        .collect();
+    // Detect conditions down the path that contain the subexpression but are not dominated
+    // by it.
+    let undominated_conditions: Vec<Vec<CSECondition>> = applicable_conditions
+        .iter()
+        .map(|cs| {
+            cs.iter()
+                .filter(|c| !cse_is_covering(opts.clone(), conditions, &c.path, instances))
+                .cloned()
+                .collect()
+        })
+        .collect();
+    // Detect if there are uses down this path and there are no conditions down this path
+    // that contain the subexpression and aren't dominated by it.
+    let dominated_or_populated: Vec<bool> = undominated_conditions
+        .iter()
+        .enumerate()
+        .map(|(i, cs)| !have_targets[i].is_empty() && cs.is_empty())
+        .collect();
+    dominated_or_populated[0] || (dominated_or_populated[1] && dominated_or_populated[2])
 }
 
 pub fn cse_classify_by_conditions(
+    opts: Rc<dyn CompilerOpts>,
     conditions: &[CSECondition],
     detections: &[CSEDetectionWithoutConditions],
 ) -> Vec<CSEDetection> {
@@ -401,9 +475,9 @@ pub fn cse_classify_by_conditions(
             // We don't need to delay the CSE if 1) all conditions below it
             // are canonical and 2) it appears downstream of all conditions
             // it encloses.
-            let fully_canonical = applicable_conditions
-                .iter()
-                .all(|c| c.canonical && cse_is_covering(&c.path, &d.instances));
+            let fully_canonical = applicable_conditions.iter().all(|c| {
+                c.canonical && cse_is_covering(opts.clone(), conditions, &c.path, &d.instances)
+            });
 
             Some(CSEDetection {
                 hash: d.hash.clone(),
@@ -416,12 +490,15 @@ pub fn cse_classify_by_conditions(
         .collect()
 }
 
-fn detect_common_cse_root(instances: &[CSEInstance]) -> Vec<BodyformPathArc> {
+fn detect_common_cse_root(
+    ceiling: Option<&Vec<BodyformPathArc>>,
+    instances: &[CSEInstance],
+) -> Option<Vec<BodyformPathArc>> {
     // No instances, we can choose the root.
     let min_size = if let Some(m) = instances.iter().map(|i| i.path.len()).min() {
         m
     } else {
-        return Vec::new();
+        return Some(Vec::new());
     };
 
     let mut target_path = instances[0].path.clone();
@@ -437,15 +514,28 @@ fn detect_common_cse_root(instances: &[CSEInstance]) -> Vec<BodyformPathArc> {
         }
     }
 
-    // Back it up to the body of a let binding.
+    // Back it up to the body of a let binding or where we've removed a variable from
+    // its own scope, which can be true if an assign form is not in a body position.
     for (idx, f) in target_path.iter().enumerate().rev() {
+        if let Some(ceiling) = ceiling {
+            if ceiling.len() > idx || (ceiling.len() == idx && target_path[0..idx] != *ceiling) {
+                return None;
+            }
+        }
         if f == &BodyformPathArc::BodyOf {
-            return target_path.iter().take(idx + 1).cloned().collect();
+            return Some(target_path.iter().take(idx + 1).cloned().collect());
         }
     }
 
-    // No internal root if there was no let traversal.
-    Vec::new()
+    // No internal root if there was no let traversal. If we found a ceiling,
+    // the top-level root would lift the CSE above a binding it depends on.
+    if let Some(ceiling) = ceiling {
+        if !ceiling.is_empty() {
+            return None;
+        }
+    }
+
+    Some(Vec::new())
 }
 
 // Finds lambdas that contain CSE detection instances from the provided list.
@@ -587,6 +677,31 @@ fn merge_cse_binding(body: &BodyForm, binding: Rc<Binding>) -> BodyForm {
     body.clone()
 }
 
+fn match_bindings(bindings: &[Rc<Binding>], used_names: &HashSet<Vec<u8>>) -> HashSet<Vec<u8>> {
+    let mut new_set = HashSet::new();
+    for b in bindings.iter() {
+        match &b.pattern {
+            BindingPattern::Name(n) => {
+                let n_ref: &[u8] = n;
+                if used_names.contains(n_ref) {
+                    new_set.insert(n.clone());
+                }
+            }
+            BindingPattern::Complex(p) => {
+                let names: HashSet<Vec<u8>> =
+                    collect_used_names_sexp(p.clone()).into_iter().collect();
+                for n in names.iter() {
+                    let n_ref: &[u8] = n;
+                    if used_names.contains(n_ref) {
+                        new_set.insert(n.clone());
+                    }
+                }
+            }
+        }
+    }
+    new_set
+}
+
 type CSEReplacementTargetAndBindings<'a> = Vec<&'a (Vec<BodyformPathArc>, Vec<BindingStackEntry>)>;
 
 /// Given a bodyform, CSE analyze and produce a semantically equivalent bodyform
@@ -595,6 +710,7 @@ type CSEReplacementTargetAndBindings<'a> = Vec<&'a (Vec<BodyformPathArc>, Vec<Bi
 ///
 /// Note: allow_merge is an option only for regression testing.
 pub fn cse_optimize_bodyform(
+    opts: Rc<dyn CompilerOpts>,
     loc: &Srcloc,
     name: &[u8],
     allow_merge: bool,
@@ -603,7 +719,7 @@ pub fn cse_optimize_bodyform(
     let conditions = detect_conditions(b)?;
     let cse_raw_detections = cse_detect(b)?;
 
-    let cse_detections = cse_classify_by_conditions(&conditions, &cse_raw_detections);
+    let cse_detections = cse_classify_by_conditions(opts, &conditions, &cse_raw_detections);
 
     // While we have them, apply any detections that overlap no others.
     let mut detections_with_dependencies: Vec<(usize, CSEDetection)> =
@@ -670,6 +786,34 @@ pub fn cse_optimize_bodyform(
                 ));
             };
 
+            let used_names: HashSet<Vec<u8>> = collect_used_names_bodyform(&prototype_instance)
+                .into_iter()
+                .collect();
+            // Detect the ceiling for this cse move.  It can only go to the body of a
+            // containing assignment form that binds a name it needs.
+            //
+            // This fixes a bug.  The requirements for causing the bug now are that one use
+            // of the common subexpression is in a binding that uses other bound values.
+            let mut ceiling = None;
+            for instance in d.instances.iter() {
+                for (idx, _f) in instance.path.iter().enumerate().rev() {
+                    let want_path: Vec<BodyformPathArc> =
+                        instance.path.iter().take(idx).cloned().collect();
+                    if let Some(BodyForm::Let(_, data)) =
+                        retrieve_bodyform(&want_path, &function_body, &|b: &BodyForm| b.clone())
+                    {
+                        let names_provided_by_let_in_cse =
+                            match_bindings(&data.bindings, &used_names);
+                        if !names_provided_by_let_in_cse.is_empty() {
+                            let mut top_possible_body = want_path;
+                            top_possible_body.push(BodyformPathArc::BodyOf);
+                            ceiling = Some(top_possible_body);
+                            break;
+                        }
+                    }
+                }
+            }
+
             // We'll assign a fresh variable for each of the detections
             // that are applicable now.
             let new_variable_name = gensym(b"cse".to_vec());
@@ -692,7 +836,13 @@ pub fn cse_optimize_bodyform(
 
             // Detect the root of the CSE as the innermost expression that covers
             // all uses.
-            let replace_path = detect_common_cse_root(&d.instances);
+            let replace_path = match detect_common_cse_root(ceiling.as_ref(), &d.instances) {
+                Some(rp) => rp,
+                None => {
+                    // Can't do anything with this if there was no common root.
+                    continue;
+                }
+            };
 
             // Route the captured repeated subexpression into intervening lambdas.
             // This means that the lambdas will gain a capture on the left side of
@@ -871,4 +1021,24 @@ pub fn cse_optimize_bodyform(
     }
 
     Ok(function_body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn common_cse_root_rejects_empty_path_above_ceiling() {
+        let ceiling = vec![BodyformPathArc::BodyOf];
+        let instances = vec![
+            CSEInstance {
+                path: vec![BodyformPathArc::LetBinding(1)],
+            },
+            CSEInstance {
+                path: vec![BodyformPathArc::BodyOf],
+            },
+        ];
+
+        assert_eq!(detect_common_cse_root(Some(&ceiling), &instances), None);
+    }
 }
