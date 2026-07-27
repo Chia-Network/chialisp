@@ -646,6 +646,81 @@ fn test_cache_reuses_cache_data() {
 }
 
 #[test]
+fn test_three_outputs_common() {
+    let filename = "resources/tests/module/programs/three-outputs-common.clsp";
+    let content = fs::read_to_string(filename).expect("file should exist");
+    let f_hex_file = "resources/tests/module/programs/three-outputs-common_F.hex";
+    let g_hex_file = "resources/tests/module/programs/three-outputs-common_G.hex";
+    let h_hex_file = "resources/tests/module/programs/three-outputs-common_H.hex";
+    test_compile_and_run_program_with_modules(
+        filename,
+        &content,
+        &[
+            HexArgumentOutcome {
+                hexfile: h_hex_file,
+                argument: "(15)",
+                outcome: Run("45"),
+            },
+            HexArgumentOutcome {
+                hexfile: f_hex_file,
+                argument: "(2)",
+                outcome: Run("9"),
+            },
+            HexArgumentOutcome {
+                hexfile: g_hex_file,
+                argument: "(2)",
+                outcome: Run("12"),
+            },
+            HexArgumentOutcome {
+                hexfile: h_hex_file,
+                argument: "(a (q 18 5 (q . 3)) (c (q (* 5 (q . 3))) 1))",
+                outcome: ContentEquals,
+            },
+        ],
+    );
+}
+
+#[test]
+fn test_two_outputs_include_exports() {
+    let filename = "resources/tests/module/programs/two-outputs-include.clsp";
+    let content = fs::read_to_string(filename).expect("file should exist");
+    let f_hex_file = "resources/tests/module/programs/two-outputs-include_F.hex";
+    let g_hex_file = "resources/tests/module/programs/two-outputs-include_G.hex";
+    test_compile_and_run_program_with_modules(
+        filename,
+        &content,
+        &[
+            HexArgumentOutcome {
+                hexfile: f_hex_file,
+                argument: "(10)",
+                outcome: Run("11"),
+            },
+            HexArgumentOutcome {
+                hexfile: g_hex_file,
+                argument: "(7)",
+                outcome: Run("21"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn test_two_program_import_include() {
+    let filename = "resources/tests/module/two_program_import_include.clsp";
+    let content = fs::read_to_string(filename).expect("file should exist");
+    let hex_file = "resources/tests/module/two_program_import_include.hex";
+    test_compile_and_run_program_with_modules(
+        filename,
+        &content,
+        &[HexArgumentOutcome {
+            hexfile: hex_file,
+            argument: "(5)",
+            outcome: Run("15"),
+        }],
+    );
+}
+
+#[test]
 fn test_unlabeled_module_file() {
     let filename = "resources/tests/module/unlabeled-module.clsp";
     let content = fs::read_to_string(filename).expect("file should exist");
@@ -681,5 +756,85 @@ fn test_cl24_fix_always_present() {
             argument: "(3)",
             outcome: Run("(0x00 0x0001 0x0003 768 0x00)"),
         }],
+    );
+}
+
+/// Compiling `defconst H E` twice through compile_file produces byte-identical hex.
+#[test]
+fn test_introspective_constant_deterministic() {
+    let filename = "resources/tests/module/programs/three-outputs-common.clsp";
+    let content = fs::read_to_string(filename).expect("read");
+    let orig_opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename))
+        .set_search_paths(&["resources/tests/module".to_string()]);
+    let source_opts_1 = TestModuleCompilerOpts::new(orig_opts.clone());
+    let source_opts_2 = TestModuleCompilerOpts::new(orig_opts);
+
+    let mut alloc1 = Allocator::new();
+    let runner1 = Rc::new(DefaultProgramRunner::new());
+    let r1 = perform_compile_of_file(
+        &mut alloc1,
+        runner1,
+        source_opts_1.clone(),
+        filename,
+        &content,
+    )
+    .expect("first compile");
+    let CompilerOutput::Module(m1) = r1.compiled else {
+        panic!("expected module");
+    };
+
+    let mut alloc2 = Allocator::new();
+    let runner2 = Rc::new(DefaultProgramRunner::new());
+    let r2 = perform_compile_of_file(
+        &mut alloc2,
+        runner2,
+        source_opts_2.clone(),
+        filename,
+        &content,
+    )
+    .expect("second compile");
+    let CompilerOutput::Module(m2) = r2.compiled else {
+        panic!("expected module");
+    };
+
+    assert_eq!(m1.components.len(), m2.components.len());
+    for (c1, c2) in m1.components.iter().zip(m2.components.iter()) {
+        assert_eq!(c1.shortname, c2.shortname);
+        let hex1 = source_opts_1
+            .get_written_file(&c1.filename)
+            .map(|b| decode_string(&b));
+        let hex2 = source_opts_2
+            .get_written_file(&c2.filename)
+            .map(|b| decode_string(&b));
+        assert_eq!(
+            hex1,
+            hex2,
+            "hex must be deterministic for {}",
+            decode_string(&c1.shortname)
+        );
+    }
+}
+
+/// A module with constants that form a cycle among themselves (no function to
+/// break the cycle) must produce a "Deadlock" error rather than looping.
+#[test]
+fn test_module_constant_cycle_deadlock() {
+    let source = indoc::indoc! {"
+        (include *standard-cl-23*)
+        (export A)
+        (export B)
+        (defconst A B)
+        (defconst B A)
+    "};
+    let filename = "cycle.clsp";
+    let orig_opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename))
+        .set_search_paths(&["resources/tests/module".to_string()]);
+    let source_opts = TestModuleCompilerOpts::new(orig_opts);
+    let mut allocator = Allocator::new();
+    let runner = Rc::new(DefaultProgramRunner::new());
+    let result = perform_compile_of_file(&mut allocator, runner, source_opts, filename, source);
+    assert!(
+        result.is_err(),
+        "expected a compile error for cyclic constants"
     );
 }

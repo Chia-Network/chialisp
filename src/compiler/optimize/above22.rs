@@ -85,15 +85,14 @@ impl Optimization for Strategy23 {
 
     fn post_desugar_optimization(
         &mut self,
-        allocator: &mut Allocator,
+        _allocator: &mut Allocator,
         runner: Rc<dyn TRunProgram>,
         opts: Rc<dyn CompilerOpts>,
         cf: CompileForm,
     ) -> Result<CompileForm, CompileErr> {
         let mut symbols = HashMap::new();
-        let mut wrapper =
-            CompileContextWrapper::new(allocator, runner, &mut symbols, self.duplicate());
-        deinline_opt(&mut wrapper.context, opts.clone(), cf)
+        let mut wrapper = CompileContextWrapper::new(runner, &mut symbols, self.duplicate());
+        deinline_opt(wrapper.context(), opts.clone(), cf)
     }
 
     fn start_of_codegen_optimization(

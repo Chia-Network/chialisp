@@ -272,15 +272,19 @@ impl BasicCompileContext {
     }
 }
 
+enum ContextHolder<'a> {
+    ByRef(&'a mut BasicCompileContext),
+    ByVal(Box<BasicCompileContext>),
+}
+
 /// A wrapper that owns a BasicCompileContext and remembers a mutable reference
 /// to an allocator and symbols.  It is used as a container to swap out these
 /// objects for new ones used in an inner compile context.  This is used when
 /// a subcompile occurs such as when a macro is compiled to CLVM to be executed
 /// or an inner mod is compiled.
 pub struct CompileContextWrapper<'a> {
-    pub allocator: &'a mut Allocator,
     pub symbols: &'a mut HashMap<String, String>,
-    pub context: BasicCompileContext,
+    context_: ContextHolder<'a>,
 }
 
 impl<'a> CompileContextWrapper<'a> {
@@ -302,16 +306,33 @@ impl<'a> CompileContextWrapper<'a> {
     /// optimizer, which is modified when an inner compile has a different sigil
     /// and must be optimized differently.
     pub fn new(
-        allocator: &'a mut Allocator,
         runner: Rc<dyn TRunProgram>,
         symbols: &'a mut HashMap<String, String>,
         optimizer: Box<dyn Optimization>,
     ) -> Self {
         let bcc = BasicCompileContext::new(Allocator::new(), runner, HashMap::new(), optimizer);
         let mut wrapper = CompileContextWrapper {
-            allocator,
             symbols,
-            context: bcc,
+            context_: ContextHolder::ByVal(Box::new(bcc)),
+        };
+        wrapper.switch();
+        wrapper
+    }
+
+    pub fn from_context(
+        context: &'a mut BasicCompileContext,
+        symbols: &'a mut HashMap<String, String>,
+    ) -> Self {
+        // Subcompiles should not try to share the function cache here.
+        // Whenever we obtain a new context, it's because we're reaching across a boundary
+        // notionally between programs or within a context where the code being generated
+        // for only part of a program (such as a subcompile or to compute the body of a
+        // constant and then discard).  None of those situations would benefit from caching
+        // function bodies nor would we necessarily want the cached results (these often use
+        // different settings).
+        let mut wrapper = CompileContextWrapper {
+            symbols,
+            context_: ContextHolder::ByRef(context),
         };
         wrapper.switch();
         wrapper
@@ -323,8 +344,21 @@ impl<'a> CompileContextWrapper<'a> {
     /// perspective.  Useful when compile context has more fields and needs
     /// to change for a consumer down the stack.
     fn switch(&mut self) {
-        swap(self.allocator, &mut self.context.allocator);
-        swap(self.symbols, &mut self.context.symbols);
+        match &mut self.context_ {
+            ContextHolder::ByRef(v) => {
+                swap(self.symbols, &mut v.symbols);
+            }
+            ContextHolder::ByVal(v) => {
+                swap(self.symbols, &mut v.symbols);
+            }
+        }
+    }
+
+    pub fn context(&mut self) -> &mut BasicCompileContext {
+        match &mut self.context_ {
+            ContextHolder::ByVal(v) => v,
+            ContextHolder::ByRef(v) => v,
+        }
     }
 }
 

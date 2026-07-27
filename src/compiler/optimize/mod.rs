@@ -12,7 +12,7 @@ use clvm_rs::error::EvalErr;
 use num_bigint::ToBigInt;
 
 use std::borrow::Borrow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use clvm_rs::allocator::Allocator;
@@ -35,6 +35,7 @@ use crate::compiler::evaluate::{
     build_reflex_captures, dequote, is_i_atom, is_not_atom, Evaluator, EVAL_STACK_LIMIT,
 };
 use crate::compiler::optimize::above22::Strategy23;
+use crate::compiler::optimize::depgraph::{DepgraphOptions, FunctionDependencyGraph};
 use crate::compiler::optimize::strategy::ExistingStrategy;
 use crate::compiler::runtypes::RunFailure;
 #[cfg(test)]
@@ -301,7 +302,11 @@ fn constant_fun_result(
             }
 
             let compiled_body = {
-                let to_compile = CompileForm {
+                // Filter helpers to just things that are directly depended on
+                // by this function.  Nothing else is needed.  Any constant
+                // observation of functions in the tree is handled at the
+                // module phase layer.
+                let mut to_compile = CompileForm {
                     loc: call_spec.loc.clone(),
                     include_forms: Vec::new(),
                     helpers: compiler.original_helpers.clone(),
@@ -324,6 +329,27 @@ fn constant_fun_result(
                         None,
                     )),
                 };
+
+                let depgraph = if opts.module_phase().is_some() {
+                    let depgraph = FunctionDependencyGraph::new_with_options(
+                        &to_compile,
+                        DepgraphOptions {
+                            with_constants: true,
+                        },
+                    );
+                    let mut depended_on = HashSet::default();
+                    depgraph.get_full_depends_on(&mut depended_on, call_spec.name);
+                    to_compile.helpers = compiler
+                        .original_helpers
+                        .iter()
+                        .filter(|h| depended_on.contains(h.name()))
+                        .cloned()
+                        .collect();
+                    Some(depgraph)
+                } else {
+                    None
+                };
+
                 let optimizer = if let Ok(res) = get_optimizer(&call_spec.loc, opts.clone()) {
                     res
                 } else {
@@ -332,9 +358,14 @@ fn constant_fun_result(
 
                 let mut symbols = HashMap::new();
                 let mut wrapper =
-                    CompileContextWrapper::new(allocator, runner.clone(), &mut symbols, optimizer);
+                    CompileContextWrapper::new(runner.clone(), &mut symbols, optimizer);
 
-                if let Ok(code) = codegen(&mut wrapper.context, opts.clone(), None, &to_compile) {
+                if let Ok(code) = codegen(
+                    wrapper.context(),
+                    opts.clone(),
+                    depgraph.as_ref(),
+                    &to_compile,
+                ) {
                     code
                 } else {
                     return None;
@@ -527,14 +558,9 @@ pub fn optimize_expr(
                 if stepping >= 23 {
                     let mut throwaway_symbols = HashMap::new();
                     if let Ok(optimizer) = get_optimizer(l, opts.clone()) {
-                        let mut wrapper = CompileContextWrapper::new(
-                            allocator,
-                            runner,
-                            &mut throwaway_symbols,
-                            optimizer,
-                        );
-                        if let Ok(compiled) = do_mod_codegen(&mut wrapper.context, opts.clone(), cf)
-                        {
+                        let mut wrapper =
+                            CompileContextWrapper::new(runner, &mut throwaway_symbols, optimizer);
+                        if let Ok(compiled) = do_mod_codegen(wrapper.context(), opts.clone(), cf) {
                             if let Ok(NodeSel::Cons(_, body)) =
                                 NodeSel::Cons(AtomValue::Here(&[1]), ThisNode)
                                     .select_nodes(compiled.1)

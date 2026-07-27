@@ -2,9 +2,11 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::compiler::codegen::codegen;
-use crate::compiler::optimize::depgraph::{DepgraphKind, FunctionDependencyGraph};
+use crate::compiler::optimize::depgraph::{DepgraphKind, DepgraphOptions, FunctionDependencyGraph};
 use crate::compiler::optimize::{sexp_scale, SyntheticType};
-use crate::compiler::{BasicCompileContext, CompileErr, CompileForm, CompilerOpts, HelperForm};
+use crate::compiler::{
+    BasicCompileContext, CompileErr, CompileForm, CompilerOpts, Funcache, HelperForm,
+};
 
 // Find the roots for the given function.
 fn find_roots(
@@ -34,11 +36,11 @@ fn find_roots(
     }
 }
 
-fn stepping_over_24(opts: Rc<dyn CompilerOpts>) -> bool {
+pub(crate) fn stepping_over_24(opts: Rc<dyn CompilerOpts>) -> bool {
     if let Some(s) = &opts.dialect().stepping {
         return *s > 24;
     }
-    false
+    opts.module_phase().is_some()
 }
 
 type VecOfRootSetTree<'a> = Vec<(&'a BTreeSet<Vec<u8>>, Vec<&'a Vec<u8>>)>;
@@ -54,14 +56,34 @@ pub fn deinline_opt(
         return Ok(compileform);
     }
 
-    let depgraph = FunctionDependencyGraph::new(&compileform);
+    if context.funcache.is_none() {
+        context.funcache = Some(Funcache::default());
+    }
+
+    let is_module_compile = opts.module_phase().is_some();
+    let depgraph = if is_module_compile {
+        FunctionDependencyGraph::new_with_options(
+            &compileform,
+            DepgraphOptions {
+                with_constants: true,
+            },
+        )
+    } else {
+        FunctionDependencyGraph::new(&compileform)
+    };
 
     let mut best_compileform = compileform.clone();
     let generated_program = codegen(context, opts.clone(), Some(&depgraph), &best_compileform)?;
     let mut metric = sexp_scale(&generated_program);
+
     let flip_helper = |h: &mut HelperForm| {
         if let HelperForm::Defun(inline, defun) = h {
-            if matches!(&defun.synthetic, Some(SyntheticType::NoInlinePreference)) {
+            // Since the convention of module programs is non-inline for synthetics, no program
+            // in my test set lost weight by switching inline off after losing weight by switching
+            // it on, and the cost of this search can be high.
+            if matches!(&defun.synthetic, Some(SyntheticType::NoInlinePreference))
+                && (!is_module_compile || !*inline)
+            {
                 *h = HelperForm::Defun(!*inline, defun.clone());
                 return true;
             }

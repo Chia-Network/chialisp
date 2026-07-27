@@ -863,7 +863,6 @@ fn test_generated_cse(n: u32) {
             extra_numeric_constants: false,
         })
         .set_optimize(true);
-    let mut allocator = Allocator::new();
     let mut symbols = HashMap::new();
     let compiled21;
     let compiled23;
@@ -871,14 +870,13 @@ fn test_generated_cse(n: u32) {
     // Get strict cl21 compile
     {
         let mut wrapper21 = CompileContextWrapper::new(
-            &mut allocator,
             runner.clone(),
             &mut symbols,
             get_optimizer(&generated.loc(), opts21.clone()).expect("should be ok dialect"),
         );
         eprintln!("21 compile");
         compiled21 = Rc::new(
-            compile_from_compileform(&mut wrapper21.context, opts21, generated.clone())
+            compile_from_compileform(&mut wrapper21.context(), opts21, generated.clone())
                 .expect("compiled"),
         )
     }
@@ -886,14 +884,13 @@ fn test_generated_cse(n: u32) {
     // Get cl23 compile
     {
         let mut wrapper23 = CompileContextWrapper::new(
-            &mut allocator,
             runner.clone(),
             &mut symbols,
             get_optimizer(&generated.loc(), opts23.clone()).expect("should be ok dialect"),
         );
         eprintln!("23 compile");
         compiled23 = Rc::new(
-            compile_from_compileform(&mut wrapper23.context, opts23, generated.clone())
+            compile_from_compileform(&mut wrapper23.context(), opts23, generated.clone())
                 .expect("compiled"),
         )
     }

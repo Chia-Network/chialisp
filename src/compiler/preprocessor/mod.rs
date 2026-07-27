@@ -515,6 +515,7 @@ impl Preprocessor {
 
         if !have_module {
             let dialect = detect_modern(&mut allocator, classic_parse);
+
             if dialect.stepping.is_none() {
                 // Classic compile.
                 let newly_compiled = compile_clvm_text_maybe_opt(
@@ -545,13 +546,12 @@ impl Preprocessor {
             .set_dialect(dialect)
             .set_filename(filename);
         let mut context_wrapper = CompileContextWrapper::new(
-            &mut allocator,
             runner,
             &mut symbol_table,
             get_optimizer(&srcloc, opts.clone())?,
         );
 
-        match compile_pre_forms(&mut context_wrapper.context, opts.clone(), &pre_forms)? {
+        match compile_pre_forms(context_wrapper.context(), opts.clone(), &pre_forms)? {
             CompilerOutput::Module(module_output) => {
                 let mut output = Vec::new();
                 for c in module_output.components.iter() {
@@ -881,7 +881,6 @@ impl Preprocessor {
     }
 
     fn find_macro(&mut self, loc: Srcloc, name: &[u8]) -> Result<Option<Rc<SExp>>, CompileErr> {
-        let mut allocator = Allocator::new();
         let current_module_name = self.current_module_name();
         let (_, parsed_name) = ImportLongName::parse(name);
         let (parent_name, clean_last_name_component) = parsed_name.parent_and_name();
@@ -919,12 +918,8 @@ impl Preprocessor {
         // as inline defuns because they're closest to that semantically.
         let optimizer = get_optimizer(&loc, self.opts.clone())?;
         let mut symbol_table = HashMap::new();
-        let mut wrapper = CompileContextWrapper::new(
-            &mut allocator,
-            self.runner.clone(),
-            &mut symbol_table,
-            optimizer,
-        );
+        let mut wrapper =
+            CompileContextWrapper::new(self.runner.clone(), &mut symbol_table, optimizer);
 
         let mut main_helpers: Vec<HelperForm> = self.prototype_program.clone();
 
@@ -966,7 +961,7 @@ impl Preprocessor {
         let new_program = resolve_namespaces(self.opts.clone(), &starting_program)?;
 
         let compiled_program =
-            compile_from_compileform(&mut wrapper.context, self.opts.clone(), new_program)?;
+            compile_from_compileform(wrapper.context(), self.opts.clone(), new_program)?;
         self.stored_macros.insert(
             found_name.clone(),
             StoredMacro::Compiled(Rc::new(compiled_program.clone())),

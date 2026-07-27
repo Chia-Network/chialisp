@@ -541,8 +541,7 @@ pub fn replace_in_inline(
         let mut symbols = HashMap::new();
         let runner = context.runner();
         let optimizer = context.optimizer.duplicate();
-        let mut context_wrapper =
-            CompileContextWrapper::new(context.allocator(), runner, &mut symbols, optimizer);
-        generate_expr_code(&mut context_wrapper.context, opts, compiler, x)
+        let mut context_wrapper = CompileContextWrapper::new(runner, &mut symbols, optimizer);
+        generate_expr_code(context_wrapper.context(), opts, compiler, x)
     })
 }

@@ -82,7 +82,7 @@ pub fn collect_used_names_bodyform(body: &BodyForm) -> Vec<Vec<u8>> {
     }
 }
 
-fn collect_used_names_helperform(body: &HelperForm) -> Vec<Vec<u8>> {
+pub fn collect_used_names_helperform(body: &HelperForm) -> Vec<Vec<u8>> {
     match body {
         HelperForm::Defconstant(defc) => collect_used_names_bodyform(defc.body.borrow()),
         HelperForm::Defmacro(mac) => {

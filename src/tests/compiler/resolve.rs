@@ -40,7 +40,7 @@ fn compile_program_get_result(
     let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new("*resolve-test*"));
     let loc = Srcloc::start("*resolve-test*");
     let resolved = do_program_module_resolution(opts.clone(), loc.clone(), test_program)?;
-    let desugared = do_desugar(&resolved)?;
+    let desugared = do_desugar(opts.clone(), &resolved)?;
     let mut context = BasicCompileContext::new(
         Allocator::new(),
         Rc::new(DefaultProgramRunner::new()),

@@ -53,7 +53,6 @@ struct JsRunStep {
 }
 
 struct JsRepl {
-    allocator: RefCell<Allocator>,
     runner: Rc<dyn TRunProgram>,
     opts: Rc<dyn CompilerOpts>,
     repl: RefCell<Repl>,
@@ -409,7 +408,6 @@ pub fn compose_run_function(
 // Create a repl session
 #[wasm_bindgen]
 pub fn create_repl() -> i32 {
-    let allocator = Allocator::new();
     let opts = Rc::new(DefaultCompilerOpts::new("*repl*"));
     let runner = Rc::new(DefaultProgramRunner::new());
     let repl = Repl::new(opts.clone(), runner.clone());
@@ -427,7 +425,6 @@ pub fn create_repl() -> i32 {
             work_repls.insert(
                 new_id,
                 JsRepl {
-                    allocator: RefCell::new(allocator),
                     runner: runner.clone(),
                     opts: opts.clone(),
                     repl: RefCell::new(repl),
@@ -459,18 +456,15 @@ pub fn repl_run_string(repl_id: i32, input: String) -> JsValue {
             let repls = repls.borrow();
             let loc = Srcloc::start("*repl*");
             if let Some(repl_container) = repls.get(&repl_id) {
-                let mut a_borrowed = repl_container.allocator.borrow_mut();
-                let a = a_borrowed.deref_mut();
                 let mut r_borrowed = repl_container.repl.borrow_mut();
                 let r = r_borrowed.deref_mut();
                 let mut symbols = HashMap::new();
                 let mut wrapper = CompileContextWrapper::new(
-                    a,
                     repl_container.runner.clone(),
                     &mut symbols,
                     get_optimizer(&loc, repl_container.opts.clone())?,
                 );
-                r.process_line(&mut wrapper.context, input)
+                r.process_line(wrapper.context(), input)
             } else {
                 Err(CompileErr(loc, "no such repl".to_string()))
             }

@@ -29,7 +29,7 @@ impl ExistingStrategy {
 impl Optimization for ExistingStrategy {
     fn frontend_optimization(
         &mut self,
-        allocator: &mut Allocator,
+        _allocator: &mut Allocator,
         runner: Rc<dyn TRunProgram>,
         opts: Rc<dyn CompilerOpts>,
         p0: CompileForm,
@@ -38,13 +38,12 @@ impl Optimization for ExistingStrategy {
         let mut unused_symbols = HashMap::new();
         if opts.frontend_opt() && !(opts.dialect().stepping.map(|d| d > 22).unwrap_or(false)) {
             let mut wrapper = CompileContextWrapper::new(
-                allocator,
                 runner.clone(),
                 &mut unused_symbols,
                 Box::new(self.clone()),
             );
             // Front end optimization
-            fe_opt(&mut wrapper.context, opts.clone(), p0)
+            fe_opt(wrapper.context(), opts.clone(), p0)
         } else {
             Ok(p0)
         }
@@ -52,16 +51,15 @@ impl Optimization for ExistingStrategy {
 
     fn post_desugar_optimization(
         &mut self,
-        allocator: &mut Allocator,
+        _allocator: &mut Allocator,
         runner: Rc<dyn TRunProgram>,
         opts: Rc<dyn CompilerOpts>,
         cf: CompileForm,
     ) -> Result<CompileForm, CompileErr> {
         if opts.frontend_opt() && opts.dialect().stepping.map(|s| s > 22).unwrap_or(false) {
             let mut symbols = HashMap::new();
-            let mut wrapper =
-                CompileContextWrapper::new(allocator, runner, &mut symbols, self.duplicate());
-            deinline_opt(&mut wrapper.context, opts.clone(), cf)
+            let mut wrapper = CompileContextWrapper::new(runner, &mut symbols, self.duplicate());
+            deinline_opt(wrapper.context(), opts.clone(), cf)
         } else {
             Ok(cf)
         }
