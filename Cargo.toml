@@ -66,7 +66,8 @@ js-sys = "0.3.77"
 wasm-bindgen = { version = "^0.2.100", features = ["serde-serialize"] }
 
 [target.'cfg(not(target_family="wasm"))'.dependencies]
-getrandom = { version = "0.3" }
+getrandom = { version = "0.4" }
+
 
 [build-dependencies]
 pyo3-build-config = "0.24.0"
