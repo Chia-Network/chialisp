@@ -3,7 +3,7 @@ use rand::distr::StandardUniform;
 #[cfg(test)]
 use rand::prelude::Distribution;
 #[cfg(test)]
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 use std::borrow::Borrow;
 use std::fmt::Display;

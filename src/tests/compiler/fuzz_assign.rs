@@ -1,5 +1,6 @@
 use num_bigint::ToBigInt;
-use rand::Rng;
+#[cfg(test)]
+use rand::{Rng, RngExt};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::rc::Rc;

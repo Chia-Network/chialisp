@@ -167,7 +167,7 @@ fn does_number_need_extension_byte(n: Number) -> bool {
 // in a broad way i suppose.
 #[test]
 fn test_random_int_just_the_conversion_functions_and_no_other_things_from_the_stack_1() {
-    let mut rng = ChaChaRng::from_os_rng();
+    let mut rng = ChaChaRng::from_rng(&mut rand::rng());
     for _ in 1..=200 {
         let number_spec: RandomClvmNumber = rng.random();
 
