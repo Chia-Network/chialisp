@@ -15,6 +15,7 @@ mod fuzz;
 mod fuzz_assign;
 mod modules;
 mod optimizer;
+mod perf;
 mod preprocessor;
 mod repl;
 mod resolve;
