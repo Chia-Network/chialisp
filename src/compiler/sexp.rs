@@ -6,11 +6,14 @@ use rand::prelude::Distribution;
 use rand::Rng;
 
 use std::borrow::Borrow;
+use std::cell::RefCell;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use binascii::{bin2hex, hex2bin};
+use clvmr::allocator::{Allocator, NodePtr};
+use clvmr::error::EvalErr;
 use num_traits::{zero, Num};
 
 use serde::Serialize;
@@ -21,6 +24,10 @@ use crate::classic::clvm::__type_compatibility__::{bi_zero, Bytes, BytesFromType
 use crate::classic::clvm::casts::{bigint_from_bytes, bigint_to_bytes_clvm, TConvertOption};
 use crate::classic::clvm_tools::ir::r#type::NEW_BIT_CONSTANTS;
 use crate::classic::clvm_tools::ir::reader::bitwise_constant;
+use crate::classic::clvm_tools::stages::stage_2::abstraction::{
+    ASExp, BufHolder, ClError, ClassicAllocator,
+};
+use crate::compiler::clvm::{convert_from_clvm_rs, convert_to_clvm_rs};
 #[cfg(any(test, feature = "fuzz"))]
 use crate::compiler::fuzz::{ExprModifier, FuzzChoice};
 use crate::compiler::prims::prims;
@@ -50,6 +57,124 @@ pub enum SExp {
     QuotedString(Srcloc, u8, Vec<u8>),
     /// Contains an identifier like atom.
     Atom(Srcloc, Vec<u8>),
+}
+
+/// Adapts the compiler's source-location-preserving S-expressions to the
+/// classic compiler interface. The CLVM allocator is only backing storage for
+/// values crossing the classic runner boundary through `import` and `export`.
+pub struct SExpAllocator {
+    allocator: RefCell<Allocator>,
+}
+
+impl SExpAllocator {
+    pub fn new() -> Self {
+        Self {
+            allocator: RefCell::new(Allocator::new()),
+        }
+    }
+}
+
+impl Default for SExpAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ClassicAllocator for SExpAllocator {
+    type NodePtr = Rc<SExp>;
+
+    fn loc(&self, node: &Self::NodePtr) -> Srcloc {
+        node.loc()
+    }
+
+    fn sexp(&self, node: &Self::NodePtr) -> ASExp<Self::NodePtr> {
+        match node.borrow() {
+            SExp::Cons(_, first, rest) => ASExp::Pair(first.clone(), rest.clone()),
+            _ => ASExp::Atom,
+        }
+    }
+
+    fn atom<'a>(&'a self, node: &'a Self::NodePtr) -> BufHolder<'a> {
+        match node.borrow() {
+            SExp::Nil(_) => BufHolder::borrowed(&[]),
+            SExp::Integer(_, value) => BufHolder::owned(u8_from_number(value.clone())),
+            SExp::QuotedString(_, _, value) | SExp::Atom(_, value) => BufHolder::borrowed(value),
+            SExp::Cons(_, _, _) => panic!("atom called on a pair"),
+        }
+    }
+
+    fn is_nil(&self, node: &Self::NodePtr) -> bool {
+        node.nilp()
+    }
+
+    fn disassemble(&self, node: &Self::NodePtr, _version: Option<usize>) -> String {
+        node.to_string()
+    }
+
+    fn allocator(&mut self) -> &mut Allocator {
+        self.allocator.get_mut()
+    }
+
+    fn node_equal(&self, a: &Self::NodePtr, b: &Self::NodePtr) -> bool {
+        a.equal_to(b)
+    }
+
+    fn map_err(&self, loc: Srcloc, err: EvalErr) -> ClError {
+        ClError(loc, err)
+    }
+
+    fn new_atom(&mut self, loc: Srcloc, value: &[u8]) -> Result<Self::NodePtr, ClError> {
+        Ok(Rc::new(SExp::Atom(loc, value.to_vec())))
+    }
+
+    fn new_pair(
+        &mut self,
+        loc: Srcloc,
+        a: &Self::NodePtr,
+        b: &Self::NodePtr,
+    ) -> Result<Self::NodePtr, ClError> {
+        Ok(Rc::new(SExp::Cons(loc, a.clone(), b.clone())))
+    }
+
+    fn import(&mut self, loc: Srcloc, node: NodePtr) -> Result<Self::NodePtr, ClError> {
+        convert_from_clvm_rs(self.allocator.get_mut(), loc.clone(), node)
+            .map_err(|err| ClError(loc, EvalErr::InternalError(NodePtr::NIL, err.to_string())))
+    }
+
+    fn export(&self, node: &Self::NodePtr) -> NodePtr {
+        convert_to_clvm_rs(&mut self.allocator.borrow_mut(), node.clone())
+            .expect("exporting an S-expression to CLVM should only fail on allocation")
+    }
+}
+
+#[test]
+fn test_sexp_allocator_preserves_source_locations() {
+    let file = Rc::new("*allocator-test*".to_string());
+    let atom_loc = Srcloc::new(file.clone(), 3, 5);
+    let pair_loc = Srcloc::new(file.clone(), 7, 2);
+    let import_loc = Srcloc::new(file, 11, 4);
+    let mut allocator = SExpAllocator::new();
+
+    let atom = allocator.new_atom(atom_loc.clone(), b"value").unwrap();
+    let nil = allocator.new_atom(pair_loc.clone(), b"").unwrap();
+    let pair = allocator.new_pair(pair_loc.clone(), &atom, &nil).unwrap();
+
+    assert_eq!(allocator.loc(&atom), atom_loc);
+    assert_eq!(allocator.loc(&pair), pair_loc);
+    let ASExp::Pair(first, rest) = allocator.sexp(&pair) else {
+        panic!("expected pair");
+    };
+    assert_eq!(allocator.loc(&first), atom_loc);
+    assert_eq!(allocator.loc(&rest), pair_loc);
+
+    let exported = allocator.export(&pair);
+    let imported = allocator.import(import_loc.clone(), exported).unwrap();
+    assert_eq!(allocator.loc(&imported), import_loc);
+    let ASExp::Pair(first, rest) = allocator.sexp(&imported) else {
+        panic!("expected imported pair");
+    };
+    assert_eq!(allocator.loc(&first), import_loc);
+    assert_eq!(allocator.loc(&rest), import_loc);
 }
 
 #[cfg(test)]
