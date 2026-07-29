@@ -125,6 +125,76 @@ fn test_run_clvm_in_cldb() {
     );
 }
 
+struct RecordsRecursiveSteps {
+    steps: Vec<(String, String)>,
+}
+
+impl StepOfCldbViewer for RecordsRecursiveSteps {
+    fn show(&mut self, step: &RunStep, output: Option<BTreeMap<String, String>>) -> bool {
+        let arguments = output
+            .and_then(|values| values.get("Arguments").cloned())
+            .unwrap_or_default();
+        self.steps.push((step.loc().to_string(), arguments));
+        true
+    }
+}
+
+#[test]
+fn test_classic_codegen_recursive_source_locations() {
+    let program_name = "classic_codegen_fact.clsp";
+    let program_code = indoc! {"
+        (mod (N)
+          (include *standard-cl-26-classic*)
+          (defun fact (X)
+            (if (> X 1)
+              (* X (fact (- X 1)))
+              1))
+          (fact N))
+    "};
+    let mut allocator = Allocator::new();
+    let runner = Rc::new(DefaultProgramRunner::new());
+    let opts = Rc::new(DefaultCompilerOpts::new(program_name));
+    let mut symbols = HashMap::new();
+    let args = parse_sexp(Srcloc::start("*args*"), "(4)".bytes()).expect("should parse")[0].clone();
+    let program = compile_file(
+        &mut allocator,
+        runner,
+        opts,
+        &program_code.to_string(),
+        &mut symbols,
+    )
+    .expect("should compile");
+    let mut watcher = RecordsRecursiveSteps { steps: Vec::new() };
+
+    assert_eq!(
+        run_clvm_in_cldb(
+            program_name,
+            Rc::new(program_code.lines().map(str::to_string).collect()),
+            Rc::new(program.to_sexp()),
+            symbols,
+            args,
+            &mut watcher,
+            0,
+        ),
+        Some("24".to_string())
+    );
+
+    let recursive_arguments: Vec<&str> = watcher
+        .steps
+        .iter()
+        .filter(|(loc, _)| loc == "classic_codegen_fact.clsp(4):10")
+        .map(|(_, arguments)| arguments.as_str())
+        .collect();
+    assert_eq!(
+        recursive_arguments,
+        vec!["(4 1)", "(3 1)", "(2 1)", "(1 1)"]
+    );
+    assert!(watcher
+        .steps
+        .iter()
+        .any(|(loc, _)| loc.starts_with("classic_codegen_fact.clsp(5):")));
+}
+
 #[test]
 fn test_cldb_hex_to_modern_sexp_smoke_0() {
     let mut allocator = Allocator::new();

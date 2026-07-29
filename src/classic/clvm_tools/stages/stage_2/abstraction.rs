@@ -1,10 +1,14 @@
+use std::rc::Rc;
+
 use std::ops::Index;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::error::EvalErr;
 
 use crate::classic::clvm_tools::binutils::disassemble;
+use crate::compiler::sexp::SExp as ModernSExp;
 use crate::compiler::srcloc::Srcloc;
+use crate::util::u8_from_number;
 
 pub enum ASExp<T> {
     Pair(T, T),
@@ -121,5 +125,158 @@ impl ClassicAllocator for Allocator {
     }
     fn export(&self, node: &Self::NodePtr) -> NodePtr {
         *node
+    }
+}
+
+/// A stage-2 node backed by the compiler's location-aware S-expression.
+///
+/// `raw` mirrors `sexp` in the contained CLVM allocator. Stage-2 occasionally
+/// has to execute generated CLVM, so retaining both representations lets those
+/// boundaries use clvmr without discarding locations from the source tree.
+#[derive(Clone, Debug)]
+pub struct SExpNode {
+    pub sexp: Rc<ModernSExp>,
+    raw: NodePtr,
+}
+
+/// Adapts modern compiler S-expressions to the classic stage-2 compiler.
+pub struct SExpClassicAllocator {
+    allocator: Allocator,
+}
+
+impl Default for SExpClassicAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SExpClassicAllocator {
+    pub fn new() -> Self {
+        Self {
+            allocator: Allocator::new(),
+        }
+    }
+
+    pub fn from_sexp(&mut self, sexp: Rc<ModernSExp>) -> Result<SExpNode, ClError> {
+        let loc = sexp.loc();
+        let raw = match sexp.as_ref() {
+            ModernSExp::Nil(_) => NodePtr::NIL,
+            ModernSExp::Cons(_, first, rest) => {
+                let first = self.from_sexp(first.clone())?;
+                let rest = self.from_sexp(rest.clone())?;
+                self.allocator
+                    .new_pair(first.raw, rest.raw)
+                    .map_err(|e| self.map_err(loc.clone(), e))?
+            }
+            ModernSExp::Integer(_, value) => self
+                .allocator
+                .new_atom(&u8_from_number(value.clone()))
+                .map_err(|e| self.map_err(loc.clone(), e))?,
+            ModernSExp::QuotedString(_, _, value) | ModernSExp::Atom(_, value) => self
+                .allocator
+                .new_atom(value)
+                .map_err(|e| self.map_err(loc.clone(), e))?,
+        };
+        Ok(SExpNode { sexp, raw })
+    }
+}
+
+impl ClassicAllocator for SExpClassicAllocator {
+    type NodePtr = SExpNode;
+
+    fn loc(&self, node: &Self::NodePtr) -> Srcloc {
+        node.sexp.loc()
+    }
+
+    fn sexp(&self, node: &Self::NodePtr) -> ASExp<Self::NodePtr> {
+        match node.sexp.as_ref() {
+            ModernSExp::Cons(_, first, rest) => {
+                let SExp::Pair(raw_first, raw_rest) = self.allocator.sexp(node.raw) else {
+                    unreachable!("modern and raw S-expression representations diverged")
+                };
+                ASExp::Pair(
+                    SExpNode {
+                        sexp: first.clone(),
+                        raw: raw_first,
+                    },
+                    SExpNode {
+                        sexp: rest.clone(),
+                        raw: raw_rest,
+                    },
+                )
+            }
+            _ => ASExp::Atom,
+        }
+    }
+
+    fn atom<'a>(&'a self, node: &Self::NodePtr) -> BufHolder<'a> {
+        BufHolder(self.allocator.atom(node.raw))
+    }
+
+    fn is_nil(&self, node: &Self::NodePtr) -> bool {
+        node.raw == NodePtr::NIL
+    }
+
+    fn disassemble(&self, node: &Self::NodePtr, version: Option<usize>) -> String {
+        disassemble(&self.allocator, node.raw, version)
+    }
+
+    fn allocator(&mut self) -> &mut Allocator {
+        &mut self.allocator
+    }
+
+    fn node_equal(&self, a: &Self::NodePtr, b: &Self::NodePtr) -> bool {
+        a.raw == b.raw
+    }
+
+    fn map_err(&self, loc: Srcloc, err: EvalErr) -> ClError {
+        ClError(loc, err)
+    }
+
+    fn new_atom(&mut self, loc: Srcloc, value: &[u8]) -> Result<Self::NodePtr, ClError> {
+        let raw = self
+            .allocator
+            .new_atom(value)
+            .map_err(|e| ClError(loc.clone(), e))?;
+        Ok(SExpNode {
+            sexp: Rc::new(ModernSExp::Atom(loc, value.to_vec())),
+            raw,
+        })
+    }
+
+    fn new_pair(
+        &mut self,
+        loc: Srcloc,
+        a: &Self::NodePtr,
+        b: &Self::NodePtr,
+    ) -> Result<Self::NodePtr, ClError> {
+        let raw = self
+            .allocator
+            .new_pair(a.raw, b.raw)
+            .map_err(|e| ClError(loc.clone(), e))?;
+        Ok(SExpNode {
+            sexp: Rc::new(ModernSExp::Cons(loc, a.sexp.clone(), b.sexp.clone())),
+            raw,
+        })
+    }
+
+    fn import(&mut self, loc: Srcloc, node: NodePtr) -> Result<Self::NodePtr, ClError> {
+        let sexp = match self.allocator.sexp(node) {
+            SExp::Atom if node == NodePtr::NIL => Rc::new(ModernSExp::Nil(loc)),
+            SExp::Atom => Rc::new(ModernSExp::Atom(
+                loc,
+                self.allocator.atom(node).as_ref().to_vec(),
+            )),
+            SExp::Pair(first, rest) => {
+                let first = self.import(loc.clone(), first)?;
+                let rest = self.import(loc.clone(), rest)?;
+                Rc::new(ModernSExp::Cons(loc, first.sexp, rest.sexp))
+            }
+        };
+        Ok(SExpNode { sexp, raw: node })
+    }
+
+    fn export(&self, node: &Self::NodePtr) -> NodePtr {
+        node.raw
     }
 }

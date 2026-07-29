@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashMap};
+use std::fs;
 use std::rc::Rc;
 
 use clvm_rs::allocator::Allocator;
@@ -52,6 +53,7 @@ fn run_string_maybe_opt(
             int_fix: false,
             extra_numeric_constants: false,
             cse_dominance: false,
+            classic_codegen: false,
         });
     }
 
@@ -87,6 +89,43 @@ pub fn run_string(content: &String, args: &String) -> Result<Rc<SExp>, CompileEr
 
 pub fn run_string_strict(content: &String, args: &String) -> Result<Rc<SExp>, CompileErr> {
     run_string_maybe_opt(content, args, false, true)
+}
+
+#[test]
+fn test_modern_frontend_with_classic_codegen_semantics() {
+    let program = indoc! {"
+        (mod (N)
+          (include *standard-cl-26-classic*)
+          (defun fact (X)
+            (if (> X 1)
+              (let ((NEXT (- X 1)))
+                (assign REST (fact NEXT)
+                  (* X REST)))
+              1))
+          (defun apply-one (F X) (a F (list X)))
+          (apply-one (lambda (X) (fact X)) N))
+    "}
+    .to_string();
+
+    assert_eq!(
+        run_string(&program, &"(5)".to_string())
+            .unwrap()
+            .to_string(),
+        "120"
+    );
+}
+
+#[test]
+fn test_classic_codegen_matches_modern_bls_program_result() {
+    let modern =
+        fs::read_to_string("resources/tests/bls/modern-bls-verify-signature.clsp").unwrap();
+    let classic_codegen = modern.replace("*standard-cl-21*", "*standard-cl-26-classic*");
+    let args = "(0x0102030405)".to_string();
+
+    assert_eq!(
+        run_string(&classic_codegen, &args).unwrap(),
+        run_string(&modern, &args).unwrap()
+    );
 }
 
 // Given some renaming that leaves behind gensym style names with _$_<n> in them,
@@ -2432,6 +2471,7 @@ fn test_handle_explicit_empty_atom() {
         int_fix: false,
         extra_numeric_constants: false,
         cse_dominance: false,
+        classic_codegen: false,
     });
 
     let atom = |s: &str| Rc::new(SExp::Atom(srcloc.clone(), s.as_bytes().to_vec()));

@@ -14,6 +14,13 @@ use clvm_rs::allocator::Allocator;
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
 use crate::classic::clvm_tools::ir::r#type::NEW_BIT_CONSTANTS;
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
+use crate::classic::clvm_tools::stages::stage_2::abstraction::{
+    ClassicAllocator, SExpClassicAllocator,
+};
+use crate::classic::clvm_tools::stages::stage_2::defaults::default_macro_lookup;
+use crate::classic::clvm_tools::stages::stage_2::module::compile_mod;
+use crate::classic::clvm_tools::stages::stage_2::operators::run_program_for_search_paths;
+use crate::classic::clvm_tools::stages::stage_2::optimize::optimize_sexp;
 
 use crate::classic::clvm::__type_compatibility__::Stream;
 use crate::classic::clvm::sexp::sexp_as_bin;
@@ -158,6 +165,10 @@ pub fn finish_compilation(
     opts: Rc<dyn CompilerOpts>,
     p2: CompileForm,
 ) -> Result<SExp, CompileErr> {
+    if opts.dialect().classic_codegen {
+        return classic_codegen(opts, p2);
+    }
+
     let p3 = context.post_desugar_optimization(opts.clone(), p2)?;
 
     // generate code from AST, optionally with optimization
@@ -168,12 +179,57 @@ pub fn finish_compilation(
     Ok(g2)
 }
 
+/// Generate code from a desugared modern CompileForm with classic stage 2.
+///
+/// The classic compiler's normal final optimization is part of its code
+/// generation contract. No modern optimization hooks run on this path.
+fn classic_codegen(opts: Rc<dyn CompilerOpts>, program: CompileForm) -> Result<SExp, CompileErr> {
+    let language_flags = if opts.dialect().extra_numeric_constants {
+        NEW_BIT_CONSTANTS
+    } else {
+        0
+    };
+    let runner = run_program_for_search_paths(
+        &opts.filename(),
+        &opts.get_search_paths(),
+        false,
+        language_flags,
+    );
+    runner.set_compiler_opts(Some(opts.clone()));
+
+    let mut allocator = SExpClassicAllocator::new();
+    let args = allocator
+        .from_sexp(program.to_sexp())
+        .map_err(|e| CompileErr(e.0, e.1.to_string()))?;
+    let macro_lookup = default_macro_lookup(&mut allocator, runner.clone());
+    let nil = allocator
+        .import(program.loc(), clvm_rs::allocator::NodePtr::NIL)
+        .map_err(|e| CompileErr(e.0, e.1.to_string()))?;
+    let generated = compile_mod(
+        &mut allocator,
+        &args,
+        &macro_lookup,
+        &nil,
+        runner.clone(),
+        0,
+    )
+    .map_err(|e| CompileErr(e.0, e.1.to_string()))?;
+    let optimized = optimize_sexp(&mut allocator, &generated, runner)
+        .map_err(|e| CompileErr(e.0, e.1.to_string()))?;
+
+    Ok(optimized.sexp.as_ref().clone())
+}
+
 pub fn compile_from_compileform(
     context: &mut BasicCompileContext,
     opts: Rc<dyn CompilerOpts>,
     p0: CompileForm,
 ) -> Result<SExp, CompileErr> {
-    let p1 = context.frontend_optimization(opts.clone(), p0)?;
+    let p1 = if opts.dialect().classic_codegen {
+        p0
+    } else {
+        context.frontend_optimization(opts.clone(), p0)?
+    };
 
     // Resolve includes, convert program source to lexemes
     let p2 = do_desugar(opts.clone(), &p1)?;
