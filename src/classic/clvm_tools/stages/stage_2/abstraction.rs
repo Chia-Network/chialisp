@@ -31,7 +31,25 @@ pub trait BufCarrier<'a> {
 }
 
 #[derive(PartialEq, Eq)]
-pub struct BufHolder<'a>(clvmr::Atom<'a>);
+pub enum BufHolder<'a> {
+    Allocated(clvmr::Atom<'a>),
+    Borrowed(&'a [u8]),
+    Owned(Vec<u8>),
+}
+
+impl<'a> BufHolder<'a> {
+    pub fn allocated(atom: clvmr::Atom<'a>) -> Self {
+        Self::Allocated(atom)
+    }
+
+    pub fn borrowed(atom: &'a [u8]) -> Self {
+        Self::Borrowed(atom)
+    }
+
+    pub fn owned(atom: Vec<u8>) -> Self {
+        Self::Owned(atom)
+    }
+}
 
 impl<'a> Index<usize> for BufHolder<'a> {
     type Output = u8;
@@ -42,7 +60,11 @@ impl<'a> Index<usize> for BufHolder<'a> {
 
 impl<'a> BufCarrier<'a> for BufHolder<'a> {
     fn as_ref(&'a self) -> &'a [u8] {
-        self.0.as_ref()
+        match self {
+            Self::Allocated(atom) => atom.as_ref(),
+            Self::Borrowed(atom) => atom,
+            Self::Owned(atom) => atom,
+        }
     }
 }
 
@@ -50,7 +72,7 @@ pub trait ClassicAllocator {
     type NodePtr;
     fn loc(&self, node: &Self::NodePtr) -> Srcloc;
     fn sexp(&self, node: &Self::NodePtr) -> ASExp<Self::NodePtr>;
-    fn atom<'a>(&'a self, node: &Self::NodePtr) -> BufHolder<'a>;
+    fn atom<'a>(&'a self, node: &'a Self::NodePtr) -> BufHolder<'a>;
     fn is_nil(&self, node: &Self::NodePtr) -> bool;
     fn disassemble(&self, node: &Self::NodePtr, version: Option<usize>) -> String;
     fn allocator(&mut self) -> &mut Allocator;
@@ -83,8 +105,8 @@ impl ClassicAllocator for Allocator {
             SExp::Atom => ASExp::Atom,
         }
     }
-    fn atom<'a>(&'a self, node: &Self::NodePtr) -> BufHolder<'a> {
-        BufHolder(self.atom(*node))
+    fn atom<'a>(&'a self, node: &'a Self::NodePtr) -> BufHolder<'a> {
+        BufHolder::allocated(self.atom(*node))
     }
     fn is_nil(&self, node: &Self::NodePtr) -> bool {
         *node == NodePtr::NIL
