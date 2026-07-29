@@ -156,14 +156,8 @@ fn test_classic_codegen_recursive_source_locations() {
     let opts = Rc::new(DefaultCompilerOpts::new(program_name));
     let mut symbols = HashMap::new();
     let args = parse_sexp(Srcloc::start("*args*"), "(4)".bytes()).expect("should parse")[0].clone();
-    let program = compile_file(
-        &mut allocator,
-        runner,
-        opts,
-        &program_code.to_string(),
-        &mut symbols,
-    )
-    .expect("should compile");
+    let program = compile_file(&mut allocator, runner, opts, program_code, &mut symbols)
+        .expect("should compile");
     let mut watcher = RecordsRecursiveSteps { steps: Vec::new() };
 
     assert_eq!(
