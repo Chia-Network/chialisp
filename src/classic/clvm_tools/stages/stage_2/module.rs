@@ -341,21 +341,30 @@ where
     A::NodePtr: Clone,
 {
     let loc = allocator.loc(args);
-    let Some(args) = proper_list(allocator, args, true) else {
-        return Err(ClError(
-            loc,
-            EvalErr::InternalError(
-                allocator.export(args),
-                "@*env* does not yet support an inline function with a dotted argument list"
-                    .to_string(),
-            ),
-        ));
+    let argument_tree = match allocator.sexp(args) {
+        ASExp::Pair(first, rest) => is_at_capture(allocator, &first, &rest)
+            .map(|(_, destructure)| destructure)
+            .unwrap_or_else(|| args.clone()),
+        ASExp::Atom => args.clone(),
     };
 
     let cons = allocator.new_atom(loc.clone(), b"c")?;
     let left_environment = allocator.new_atom(loc.clone(), &[2])?;
-    let mut right_environment = allocator.import(loc.clone(), NodePtr::NIL)?;
-    for arg in args.iter().rev() {
+    let mut argument_references = Vec::new();
+    let mut remaining = argument_tree;
+    while let ASExp::Pair(first, rest) = allocator.sexp(&remaining) {
+        argument_references.push(first);
+        remaining = rest;
+    }
+
+    let mut right_environment = if allocator.is_nil(&remaining) {
+        allocator.import(loc.clone(), NodePtr::NIL)?
+    } else {
+        let tail = inline_argument_reference(allocator, &remaining, matches)?;
+        let enlist_args = allocator.new_atom(loc.clone(), b"__chia__enlist")?;
+        enlist(allocator, &[enlist_args, tail])?
+    };
+    for arg in argument_references.iter().rev() {
         let argument = inline_argument_reference(allocator, arg, matches)?;
         right_environment = enlist(allocator, &[cons.clone(), argument, right_environment])?;
     }

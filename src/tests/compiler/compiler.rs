@@ -143,9 +143,15 @@ fn test_classic_codegen_environment_pseudo_variable() {
             (r @*env*))
           (defun-inline inlined (A B)
             (r @*env*))
+          (defun-inline destructured ((A B) C)
+            (r @*env*))
+          (defun-inline variadic (A . Rest)
+            (r @*env*))
           (list
             (regular X (+ X 1))
-            (inlined (+ X 2) (+ X 3))))
+            (inlined (+ X 2) (+ X 3))
+            (destructured (list X (+ X 1)) (+ X 2))
+            (variadic (+ X 4) (+ X 5) (+ X 6))))
     "}
     .to_string();
 
@@ -153,7 +159,7 @@ fn test_classic_codegen_environment_pseudo_variable() {
         run_string(&program, &"(5)".to_string())
             .unwrap()
             .to_string(),
-        "((5 6) (7 8))"
+        "((5 6) (7 8) ((5 6) 7) (9 10 11))"
     );
 }
 
