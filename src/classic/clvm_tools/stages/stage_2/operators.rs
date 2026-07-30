@@ -18,7 +18,7 @@ use crate::classic::clvm::OPERATORS_LATEST_VERSION;
 use crate::classic::clvm::keyword_from_atom;
 use crate::classic::clvm::sexp::proper_list;
 
-use crate::classic::clvm_tools::binutils::{assemble_from_ir, disassemble_to_ir_with_kw};
+use crate::classic::clvm_tools::binutils::{assemble_from_ir, disassemble_to_ir_with_kw, disassemble};
 use crate::classic::clvm_tools::ir::reader::read_ir;
 use crate::classic::clvm_tools::ir::writer::write_ir_to_stream;
 use crate::classic::clvm_tools::sha256tree::TreeHash;
@@ -390,6 +390,12 @@ impl CompilerOperatorsInternal {
             .and_then(|o| o.disassembly_ver())
             .unwrap_or(OPERATORS_LATEST_VERSION)
     }
+
+    fn is_modern(&self) -> bool {
+        self.get_compiler_opts()
+            .map(|o| o.dialect().strict)
+            .unwrap_or(false)
+    }
 }
 
 impl Dialect for CompilerOperatorsInternal {
@@ -440,6 +446,8 @@ impl Dialect for CompilerOperatorsInternal {
         // compiler doesn't itself run in a softfork.
         let extensions_to_clvmr_during_compile = self.get_operators_extension();
 
+        eprintln!("op {} for {}", disassemble(allocator, op, None), disassemble(allocator, sexp, None));
+
         match allocator.sexp(op) {
             SExp::Atom => {
                 // use of op obvious.
@@ -450,6 +458,9 @@ impl Dialect for CompilerOperatorsInternal {
                 } else if opbuf == b"_write" {
                     self.write(allocator, sexp)
                 } else if opbuf == b"com" {
+                    if self.is_modern() {
+                        todo!();
+                    }
                     let result = do_com_prog_for_dialect(self.get_runner(), allocator, &sexp)?;
                     Ok(Reduction(1, result))
                 } else if opbuf == b"opt" {

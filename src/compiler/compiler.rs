@@ -205,6 +205,8 @@ fn classic_codegen(opts: Rc<dyn CompilerOpts>, program: CompileForm) -> Result<S
     let nil = allocator
         .import(program.loc(), clvm_rs::allocator::NodePtr::NIL)
         .map_err(|e| CompileErr(e.0, e.1.to_string()))?;
+    eprintln!("classic_codegen {}", program.to_sexp());
+    eprintln!("classic_codegen macros {}", allocator.disassemble(&macro_lookup, None));
     let generated = compile_mod(
         &mut allocator,
         &args,
@@ -226,6 +228,7 @@ pub fn compile_from_compileform(
     p0: CompileForm,
 ) -> Result<SExp, CompileErr> {
     let p1 = if opts.dialect().classic_codegen {
+        eprintln!("classic program {}", p0.to_sexp());
         p0
     } else {
         context.frontend_optimization(opts.clone(), p0)?

@@ -139,6 +139,12 @@ pub struct SExpNode {
     raw: NodePtr,
 }
 
+impl std::fmt::Display for SExpNode {
+    fn fmt(&self, formatter: &'_ mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        write!(formatter, "{}", self.sexp)
+    }
+}
+
 /// Adapts modern compiler S-expressions to the classic stage-2 compiler.
 pub struct SExpClassicAllocator {
     allocator: Allocator,
