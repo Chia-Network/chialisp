@@ -151,7 +151,7 @@ fn test_classic_codegen_environment_pseudo_variable() {
             (regular X (+ X 1))
             (inlined (+ X 2) (+ X 3))
             (destructured (list X (+ X 1)) (+ X 2))
-            (variadic (+ X 4) &rest (list (+ X 5) (+ X 6)))))
+            (variadic (+ X 4) (+ X 5) (+ X 6))))
     "}
     .to_string();
 
