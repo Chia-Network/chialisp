@@ -135,6 +135,29 @@ fn test_classic_codegen_function_call_with_rest_tail() {
 }
 
 #[test]
+fn test_classic_codegen_environment_pseudo_variable() {
+    let program = indoc! {"
+        (mod (X)
+          (include *standard-cl-26-classic*)
+          (defun regular (A B)
+            (r @*env*))
+          (defun-inline inlined (A B)
+            (r @*env*))
+          (list
+            (regular X (+ X 1))
+            (inlined (+ X 2) (+ X 3))))
+    "}
+    .to_string();
+
+    assert_eq!(
+        run_string(&program, &"(5)".to_string())
+            .unwrap()
+            .to_string(),
+        "((5 6) (7 8))"
+    );
+}
+
+#[test]
 fn test_classic_codegen_matches_modern_bls_program_result() {
     let modern =
         fs::read_to_string("resources/tests/bls/modern-bls-verify-signature.clsp").unwrap();

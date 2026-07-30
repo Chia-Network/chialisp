@@ -257,6 +257,7 @@ fn unquote_args<A: ClassicAllocator>(
     code: &A::NodePtr,
     args: &[Vec<u8>],
     matches: &HashMap<Vec<u8>, A::NodePtr>,
+    inline_env: &A::NodePtr,
 ) -> Result<A::NodePtr, ClError>
 where
     A::NodePtr: Clone,
@@ -265,6 +266,9 @@ where
         ASExp::Atom => {
             // Only code in scope.
             let code_atom = allocator.atom(code);
+            if code_atom.as_ref() == b"@*env*" {
+                return Ok(inline_env.clone());
+            }
             let matching_args = args
                 .iter()
                 .filter(|arg| *arg == code_atom.as_ref())
@@ -285,10 +289,85 @@ where
             Ok(code.clone())
         }
         ASExp::Pair(c1, c2) => {
-            let unquoted_c2 = unquote_args(allocator, &c2, args, matches)?;
-            let unquoted_c1 = unquote_args(allocator, &c1, args, matches)?;
+            let unquoted_c2 = unquote_args(allocator, &c2, args, matches, inline_env)?;
+            let unquoted_c1 = unquote_args(allocator, &c1, args, matches, inline_env)?;
             let loc = allocator.loc(&c1);
             allocator.new_pair(loc, &unquoted_c1, &unquoted_c2)
+        }
+    }
+}
+
+fn inline_argument_reference<A: ClassicAllocator>(
+    allocator: &mut A,
+    arg: &A::NodePtr,
+    matches: &HashMap<Vec<u8>, A::NodePtr>,
+) -> Result<A::NodePtr, ClError>
+where
+    A::NodePtr: Clone,
+{
+    let reference = match allocator.sexp(arg) {
+        ASExp::Atom => {
+            let name = allocator.atom(arg).as_ref().to_vec();
+            if let Some(selection) = matches.get(&name) {
+                return Ok(selection.clone());
+            }
+            arg.clone()
+        }
+        ASExp::Pair(first, rest) => {
+            let Some((capture, _)) = is_at_capture(allocator, &first, &rest) else {
+                return Err(ClError(
+                    allocator.loc(arg),
+                    EvalErr::InternalError(
+                        allocator.export(arg),
+                        "inline argument destructuring is missing its source capture".to_string(),
+                    ),
+                ));
+            };
+            capture
+        }
+    };
+
+    let loc = allocator.loc(&reference);
+    let unquote = allocator.new_atom(loc, b"unquote")?;
+    enlist(allocator, &[unquote, reference])
+}
+
+fn inline_environment<A: ClassicAllocator>(
+    allocator: &mut A,
+    args: &A::NodePtr,
+    matches: &HashMap<Vec<u8>, A::NodePtr>,
+) -> Result<A::NodePtr, ClError>
+where
+    A::NodePtr: Clone,
+{
+    let loc = allocator.loc(args);
+    let Some(args) = proper_list(allocator, args, true) else {
+        return Err(ClError(
+            loc,
+            EvalErr::InternalError(
+                allocator.export(args),
+                "@*env* does not yet support an inline function with a dotted argument list"
+                    .to_string(),
+            ),
+        ));
+    };
+
+    let cons = allocator.new_atom(loc.clone(), b"c")?;
+    let left_environment = allocator.new_atom(loc.clone(), &[2])?;
+    let mut right_environment = allocator.import(loc.clone(), NodePtr::NIL)?;
+    for arg in args.iter().rev() {
+        let argument = inline_argument_reference(allocator, arg, matches)?;
+        right_environment = enlist(allocator, &[cons.clone(), argument, right_environment])?;
+    }
+    enlist(allocator, &[cons, left_environment, right_environment])
+}
+
+fn contains_inline_environment<A: ClassicAllocator>(allocator: &A, code: &A::NodePtr) -> bool {
+    match allocator.sexp(code) {
+        ASExp::Atom => allocator.atom(code).as_ref() == b"@*env*",
+        ASExp::Pair(first, rest) => {
+            contains_inline_environment(allocator, &first)
+                || contains_inline_environment(allocator, &rest)
         }
     }
 }
@@ -339,7 +418,18 @@ where
         .map(|v| v.as_ref().to_vec())
         .collect::<Vec<Vec<u8>>>();
 
-    let unquoted_code = unquote_args(allocator, &code, &arg_name_list, &destructure_matches)?;
+    let inline_env = if contains_inline_environment(allocator, &code) {
+        inline_environment(allocator, &use_args, &destructure_matches)?
+    } else {
+        code.clone()
+    };
+    let unquoted_code = unquote_args(
+        allocator,
+        &code,
+        &arg_name_list,
+        &destructure_matches,
+        &inline_env,
+    )?;
 
     let loc = allocator.loc(&unquoted_code);
     let qq_atom = allocator.new_atom(loc, "qq".as_bytes())?;

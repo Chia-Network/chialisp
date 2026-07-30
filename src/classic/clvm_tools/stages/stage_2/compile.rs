@@ -448,7 +448,7 @@ where
     A::NodePtr: Clone,
 {
     let loc = allocator.loc(prog);
-    if a == b"@" {
+    if a == b"@" || a == b"@*env*" {
         return allocator.new_atom(loc, NodePath::new(None).as_path().data());
     }
 
