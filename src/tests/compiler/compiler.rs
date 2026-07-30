@@ -116,6 +116,25 @@ fn test_modern_frontend_with_classic_codegen_semantics() {
 }
 
 #[test]
+fn test_classic_codegen_function_call_with_rest_tail() {
+    let program = indoc! {"
+        (mod (Xs)
+          (include *standard-cl-26-classic*)
+          (defun collect (A B C D)
+            (list A B C D))
+          (collect 5 &rest Xs))
+    "}
+    .to_string();
+
+    assert_eq!(
+        run_string(&program, &"((7 11 13))".to_string())
+            .unwrap()
+            .to_string(),
+        "(5 7 11 13)"
+    );
+}
+
+#[test]
 fn test_classic_codegen_matches_modern_bls_program_result() {
     let modern =
         fs::read_to_string("resources/tests/bls/modern-bls-verify-signature.clsp").unwrap();

@@ -580,6 +580,73 @@ where
     Ok(None)
 }
 
+fn split_rest_tail<A: ClassicAllocator>(
+    allocator: &A,
+    args: &A::NodePtr,
+) -> Result<Option<(Vec<A::NodePtr>, Option<A::NodePtr>)>, ClError>
+where
+    A::NodePtr: Clone,
+{
+    let Some(mut args) = proper_list(allocator, args, true).map(|args| args.to_vec()) else {
+        return Ok(None);
+    };
+
+    let rest_index = args.iter().position(|arg| match allocator.sexp(arg) {
+        ASExp::Atom => allocator.atom(arg).as_ref() == b"&rest",
+        ASExp::Pair(_, _) => false,
+    });
+
+    let Some(rest_index) = rest_index else {
+        return Ok(Some((args, None)));
+    };
+
+    if rest_index + 2 != args.len() {
+        return Err(ClError(
+            allocator.loc(&args[rest_index]),
+            EvalErr::InternalError(
+                allocator.export(&args[rest_index]),
+                "&rest must be followed by exactly one tail expression".to_string(),
+            ),
+        ));
+    }
+
+    let tail = args.pop();
+    args.pop();
+    Ok(Some((args, tail)))
+}
+
+fn enlist_with_tail<A: ClassicAllocator>(
+    allocator: &mut A,
+    args: &[A::NodePtr],
+    tail: &A::NodePtr,
+) -> Result<A::NodePtr, ClError>
+where
+    A::NodePtr: Clone,
+{
+    let mut result = tail.clone();
+    for arg in args.iter().rev() {
+        result = allocator.new_pair(allocator.loc(arg), arg, &result)?;
+    }
+    Ok(result)
+}
+
+fn rest_argument_source<A: ClassicAllocator>(
+    allocator: &mut A,
+    args: &[A::NodePtr],
+    tail: &A::NodePtr,
+) -> Result<A::NodePtr, ClError>
+where
+    A::NodePtr: Clone,
+{
+    let mut result = tail.clone();
+    for arg in args.iter().rev() {
+        let loc = allocator.loc(arg);
+        let cons = allocator.new_atom(loc.clone(), b"c")?;
+        result = enlist(allocator, &[cons, arg.clone(), result])?;
+    }
+    Ok(result)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compile_application<A: ClassicAllocator>(
     allocator: &mut A,
@@ -614,8 +681,8 @@ where
         return allocator.new_pair(rest_loc, operator, rest);
     }
 
-    match proper_list(allocator, rest, true) {
-        Some(prog_args) => {
+    match split_rest_tail(allocator, rest)? {
+        Some((prog_args, tail_arg)) => {
             let mut new_args = map_m(allocator, &mut prog_args.iter(), &|allocator, arg| {
                 do_com_prog(
                     allocator,
@@ -627,8 +694,19 @@ where
                 )
             })?;
 
+            let compiled_tail = match &tail_arg {
+                Some(tail) => do_com_prog(
+                    allocator,
+                    544,
+                    tail,
+                    macro_lookup,
+                    symbol_table,
+                    run_program.clone(),
+                )?,
+                None => allocator.import(allocator.loc(rest), NodePtr::NIL)?,
+            };
             compiled_args.append(&mut new_args);
-            let r = enlist(allocator, &compiled_args)?;
+            let r = enlist_with_tail(allocator, &compiled_args, &compiled_tail)?;
 
             if PASS_THROUGH_OPERATORS.contains(opbuf) || (!opbuf.is_empty() && opbuf[0] == b'_') {
                 Ok(r)
@@ -636,39 +714,34 @@ where
                 find_symbol_match(allocator, opbuf, &r, symbol_table).and_then(|x| match x {
                     Some(SymbolResult::Direct(v)) => Ok(v),
                     Some(SymbolResult::Matched(_symbol, value)) => {
-                        match proper_list(allocator, rest, true) {
-                            Some(proglist) => {
-                                let loc = allocator.loc(&value);
-                                let apply_atom = allocator.new_atom(loc.clone(), &[2])?;
-                                let list_atom =
-                                    allocator.new_atom(loc.clone(), "list".as_bytes())?;
-                                let cons_atom = allocator.new_atom(loc.clone(), &[4])?;
-                                let com_atom = allocator.new_atom(loc.clone(), "com".as_bytes())?;
-                                let opt_atom = allocator.new_atom(loc.clone(), "opt".as_bytes())?;
-                                let top_atom = allocator
-                                    .new_atom(loc.clone(), NodePath::new(None).as_path().data())?;
-                                let left_atom = allocator.new_atom(
-                                    loc.clone(),
-                                    NodePath::new(None).first().as_path().data(),
-                                )?;
-                                let enlisted = enlist(allocator, &proglist)?;
-                                let list_application =
-                                    allocator.new_pair(loc, &list_atom, &enlisted)?;
-                                let quoted_list = quote(allocator, &list_application)?;
-                                let quoted_macros = quote(allocator, macro_lookup)?;
-                                let quoted_symbols = quote(allocator, symbol_table)?;
-                                let compiled = enlist(
-                                    allocator,
-                                    &[com_atom, quoted_list, quoted_macros, quoted_symbols],
-                                )?;
-                                let to_run = enlist(allocator, &[opt_atom, compiled])?;
-                                let new_args = evaluate(allocator, &to_run, &top_atom)?;
-                                let cons_enlisted =
-                                    enlist(allocator, &[cons_atom, left_atom, new_args])?;
-                                enlist(allocator, &[apply_atom, value, cons_enlisted])
+                        let loc = allocator.loc(&value);
+                        let apply_atom = allocator.new_atom(loc.clone(), &[2])?;
+                        let list_atom = allocator.new_atom(loc.clone(), "list".as_bytes())?;
+                        let cons_atom = allocator.new_atom(loc.clone(), &[4])?;
+                        let com_atom = allocator.new_atom(loc.clone(), "com".as_bytes())?;
+                        let opt_atom = allocator.new_atom(loc.clone(), "opt".as_bytes())?;
+                        let top_atom = allocator
+                            .new_atom(loc.clone(), NodePath::new(None).as_path().data())?;
+                        let left_atom = allocator
+                            .new_atom(loc.clone(), NodePath::new(None).first().as_path().data())?;
+                        let argument_source = match &tail_arg {
+                            Some(tail) => rest_argument_source(allocator, &prog_args, tail)?,
+                            None => {
+                                let enlisted = enlist(allocator, &prog_args)?;
+                                allocator.new_pair(loc, &list_atom, &enlisted)?
                             }
-                            None => error_result,
-                        }
+                        };
+                        let quoted_list = quote(allocator, &argument_source)?;
+                        let quoted_macros = quote(allocator, macro_lookup)?;
+                        let quoted_symbols = quote(allocator, symbol_table)?;
+                        let compiled = enlist(
+                            allocator,
+                            &[com_atom, quoted_list, quoted_macros, quoted_symbols],
+                        )?;
+                        let to_run = enlist(allocator, &[opt_atom, compiled])?;
+                        let new_args = evaluate(allocator, &to_run, &top_atom)?;
+                        let cons_enlisted = enlist(allocator, &[cons_atom, left_atom, new_args])?;
+                        enlist(allocator, &[apply_atom, value, cons_enlisted])
                     }
                     None => error_result,
                 })
