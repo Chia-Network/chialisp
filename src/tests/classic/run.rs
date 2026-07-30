@@ -18,7 +18,7 @@ use clvmr::allocator::Allocator;
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero, Stream};
 use crate::classic::clvm::serialize::sexp_to_stream;
 use crate::classic::clvm_tools::binutils::{assemble, disassemble};
-use crate::classic::clvm_tools::cmds::launch_tool;
+use crate::classic::clvm_tools::cmds::{cldb, launch_tool, ToolRunStatus};
 use crate::classic::clvm_tools::node_path::NodePath;
 
 use crate::compiler::clvm::convert_to_clvm_rs;
@@ -29,15 +29,23 @@ use crate::util::{number_from_u8, Number};
 const NUM_GEN_ATOMS: usize = 16;
 
 pub fn do_basic_brun(args: &Vec<String>) -> String {
-    let mut s = Stream::new(None);
-    launch_tool(&mut s, args, &"run".to_string(), 0);
-    return s.get_value().decode();
+    let (output, _) = launch_tool_output(args, "run", 0);
+    output
 }
 
 pub fn do_basic_run(args: &Vec<String>) -> String {
+    let (output, _) = launch_tool_output(args, "run", 2);
+    output
+}
+
+fn launch_tool_output(
+    args: &Vec<String>,
+    tool_name: &str,
+    default_stage: u32,
+) -> (String, ToolRunStatus) {
     let mut s = Stream::new(None);
-    launch_tool(&mut s, args, &"run".to_string(), 2);
-    return s.get_value().decode();
+    let status = launch_tool(&mut s, args, tool_name, default_stage);
+    (s.get_value().decode(), status)
 }
 
 #[test]
@@ -46,6 +54,63 @@ fn basic_run_test() {
         do_basic_run(&vec!("run".to_string(), "(mod (A B) (+ A B))".to_string())).trim(),
         "(+ 2 5)".to_string()
     );
+}
+
+#[test]
+fn fail_on_error_status_is_opt_in() {
+    let args = vec![
+        "run".to_string(),
+        "--operators-version".to_string(),
+        "0".to_string(),
+        "(mod () (coinid (sha256 99) (sha256 99) 1))".to_string(),
+    ];
+    let (output, status) = launch_tool_output(&args, "run", 2);
+    assert_eq!(output.trim(), "FAIL: unimplemented operator 48");
+    assert!(status.error_encountered);
+    assert!(!status.should_exit_with_error());
+
+    let args = vec![
+        "run".to_string(),
+        "--fail-on-error".to_string(),
+        "--operators-version".to_string(),
+        "0".to_string(),
+        "(mod () (coinid (sha256 99) (sha256 99) 1))".to_string(),
+    ];
+    let (output, status) = launch_tool_output(&args, "run", 2);
+    assert_eq!(output.trim(), "FAIL: unimplemented operator 48");
+    assert!(status.should_exit_with_error());
+}
+
+#[test]
+fn fail_on_error_help_documents_historical_exit_status() {
+    let (run_help, run_status) =
+        launch_tool_output(&vec!["run".to_string(), "--help".to_string()], "run", 2);
+    let (brun_help, brun_status) =
+        launch_tool_output(&vec!["brun".to_string(), "--help".to_string()], "brun", 0);
+
+    let help_text = "Exit with status 1 if an error is encountered. Without this flag, the program exits with status 0 even on errors for historical reasons.";
+    assert!(run_help.contains("--fail-on-error"));
+    assert!(run_help.contains(help_text));
+    assert!(brun_help.contains("--fail-on-error"));
+    assert!(brun_help.contains(help_text));
+    assert!(!run_status.error_encountered);
+    assert!(!brun_status.error_encountered);
+}
+
+#[test]
+fn cldb_fail_on_error_status_is_opt_in() {
+    let args = vec!["cldb".to_string(), "(mod".to_string()];
+    let status = cldb(&args);
+    assert!(status.error_encountered);
+    assert!(!status.should_exit_with_error());
+
+    let args = vec![
+        "cldb".to_string(),
+        "--fail-on-error".to_string(),
+        "(mod".to_string(),
+    ];
+    let status = cldb(&args);
+    assert!(status.should_exit_with_error());
 }
 
 #[test]
