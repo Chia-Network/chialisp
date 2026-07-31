@@ -2810,3 +2810,33 @@ fn test_equivalence_smoke_modern_neoclassic() {
         assert_eq!(output_neo.trim(), output_modern.trim());
     }
 }
+
+#[test]
+fn test_equivalence_smoke_if_macro_modern_neoclassic() {
+    let program_neo = indoc! {"
+(mod (A)
+  (include *standard-cl-26-classic*)
+
+  (if A (* A 2) (+ A 1))
+  )
+    "}
+    .to_string();
+
+    let program_modern = program_neo.replace("cl-26-classic", "cl-26").to_string();
+    let clvm_modern = do_basic_run(&vec!["run".to_string(), program_modern.to_string()]);
+    let clvm_neo = do_basic_run(&vec!["run".to_string(), program_neo.to_string()]);
+
+    for a in 0..2 {
+        let brun_arg = format!("({a})");
+        let output_modern = do_basic_brun(&vec![
+            "brun".to_string(),
+            clvm_modern.to_string(),
+            brun_arg.to_string(),
+        ]);
+        let expected = if a == 0 { 1 } else { a * 2 }.to_string();
+        assert_eq!(output_modern.trim(), expected);
+
+        let output_neo = do_basic_brun(&vec!["brun".to_string(), clvm_neo.to_string(), brun_arg]);
+        assert_eq!(output_neo.trim(), output_modern.trim());
+    }
+}
