@@ -360,10 +360,26 @@ fn test_classic_codegen_mandelbrot() {
         .replace("*standard-cl-21*", "*standard-cl-26-classic*");
     let mut allocator = Allocator::new();
     let runner = Rc::new(DefaultProgramRunner::new());
-    let opts = Rc::new(DefaultCompilerOpts::new(input_file)).set_optimize(false);
+    let cldb_opts = Rc::new(DefaultCompilerOpts::new(input_file)).set_optimize(false);
     let mut symbols = HashMap::new();
-    let program = compile_file(&mut allocator, runner, opts, &input_program, &mut symbols)
-        .expect("should compile");
+    let cldb_program = compile_file(
+        &mut allocator,
+        runner.clone(),
+        cldb_opts,
+        &input_program,
+        &mut symbols,
+    )
+    .expect("cldb should compile");
+    let run_opts = Rc::new(DefaultCompilerOpts::new(input_file)).set_optimize(true);
+    let run_program = compile_file(
+        &mut allocator,
+        runner,
+        run_opts,
+        &input_program,
+        &mut HashMap::new(),
+    )
+    .expect("run should compile");
+    assert_eq!(cldb_program.to_sexp(), run_program.to_sexp());
     let args = parse_sexp(Srcloc::start("*args*"), "(-192 -128 -144 -96 8)".bytes())
         .expect("should parse args")[0]
         .clone();
@@ -373,7 +389,7 @@ fn test_classic_codegen_mandelbrot() {
         run_clvm_in_cldb(
             input_file,
             program_lines,
-            Rc::new(program.to_sexp()),
+            Rc::new(cldb_program.to_sexp()),
             symbols,
             args,
             &mut DoesntWatchCldb {},
