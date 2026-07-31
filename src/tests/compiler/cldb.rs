@@ -360,7 +360,9 @@ fn test_classic_codegen_mandelbrot() {
         .replace("*standard-cl-21*", "*standard-cl-26-classic*");
     let mut allocator = Allocator::new();
     let runner = Rc::new(DefaultProgramRunner::new());
-    let cldb_opts = Rc::new(DefaultCompilerOpts::new(input_file)).set_optimize(false);
+    // The run and cldb commands both enable frontend optimization for
+    // stepping dialects newer than 22.
+    let cldb_opts = Rc::new(DefaultCompilerOpts::new(input_file)).set_optimize(true);
     let mut symbols = HashMap::new();
     let cldb_program = compile_file(
         &mut allocator,
