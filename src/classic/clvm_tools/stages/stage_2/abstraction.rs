@@ -8,7 +8,7 @@ use clvm_rs::error::EvalErr;
 use crate::classic::clvm_tools::binutils::disassemble;
 use crate::compiler::sexp::SExp as ModernSExp;
 use crate::compiler::srcloc::Srcloc;
-use crate::util::u8_from_number;
+use crate::util::{number_from_u8, u8_from_number};
 
 pub enum ASExp<T> {
     Pair(T, T),
@@ -244,8 +244,18 @@ impl ClassicAllocator for SExpClassicAllocator {
             .allocator
             .new_atom(value)
             .map_err(|e| ClError(loc.clone(), e))?;
+        let sexp = if value.is_empty() {
+            ModernSExp::Nil(loc)
+        } else {
+            let integer = number_from_u8(value);
+            if u8_from_number(integer.clone()) == value {
+                ModernSExp::Integer(loc, integer)
+            } else {
+                ModernSExp::Atom(loc, value.to_vec())
+            }
+        };
         Ok(SExpNode {
-            sexp: Rc::new(ModernSExp::Atom(loc, value.to_vec())),
+            sexp: Rc::new(sexp),
             raw,
         })
     }
@@ -269,10 +279,16 @@ impl ClassicAllocator for SExpClassicAllocator {
     fn import(&mut self, loc: Srcloc, node: NodePtr) -> Result<Self::NodePtr, ClError> {
         let sexp = match self.allocator.sexp(node) {
             SExp::Atom if node == NodePtr::NIL => Rc::new(ModernSExp::Nil(loc)),
-            SExp::Atom => Rc::new(ModernSExp::Atom(
-                loc,
-                self.allocator.atom(node).as_ref().to_vec(),
-            )),
+            SExp::Atom => {
+                let value = self.allocator.atom(node);
+                let value = value.as_ref();
+                let integer = number_from_u8(value);
+                if u8_from_number(integer.clone()) == value {
+                    Rc::new(ModernSExp::Integer(loc, integer))
+                } else {
+                    Rc::new(ModernSExp::Atom(loc, value.to_vec()))
+                }
+            }
             SExp::Pair(first, rest) => {
                 let first = self.import(loc.clone(), first)?;
                 let rest = self.import(loc.clone(), rest)?;
