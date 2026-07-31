@@ -358,19 +358,28 @@ fn test_classic_codegen_mandelbrot() {
     let input_program = fs::read_to_string(input_file)
         .expect("test resource should exist")
         .replace("*standard-cl-21*", "*standard-cl-26-classic*");
-    let result = compile_and_run_program_with_tree(
-        input_file,
-        &input_program,
-        "(-192 -128 -144 -96 8)",
-        &vec![],
-        0,
-    );
+    let mut allocator = Allocator::new();
+    let runner = Rc::new(DefaultProgramRunner::new());
+    let opts = Rc::new(DefaultCompilerOpts::new(input_file)).set_optimize(false);
+    let mut symbols = HashMap::new();
+    let program = compile_file(&mut allocator, runner, opts, &input_program, &mut symbols)
+        .expect("should compile");
+    let args = parse_sexp(Srcloc::start("*args*"), "(-192 -128 -144 -96 8)".bytes())
+        .expect("should parse args")[0]
+        .clone();
+    let program_lines = Rc::new(input_program.lines().map(str::to_string).collect());
 
     assert_eq!(
-        result.last().and_then(|entry| entry.get("Final")),
-        Some(&YamlElement::String(
-            "3356114000950459963475899699747220812557867594760040767593731831711045".to_string()
-        ))
+        run_clvm_in_cldb(
+            input_file,
+            program_lines,
+            Rc::new(program.to_sexp()),
+            symbols,
+            args,
+            &mut DoesntWatchCldb {},
+            0,
+        ),
+        Some("3356114000950459963475899699747220812557867594760040767593731831711045".to_string())
     );
 }
 
