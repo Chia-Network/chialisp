@@ -2775,3 +2775,28 @@ fn test_big_env_program_overflow_and_fix() {
         program_from_earlier_chialisp_hex.trim()
     );
 }
+
+#[test]
+fn test_equivalence_smoke_modern_neoclassic() {
+    let program_neo = indoc! {"
+(mod (A)
+  (include *standard-cl-26-classic*)
+
+  (let ((B (+ A 1))) (* B A))
+  )
+    "}.to_string();
+
+    let program_modern = program_neo.replace("cl-26-classic", "cl26").to_string();
+    let clvm_modern = do_basic_run(&vec!["run".to_string(), program_modern.to_string()]);
+    let clvm_neo = do_basic_run(&vec!["run".to_string(), program_neo.to_string()]);
+
+    for a in 0..12 {
+        let brun_arg = format!("({a})");
+        let output_modern = do_basic_brun(&vec!["brun".to_string(), clvm_modern.to_string(), brun_arg.to_string()]);
+        let b = a + 1;
+        assert_eq!(output_modern.trim(), (a * b).to_string());
+
+        let output_neo = do_basic_brun(&vec!["brun".to_string(), clvm_neo.to_string(), brun_arg]);
+        assert_eq!(output_neo.trim(), output_modern.trim());
+    }
+}

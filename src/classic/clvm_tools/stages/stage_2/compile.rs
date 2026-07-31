@@ -795,7 +795,6 @@ fn do_com_prog_<A: ClassicAllocator>(
 where
     A::NodePtr: Clone,
 {
-    eprintln!("do_com_prog {}", allocator.disassemble(prog_, None));
     /*
      * Turn the given program `prog` into a clvm program using
      * the macros to do transformation.

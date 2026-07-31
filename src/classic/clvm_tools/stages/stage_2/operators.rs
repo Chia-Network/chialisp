@@ -505,12 +505,6 @@ impl Dialect for CompilerOperatorsInternal {
         // compiler doesn't itself run in a softfork.
         let extensions_to_clvmr_during_compile = self.get_operators_extension();
 
-        eprintln!(
-            "op {} for {}",
-            disassemble(allocator, op, None),
-            disassemble(allocator, sexp, None)
-        );
-
         match allocator.sexp(op) {
             SExp::Atom => {
                 // use of op obvious.
