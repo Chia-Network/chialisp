@@ -1720,7 +1720,11 @@ pub fn process_helper_let_bindings(
     while i < result.len() {
         match result[i].clone() {
             HelperForm::Defun(inline, defun) => {
-                let context = if inline {
+                // Let helpers take the enclosing function's argument tree as
+                // their first argument. Classic codegen exposes function
+                // arguments directly via @*env*, so reconstruct that tree at
+                // the call site even for non-inline functions.
+                let context = if inline || opts.dialect().classic_codegen {
                     Some(defun.args.clone())
                 } else {
                     None

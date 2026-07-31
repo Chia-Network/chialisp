@@ -353,6 +353,28 @@ fn test_cldb_hierarchy_mode() {
 }
 
 #[test]
+fn test_classic_codegen_mandelbrot() {
+    let input_file = "resources/tests/mandelbrot/mandelbrot.clsp";
+    let input_program = fs::read_to_string(input_file)
+        .expect("test resource should exist")
+        .replace("*standard-cl-21*", "*standard-cl-26-classic*");
+    let result = compile_and_run_program_with_tree(
+        input_file,
+        &input_program,
+        "(-192 -128 -144 -96 8)",
+        &vec![],
+        0,
+    );
+
+    assert_eq!(
+        result.last().and_then(|entry| entry.get("Final")),
+        Some(&YamlElement::String(
+            "3356114000950459963475899699747220812557867594760040767593731831711045".to_string()
+        ))
+    );
+}
+
+#[test]
 fn test_execute_program_and_capture_arguments() {
     let compiled_symbols_text =
         fs::read_to_string("resources/tests/cldb_tree/pool_member_innerpuz_extra.sym")
