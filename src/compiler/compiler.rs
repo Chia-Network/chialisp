@@ -35,7 +35,7 @@ use crate::compiler::comptypes::{
 use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
 use crate::compiler::frontend::frontend;
 use crate::compiler::optimize::depgraph::{DepgraphOptions, FunctionDependencyGraph};
-use crate::compiler::optimize::get_optimizer;
+use crate::compiler::optimize::{expand_com_forms, get_optimizer};
 use crate::compiler::preprocessor::detect_chialisp_module;
 use crate::compiler::prims;
 use crate::compiler::resolve::{find_helper_target, resolve_namespaces};
@@ -166,7 +166,12 @@ pub fn finish_compilation(
     p2: CompileForm,
 ) -> Result<SExp, CompileErr> {
     if opts.dialect().classic_codegen {
-        return classic_codegen(opts, p2);
+        let mut modern_dialect = opts.dialect();
+        modern_dialect.classic_codegen = false;
+        let modern_opts = opts.set_dialect(modern_dialect);
+        let optimized = context.post_desugar_optimization(modern_opts.clone(), p2)?;
+        let expanded = expand_com_forms(context, modern_opts, optimized)?;
+        return classic_codegen(opts, expanded);
     }
 
     let p3 = context.post_desugar_optimization(opts.clone(), p2)?;
@@ -238,11 +243,7 @@ pub fn compile_from_compileform(
     opts: Rc<dyn CompilerOpts>,
     p0: CompileForm,
 ) -> Result<SExp, CompileErr> {
-    let p1 = if opts.dialect().classic_codegen {
-        p0
-    } else {
-        context.frontend_optimization(opts.clone(), p0)?
-    };
+    let p1 = context.frontend_optimization(opts.clone(), p0)?;
 
     // Resolve includes, convert program source to lexemes
     let p2 = do_desugar(opts.clone(), &p1)?;
@@ -816,7 +817,14 @@ pub fn compile_pre_forms(
         opts = opts.set_stdenv(dialect.strict).set_dialect(dialect);
     }
 
-    let p0 = frontend(opts.clone(), pre_forms)?;
+    let frontend_opts = if opts.dialect().classic_codegen {
+        let mut modern_dialect = opts.dialect();
+        modern_dialect.classic_codegen = false;
+        opts.set_dialect(modern_dialect)
+    } else {
+        opts.clone()
+    };
+    let p0 = frontend(frontend_opts, pre_forms)?;
 
     match p0 {
         FrontendOutput::CompileForm(p0) => Ok(CompilerOutput::Program(

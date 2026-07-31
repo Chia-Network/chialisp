@@ -639,6 +639,8 @@ fn fe_opt(
     context: &mut BasicCompileContext,
     opts: Rc<dyn CompilerOpts>,
     compileform: CompileForm,
+    only_inline: bool,
+    use_main_env: bool,
 ) -> Result<CompileForm, CompileErr> {
     let runner = context.runner();
     let evaluator = Evaluator::new(opts.clone(), runner.clone(), compileform.helpers.clone());
@@ -671,13 +673,20 @@ fn fe_opt(
         }
     }
     let new_evaluator = Evaluator::new(opts.clone(), runner.clone(), optimized_helpers.clone());
+    let mut main_env = HashMap::new();
+    let main_args = if use_main_env {
+        build_reflex_captures(&mut main_env, compileform.args.clone());
+        compileform.args.clone()
+    } else {
+        Rc::new(SExp::Nil(compileform.args.loc()))
+    };
 
     let shrunk = new_evaluator.shrink_bodyform(
         context,
-        Rc::new(SExp::Nil(compileform.args.loc())),
-        &HashMap::new(),
+        main_args,
+        &main_env,
         compileform.exp.clone(),
-        true,
+        only_inline,
         Some(EVAL_STACK_LIMIT),
     )?;
 
@@ -686,6 +695,16 @@ fn fe_opt(
         exp: shrunk,
         ..compileform
     })
+}
+
+/// Expand compiler forms using the modern evaluator before handing a program to
+/// a backend that does not implement modern compiler-form semantics.
+pub fn expand_com_forms(
+    context: &mut BasicCompileContext,
+    opts: Rc<dyn CompilerOpts>,
+    compileform: CompileForm,
+) -> Result<CompileForm, CompileErr> {
+    fe_opt(context, opts, compileform, true, true)
 }
 
 pub fn run_optimizer(
