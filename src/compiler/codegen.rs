@@ -1575,7 +1575,7 @@ pub fn hoist_body_let_binding(
                 }));
             }
             let generated_defun = generate_let_defun(
-                opts,
+                opts.clone(),
                 letdata.loc.clone(),
                 None,
                 &defun_name,
@@ -1590,6 +1590,14 @@ pub fn hoist_body_let_binding(
             let pass_env = outer_context
                 .map(create_let_env_expression)
                 .unwrap_or_else(|| {
+                    // Modern codegen wraps the module arguments in its function
+                    // environment. Classic stage 2 exposes them directly.
+                    if opts.dialect().classic_codegen {
+                        return BodyForm::Value(SExp::Atom(
+                            letdata.loc.clone(),
+                            "@*env*".as_bytes().to_vec(),
+                        ));
+                    }
                     BodyForm::Call(
                         letdata.loc.clone(),
                         vec![

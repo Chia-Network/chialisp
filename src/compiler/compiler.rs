@@ -15,7 +15,7 @@ use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
 use crate::classic::clvm_tools::ir::r#type::NEW_BIT_CONSTANTS;
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 use crate::classic::clvm_tools::stages::stage_2::abstraction::{
-    ClassicAllocator, SExpClassicAllocator,
+    ASExp, BufCarrier, ClassicAllocator, SExpClassicAllocator,
 };
 use crate::classic::clvm_tools::stages::stage_2::defaults::default_macro_lookup;
 use crate::classic::clvm_tools::stages::stage_2::module::compile_mod;
@@ -216,6 +216,19 @@ fn classic_codegen(opts: Rc<dyn CompilerOpts>, program: CompileForm) -> Result<S
     .map_err(|e| CompileErr(e.0, e.1.to_string()))?;
     let optimized = optimize_sexp(&mut allocator, &generated, runner)
         .map_err(|e| CompileErr(e.0, e.1.to_string()))?;
+
+    // compile_mod produces a compiler program. Optimizing the primary module
+    // evaluates that program and quotes the resulting CLVM as constant data.
+    // Included modules still need the quote while they are being compiled.
+    if opts.module_phase().is_none() && program.loc.file.as_str() == opts.filename() {
+        if let ASExp::Pair(operator, compiled) = allocator.sexp(&optimized) {
+            if matches!(allocator.sexp(&operator), ASExp::Atom)
+                && allocator.atom(&operator).as_ref() == [1]
+            {
+                return Ok(compiled.sexp.as_ref().clone());
+            }
+        }
+    }
 
     Ok(optimized.sexp.as_ref().clone())
 }
