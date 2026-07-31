@@ -2840,3 +2840,12 @@ fn test_equivalence_smoke_if_macro_modern_neoclassic() {
         assert_eq!(output_neo.trim(), output_modern.trim());
     }
 }
+
+#[test]
+fn test_equivalence_mandelbrot_classic() {
+    let program = fs::read_to_string("resources/tests/mandelbrot/mandelbrot.clsp").unwrap();
+    let classic = program.replace("cl-21", "cl-26-classic").to_string();
+    let mandelbrot_clvm = do_basic_run(&vec!["run".to_string(), classic.to_string()]);
+    let mandelbrot_smoke_run = do_basic_brun(&vec!["brun".to_string(), mandelbrot_clvm, "(16 16 32 32 16)".to_string()]);
+    assert_eq!(mandelbrot_smoke_run.trim(), "||E");
+}
