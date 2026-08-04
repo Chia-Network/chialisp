@@ -323,22 +323,68 @@ impl ArgumentValueConv for OperatorsVersion {
     }
 }
 
-pub fn run(args: &[String]) {
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ToolRunStatus {
+    pub error_encountered: bool,
+    pub fail_on_error: bool,
+}
+
+impl ToolRunStatus {
+    pub fn new(error_encountered: bool, fail_on_error: bool) -> Self {
+        ToolRunStatus {
+            error_encountered,
+            fail_on_error,
+        }
+    }
+
+    pub fn ok(fail_on_error: bool) -> Self {
+        ToolRunStatus::new(false, fail_on_error)
+    }
+
+    pub fn error(fail_on_error: bool) -> Self {
+        ToolRunStatus::new(true, fail_on_error)
+    }
+
+    pub fn should_exit_with_error(&self) -> bool {
+        self.error_encountered && self.fail_on_error
+    }
+}
+
+const FAIL_ON_ERROR_HELP: &str = "Exit with status 1 if an error is encountered. Without this flag, the program exits with status 0 even on errors for historical reasons.";
+
+fn fail_on_error_arg_present(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--fail-on-error")
+}
+
+fn help_arg_present(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "-h" || arg == "--help")
+}
+
+fn fail_on_error_enabled(parsed_args: &HashMap<String, ArgumentValue>) -> bool {
+    parsed_args
+        .get("fail_on_error")
+        .map(|a| matches!(a, ArgumentValue::ArgBool(true)))
+        .unwrap_or(false)
+}
+
+pub fn run(args: &[String]) -> ToolRunStatus {
     let mut s = Stream::new(None);
-    launch_tool(&mut s, args, "run", 2);
+    let status = launch_tool(&mut s, args, "run", 2);
     io::stdout()
         .write_all(s.get_value().data())
         .expect("stdout");
     io::stdout().flush().expect("stdout");
+    status
 }
 
-pub fn brun(args: &[String]) {
+pub fn brun(args: &[String]) -> ToolRunStatus {
     let mut s = Stream::new(None);
-    launch_tool(&mut s, args, "brun", 0);
+    let status = launch_tool(&mut s, args, "brun", 0);
     if let Err(e) = io::stdout().write_all(s.get_value().data()) {
         println!("{e}")
     }
     io::stdout().flush().expect("stdout");
+    status
 }
 
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
@@ -403,7 +449,12 @@ pub struct CldbHierarchyArgs {
     pub flags: u32,
 }
 
-pub fn cldb_hierarchy(args: CldbHierarchyArgs) -> Vec<BTreeMap<String, YamlElement>> {
+struct CldbHierarchyStatus {
+    output: Vec<BTreeMap<String, YamlElement>>,
+    error_encountered: bool,
+}
+
+fn cldb_hierarchy_with_status(args: CldbHierarchyArgs) -> CldbHierarchyStatus {
     let mut runner = HierarchialRunner::new(
         args.runner,
         args.prim_map,
@@ -417,6 +468,7 @@ pub fn cldb_hierarchy(args: CldbHierarchyArgs) -> Vec<BTreeMap<String, YamlEleme
     runner.set_flags(args.flags);
 
     let mut output_stack = vec![Vec::new()];
+    let mut error_encountered = false;
 
     loop {
         if runner.is_ended() {
@@ -500,10 +552,12 @@ pub fn cldb_hierarchy(args: CldbHierarchyArgs) -> Vec<BTreeMap<String, YamlEleme
                 // Nothing
             }
             Err(RunFailure::RunErr(l, e)) => {
+                error_encountered = true;
                 println!("Runtime Error: {l}: {e}");
                 break;
             }
             Err(RunFailure::RunExn(l, e)) => {
+                error_encountered = true;
                 println!("Raised exception: {l}: {e}");
                 break;
             }
@@ -513,10 +567,17 @@ pub fn cldb_hierarchy(args: CldbHierarchyArgs) -> Vec<BTreeMap<String, YamlEleme
     // Move out of output_stack nicely.
     let mut result = Vec::new();
     swap(&mut result, &mut output_stack[0]);
-    result
+    CldbHierarchyStatus {
+        output: result,
+        error_encountered,
+    }
 }
 
-pub fn cldb(args: &[String]) {
+pub fn cldb_hierarchy(args: CldbHierarchyArgs) -> Vec<BTreeMap<String, YamlElement>> {
+    cldb_hierarchy_with_status(args).output
+}
+
+pub fn cldb(args: &[String]) -> ToolRunStatus {
     let mut allocator = Allocator::new();
     let mut output = Vec::new();
 
@@ -572,6 +633,12 @@ pub fn cldb(args: &[String]) {
             .set_help("new style hierarchial view of function calls and args".to_string()),
     );
     parser.add_argument(
+        vec!["--fail-on-error".to_string()],
+        Argument::new()
+            .set_action(TArgOptionAction::StoreTrue)
+            .set_help(FAIL_ON_ERROR_HELP.to_string()),
+    );
+    parser.add_argument(
         vec!["path_or_code".to_string()],
         Argument::new()
             .set_type(Rc::new(PathOrCodeConv {}))
@@ -585,6 +652,8 @@ pub fn cldb(args: &[String]) {
             .set_help("clvm script environment, as clvm src, or hex".to_string()),
     );
     let arg_vec = args[1..].to_vec();
+    let raw_fail_on_error = fail_on_error_arg_present(&arg_vec);
+    let raw_help = help_arg_present(&arg_vec);
 
     let prog_srcloc = Srcloc::start("*program*");
     let args_srcloc = Srcloc::start("*args*");
@@ -606,10 +675,11 @@ pub fn cldb(args: &[String]) {
     let parsed_args: HashMap<String, ArgumentValue> = match parser.parse_args(&arg_vec) {
         Err(e) => {
             println!("FAIL: {e}");
-            return;
+            return ToolRunStatus::new(!raw_help, raw_fail_on_error);
         }
         Ok(pa) => pa,
     };
+    let fail_on_error = fail_on_error_enabled(&parsed_args);
 
     let symbol_table = parsed_args
         .get("symbol_table")
@@ -626,7 +696,7 @@ pub fn cldb(args: &[String]) {
         Ok(r) => r,
         Err(e) => {
             println!("FAIL: {e}");
-            return;
+            return ToolRunStatus::error(fail_on_error);
         }
     };
 
@@ -652,7 +722,7 @@ pub fn cldb(args: &[String]) {
         Ok(r) => r,
         Err(c) => {
             errorize(&mut output, Some(c.0.clone()), &c.1);
-            return;
+            return ToolRunStatus::error(fail_on_error);
         }
     };
 
@@ -671,7 +741,7 @@ pub fn cldb(args: &[String]) {
                     parse_error.insert("Error".to_string(), YamlElement::String(p.to_string()));
                     output.push(parse_error.clone());
                     println!("{}", yamlette_string(&output));
-                    return;
+                    return ToolRunStatus::error(fail_on_error);
                 }
             }
         }
@@ -693,7 +763,7 @@ pub fn cldb(args: &[String]) {
                 parse_error.insert("Error".to_string(), YamlElement::String(c.1));
                 output.push(parse_error.clone());
                 println!("{}", yamlette_string(&output));
-                return;
+                return ToolRunStatus::error(fail_on_error);
             }
         },
     };
@@ -717,7 +787,7 @@ pub fn cldb(args: &[String]) {
     );
 
     if parsed_args.contains_key("tree") {
-        let result = cldb_hierarchy(CldbHierarchyArgs {
+        let result = cldb_hierarchy_with_status(CldbHierarchyArgs {
             runner,
             prim_map: Rc::new(prim_map),
             input_file_name: parsed.program.path.clone(),
@@ -729,9 +799,9 @@ pub fn cldb(args: &[String]) {
         });
 
         // Print the tree
-        let string_result = yamlette_string(&result);
+        let string_result = yamlette_string(&result.output);
         println!("{string_result}");
-        return;
+        return ToolRunStatus::new(result.error_encountered, fail_on_error);
     }
 
     let step = start_step(program, env);
@@ -749,14 +819,18 @@ pub fn cldb(args: &[String]) {
     };
 
     cldbrun.set_print_only(only_print);
+    let mut error_encountered = false;
 
     loop {
         if cldbrun.is_ended() {
             println!("{}", yamlette_string(&output));
-            return;
+            return ToolRunStatus::new(error_encountered, fail_on_error);
         }
 
         if let Some(result) = cldbrun.step(&mut allocator) {
+            if result.contains_key("Throw") || result.contains_key("Failure") {
+                error_encountered = true;
+            }
             if only_print {
                 if let Some(p) = result.get("Print") {
                     let mut only_print = BTreeMap::new();
@@ -908,7 +982,12 @@ fn perform_preprocessing(
     Ok(())
 }
 
-pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, default_stage: u32) {
+pub fn launch_tool(
+    stdout: &mut Stream,
+    args: &[String],
+    tool_name: &str,
+    default_stage: u32,
+) -> ToolRunStatus {
     let mut allocator = Allocator::new();
 
     let props = TArgumentParserProps {
@@ -953,6 +1032,12 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
         Argument::new()
             .set_action(TArgOptionAction::StoreTrue)
             .set_help("Print diagnostic table of reductions, for debugging".to_string()),
+    );
+    parser.add_argument(
+        vec!["--fail-on-error".to_string()],
+        Argument::new()
+            .set_action(TArgOptionAction::StoreTrue)
+            .set_help(FAIL_ON_ERROR_HELP.to_string()),
     );
     parser.add_argument(
         vec!["-c".to_string(), "--cost".to_string()],
@@ -1079,25 +1164,28 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
     }
 
     let arg_vec = args[1..].to_vec();
+    let raw_fail_on_error = fail_on_error_arg_present(&arg_vec);
+    let raw_help = help_arg_present(&arg_vec);
     let parsed_args: HashMap<String, ArgumentValue> = match parser.parse_args(&arg_vec) {
         Err(e) => {
             stdout.write_str(&format!("FAIL: {e}\n"));
-            return;
+            return ToolRunStatus::new(!raw_help, raw_fail_on_error);
         }
         Ok(pa) => pa,
     };
+    let fail_on_error = fail_on_error_enabled(&parsed_args);
 
     if parsed_args.contains_key("version") {
         let version = version();
         println!("{version}");
-        return;
+        return ToolRunStatus::ok(fail_on_error);
     }
 
     let parsed = match RunAndCompileInputData::new(&mut allocator, &parsed_args) {
         Ok(r) => r,
         Err(e) => {
             stdout.write_str(&format!("FAIL: {e}\n"));
-            return;
+            return ToolRunStatus::error(fail_on_error);
         }
     };
 
@@ -1123,11 +1211,13 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
         parsed_args.get("dependencies"),
         parsed_args.get("path_or_code"),
     ) {
+        let mut error_encountered = false;
         if let Some(filename) = &file {
             let opts = DefaultCompilerOpts::new(filename).set_search_paths(&parsed.search_paths);
 
             match gather_dependencies(opts, filename, file_content) {
                 Err(e) => {
+                    error_encountered = true;
                     stdout.write_str(&format!("{}: {}\n", e.0, e.1));
                 }
                 Ok(res) => {
@@ -1139,8 +1229,9 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
             }
         } else {
             stdout.write_str("FAIL: must specify a filename\n");
+            return ToolRunStatus::error(fail_on_error);
         }
-        return;
+        return ToolRunStatus::new(error_encountered, fail_on_error);
     }
 
     let special_runner = run_program_for_search_paths(
@@ -1214,12 +1305,12 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
             Ok((success, output)) => {
                 stderr_output(output);
                 if !success {
-                    return;
+                    return ToolRunStatus::error(fail_on_error);
                 }
             }
             Err(e) => {
                 stderr_output(format!("{}: {}\n", e.0, e.1));
-                return;
+                return ToolRunStatus::error(fail_on_error);
             }
         }
     }
@@ -1235,8 +1326,9 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
                 &parsed.program.content,
             ) {
                 stdout.write_str(&format!("{}: {}", e.0, e.1));
+                return ToolRunStatus::error(fail_on_error);
             }
-            return;
+            return ToolRunStatus::ok(fail_on_error);
         }
 
         let mut symbol_table = HashMap::new();
@@ -1253,6 +1345,7 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
                 Ok(r)
             });
 
+        let error_encountered = res.is_err();
         match res {
             Ok(r) => {
                 stdout.write_str(&r.to_string());
@@ -1261,7 +1354,7 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
                 stdout.write_str(&format!("{}: {}", c.0, c.1));
             }
         }
-        return;
+        return ToolRunStatus::new(error_encountered, fail_on_error);
     }
 
     let mut pre_eval_f: Option<PreEval> = None;
@@ -1471,6 +1564,7 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
             run_output
         });
 
+    let error_encountered = res.is_err();
     let output = collapse(res.map_err(|ex| {
         format!(
             "FAIL: {} {}",
@@ -1534,6 +1628,7 @@ pub fn launch_tool(stdout: &mut Stream, args: &[String], tool_name: &str, defaul
             );
         }
     }
+    ToolRunStatus::new(error_encountered, fail_on_error)
 }
 
 /*

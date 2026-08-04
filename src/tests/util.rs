@@ -1,4 +1,6 @@
 use rand::prelude::*;
+use rand::TryRng;
+use rand_core::Infallible;
 use std::collections::HashSet;
 
 use crate::util::toposort;
@@ -113,22 +115,23 @@ impl RngLFSR {
     }
 }
 
-impl RngCore for RngLFSR {
-    fn next_u32(&mut self) -> u32 {
+impl TryRng for RngLFSR {
+    type Error = Infallible;
+    fn try_next_u32(&mut self) -> Result<u32, Infallible> {
         let a = self.next();
         let b = self.next();
-        (a << 16) | b
+        Ok((a << 16) | b)
     }
 
-    fn next_u64(&mut self) -> u64 {
+    fn try_next_u64(&mut self) -> Result<u64, Infallible> {
         let a = self.next_u32() as u64;
         let b = self.next_u32() as u64;
-        (a << 32) | b
+        Ok((a << 32) | b)
     }
 
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Infallible> {
         if dest.is_empty() {
-            return;
+            return Ok(());
         }
 
         for i in 0..(dest.len() / 2) {
@@ -141,5 +144,7 @@ impl RngCore for RngLFSR {
             let a = self.next();
             dest[dest.len() - 1] = (a & 0xff) as u8;
         }
+
+        Ok(())
     }
 }

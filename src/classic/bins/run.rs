@@ -3,5 +3,8 @@ use std::env;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    run(&args);
+    let status = run(&args);
+    if status.should_exit_with_error() {
+        std::process::exit(1);
+    }
 }
