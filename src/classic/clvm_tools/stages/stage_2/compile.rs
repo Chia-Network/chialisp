@@ -21,7 +21,7 @@ use crate::classic::clvm_tools::stages::stage_2::helpers::{brun, evaluate, quote
 use crate::classic::clvm_tools::stages::stage_2::module::compile_mod;
 use crate::compiler::srcloc::Srcloc;
 
-const DIAG_OUTPUT: bool = false;
+const DIAG_OUTPUT: bool = true;
 
 lazy_static! {
     static ref PASS_THROUGH_OPERATORS: HashSet<Vec<u8>> = {
@@ -369,7 +369,7 @@ where
     let top_path = allocator.new_atom(loc, NodePath::new(None).as_path().data())?;
     evaluate(allocator, &to_eval, &top_path).inspect(|x| {
         if DIAG_OUTPUT {
-            print!(
+            println!(
                 "TRY_EXPAND_MACRO {} WITH {} GIVES {} MACROS {} SYMBOLS {}",
                 allocator.disassemble(macro_code, None),
                 allocator.disassemble(prog_rest, None),
@@ -764,7 +764,7 @@ where
 {
     if DIAG_OUTPUT {
         println!(
-            "START COMPILE {}: {} MACRO {} SYMBOLS {}",
+            "START COMPILE {}: {}\nMACRO {}\nSYMBOLS {}",
             from,
             allocator.disassemble(prog, None),
             allocator.disassemble(macro_lookup, None),
@@ -774,7 +774,7 @@ where
     do_com_prog_(allocator, prog, macro_lookup, symbol_table, run_program).inspect(|x| {
         if DIAG_OUTPUT {
             println!(
-                "DO_COM_PROG {}: {} MACRO {} SYMBOLS {} RESULT {}",
+                "DO_COM_PROG {}: {}\nMACRO {}\nSYMBOLS {}\nRESULT {}",
                 from,
                 allocator.disassemble(prog, None),
                 allocator.disassemble(macro_lookup, None),

@@ -601,8 +601,10 @@ where
                 }
 
                 let main_local_arguments = alist[0].clone();
+                eprintln!("main_local_arguments {}", allocator.disassemble(&alist[0], None));
 
                 for arg in alist.iter().take(alist.len()-1).skip(1) {
+                    eprintln!("parse_mod_sexp {}", allocator.disassemble(arg, None));
                     parse_mod_sexp(
                         allocator,
                         arg,
@@ -1055,7 +1057,7 @@ pub fn compile_mod<A: ClassicAllocator>(
     allocator: &mut A,
     args: &A::NodePtr,
     macro_lookup: &A::NodePtr,
-    _symbol_table: &A::NodePtr,
+    symbol_table: &A::NodePtr,
     run_program: Rc<dyn TRunProgram>,
     _level: usize,
 ) -> Result<A::NodePtr, ClError>
@@ -1063,6 +1065,8 @@ where
     A::NodePtr: Clone,
 {
     // Deal with the "mod" keyword.
+    eprintln!("compile_mod {}", allocator.disassemble(args, None));
+    eprintln!("symbol_table {}", allocator.disassemble(symbol_table, None));
     let loc = allocator.loc(macro_lookup);
     let produce_extra_info_prog = assemble(allocator.allocator(), "(_symbols_extra_info)")
         .map_err(|e| ClError(loc.clone(), e))?;

@@ -697,16 +697,6 @@ fn fe_opt(
     })
 }
 
-/// Expand compiler forms using the modern evaluator before handing a program to
-/// a backend that does not implement modern compiler-form semantics.
-pub fn expand_com_forms(
-    context: &mut BasicCompileContext,
-    opts: Rc<dyn CompilerOpts>,
-    compileform: CompileForm,
-) -> Result<CompileForm, CompileErr> {
-    fe_opt(context, opts, compileform, true, true)
-}
-
 pub fn run_optimizer(
     allocator: &mut Allocator,
     runner: Rc<dyn TRunProgram>,

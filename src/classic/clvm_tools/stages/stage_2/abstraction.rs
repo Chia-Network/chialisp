@@ -6,6 +6,7 @@ use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::error::EvalErr;
 
 use crate::classic::clvm_tools::binutils::disassemble;
+use crate::classic::clvm::__type_compatibility__::bi_zero;
 use crate::compiler::sexp::SExp as ModernSExp;
 use crate::compiler::srcloc::Srcloc;
 use crate::util::{number_from_u8, u8_from_number};
@@ -174,10 +175,15 @@ impl SExpClassicAllocator {
                     .new_pair(first.raw, rest.raw)
                     .map_err(|e| self.map_err(loc.clone(), e))?
             }
-            ModernSExp::Integer(_, value) => self
-                .allocator
-                .new_atom(&u8_from_number(value.clone()))
-                .map_err(|e| self.map_err(loc.clone(), e))?,
+            ModernSExp::Integer(_, value) => {
+                if *value == bi_zero() {
+                    self.allocator.new_atom(&[])
+                } else {
+                    self
+                        .allocator
+                        .new_atom(&u8_from_number(value.clone()))
+                }.map_err(|e| self.map_err(loc.clone(), e))?
+            }
             ModernSExp::QuotedString(_, _, value) | ModernSExp::Atom(_, value) => self
                 .allocator
                 .new_atom(value)
