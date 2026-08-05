@@ -272,9 +272,8 @@ pub fn finish_compilation(
         let mut modern_dialect = opts.dialect();
         modern_dialect.classic_codegen = false;
         let modern_opts = opts.set_dialect(modern_dialect);
-        let p3 = context.post_desugar_optimization(modern_opts.clone(), p2)?;
-        let p4 = expand_com_forms(context, modern_opts, p3)?;
-        return classic_codegen(opts, p4);
+        let p3 = expand_com_forms(context, modern_opts, p2)?;
+        return classic_codegen(opts, p3);
     }
 
     let p3 = context.post_desugar_optimization(opts.clone(), p2)?;

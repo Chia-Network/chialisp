@@ -1306,6 +1306,9 @@ pub fn should_inline_let(
     opts: Rc<dyn CompilerOpts>,
     inline_hint: &Option<LetFormInlineHint>,
 ) -> bool {
+    if opts.dialect().classic_codegen {
+        return false;
+    }
     let match_none = opts.module_phase().is_none();
     let want_inline = matches!(inline_hint, Some(LetFormInlineHint::Inline(_)));
     want_inline || (match_none && inline_hint.is_none())
