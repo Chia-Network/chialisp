@@ -159,7 +159,6 @@ pub fn do_desugar(
 }
 
 pub fn expand_com_forms_expr(
-    context: &mut BasicCompileContext,
     opts: Rc<dyn CompilerOpts>,
     body: Rc<BodyForm>,
 ) -> Result<Rc<BodyForm>, CompileErr> {
@@ -186,11 +185,11 @@ pub fn expand_com_forms_expr(
 
         let mut call_args = vec![c[0].clone()];
         for item in c.iter().skip(1) {
-            call_args.push(expand_com_forms_expr(context, opts.clone(), item.clone())?);
+            call_args.push(expand_com_forms_expr(opts.clone(), item.clone())?);
         }
 
         let new_tail = if let Some(t) = &tail {
-            Some(expand_com_forms_expr(context, opts, t.clone())?)
+            Some(expand_com_forms_expr(opts, t.clone())?)
         } else {
             None
         };
@@ -208,7 +207,7 @@ fn expand_com_forms_helper(
 ) -> Result<HelperForm, CompileErr> {
     match helper {
         HelperForm::Defconstant(defconst) => Ok(HelperForm::Defconstant(DefconstData {
-            body: expand_com_forms_expr(context, opts, defconst.body.clone())?,
+            body: expand_com_forms_expr(opts, defconst.body.clone())?,
             ..defconst.clone()
         })),
         HelperForm::Defmacro(defmacro) => Ok(HelperForm::Defmacro(DefmacData {
@@ -222,7 +221,7 @@ fn expand_com_forms_helper(
         HelperForm::Defun(inline, defun) => Ok(HelperForm::Defun(
             *inline,
             Box::new(DefunData {
-                body: expand_com_forms_expr(context, opts, defun.body.clone())?,
+                body: expand_com_forms_expr(opts, defun.body.clone())?,
                 ..*defun.clone()
             }),
         )),
@@ -252,7 +251,7 @@ pub fn expand_com_forms(
         .iter()
         .map(|helper| expand_com_forms_helper(context, opts.clone(), helper))
         .collect::<Result<Vec<_>, _>>()?;
-    let exp = expand_com_forms_expr(context, opts, compileform.exp.clone())?;
+    let exp = expand_com_forms_expr(opts, compileform.exp.clone())?;
 
     Ok(CompileForm {
         helpers,

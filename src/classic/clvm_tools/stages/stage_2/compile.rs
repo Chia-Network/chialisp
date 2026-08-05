@@ -580,10 +580,15 @@ where
     Ok(None)
 }
 
+pub type SplitRestResult<A> = Option<(
+    Vec<<A as ClassicAllocator>::NodePtr>,
+    Option<<A as ClassicAllocator>::NodePtr>,
+)>;
+
 fn split_rest_tail<A: ClassicAllocator>(
     allocator: &A,
     args: &A::NodePtr,
-) -> Result<Option<(Vec<A::NodePtr>, Option<A::NodePtr>)>, ClError>
+) -> Result<SplitRestResult<A>, ClError>
 where
     A::NodePtr: Clone,
 {
