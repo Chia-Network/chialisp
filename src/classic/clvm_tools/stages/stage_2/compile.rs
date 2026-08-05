@@ -21,7 +21,7 @@ use crate::classic::clvm_tools::stages::stage_2::helpers::{brun, evaluate, quote
 use crate::classic::clvm_tools::stages::stage_2::module::compile_mod;
 use crate::compiler::srcloc::Srcloc;
 
-const DIAG_OUTPUT: bool = true;
+const DIAG_OUTPUT: bool = false;
 
 lazy_static! {
     static ref PASS_THROUGH_OPERATORS: HashSet<Vec<u8>> = {

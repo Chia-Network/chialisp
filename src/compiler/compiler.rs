@@ -1,6 +1,5 @@
 use num_bigint::ToBigInt;
 
-use std::sync::atomic::{AtomicI32, Ordering};
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -29,9 +28,9 @@ use crate::compiler::clvm::{convert_to_clvm_rs, run, sha256tree, NewStyleIntConv
 use crate::compiler::codegen::{codegen, hoist_body_let_binding, process_helper_let_bindings};
 use crate::compiler::comptypes::{
     BodyForm, CompileErr, CompileForm, CompileModuleComponent, CompileModuleOutput, CompilerOpts,
-    CompilerOutput, ConstantKind, DefunData, DefmacData, Export, FrontendOutput, HelperForm, ImportLongName,
-    IncludeDesc, IncludeProcessType, ModulePhase, PrimaryCodegen, StandalonePhaseInfo,
-    SyntheticType,
+    CompilerOutput, ConstantKind, DefconstData, DefmacData, DefunData, Export, FrontendOutput,
+    HelperForm, ImportLongName, IncludeDesc, IncludeProcessType, ModulePhase, NamespaceData,
+    PrimaryCodegen, StandalonePhaseInfo, SyntheticType,
 };
 use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
 use crate::compiler::frontend::frontend;
@@ -44,35 +43,6 @@ use crate::compiler::sexp::{decode_string, enlist, parse_sexp_flags, SExp};
 use crate::compiler::srcloc::Srcloc;
 use crate::compiler::{BasicCompileContext, CompileContextWrapper};
 use crate::util::Number;
-
-lazy_static! {
-    pub static ref INDENT: AtomicI32 = AtomicI32::new(0);
-}
-
-struct Indent;
-
-impl Indent {
-    fn new() -> Self {
-        INDENT.fetch_add(1, Ordering::Relaxed);
-        Indent
-    }
-}
-
-impl std::fmt::Display for Indent {
-    fn fmt(&self, fmt: &'_ mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-        let indent = INDENT.fetch_add(0, Ordering::Relaxed);
-        for i in 0..indent {
-            write!(fmt, "  ")?;
-        }
-        Ok(())
-    }
-}
-
-impl Drop for Indent {
-    fn drop(&mut self) {
-        INDENT.fetch_add(-1, Ordering::Relaxed);
-    }
-}
 
 pub const SHA256TREE_PROGRAM_CLVM: &str = "(2 (1 2 (3 (7 5) (1 11 (1 . 2) (2 2 (4 2 (4 9 ()))) (2 2 (4 2 (4 13 ())))) (1 11 (1 . 1) 5)) 1) (4 (1 2 (3 (7 5) (1 11 (1 . 2) (2 2 (4 2 (4 9 ()))) (2 2 (4 2 (4 13 ())))) (1 11 (1 . 1) 5)) 1) 1))";
 
@@ -193,42 +163,37 @@ pub fn expand_com_forms_expr(
     opts: Rc<dyn CompilerOpts>,
     body: Rc<BodyForm>,
 ) -> Result<Rc<BodyForm>, CompileErr> {
-    let indent = Indent::new();
     if let BodyForm::Call(l, c, tail) = &*body {
         if c.is_empty() {
             return Ok(body);
         }
 
         if let BodyForm::Value(atom) = &*c[0] {
-            if atom.atomize() == SExp::Atom(atom.loc(), b"com".to_vec()) {
-                // Is a com form.
-                eprintln!("{indent}com {}", c[1].to_sexp());
-                return Ok(Rc::new(BodyForm::Call(l.clone(), vec![
-                    Rc::new(BodyForm::Value(SExp::Atom(c[0].loc(), b"function".to_vec()))),
-                    c[1].clone(),
-                ], None)));
+            if c.len() == 2 && atom.atomize() == SExp::Atom(atom.loc(), b"com".to_vec()) {
+                return Ok(Rc::new(BodyForm::Call(
+                    l.clone(),
+                    vec![
+                        Rc::new(BodyForm::Value(SExp::Atom(
+                            c[0].loc(),
+                            b"function".to_vec(),
+                        ))),
+                        c[1].clone(),
+                    ],
+                    None,
+                )));
             }
         }
 
         let mut call_args = vec![c[0].clone()];
         for item in c.iter().skip(1) {
-            call_args.push(expand_com_forms_expr(
-                context,
-                opts.clone(),
-                item.clone()
-            )?);
+            call_args.push(expand_com_forms_expr(context, opts.clone(), item.clone())?);
         }
 
-        let new_tail =
-            if let Some(t) = &tail {
-                Some(expand_com_forms_expr(
-                    context,
-                    opts,
-                    t.clone()
-                )?)
-            } else {
-                None
-            };
+        let new_tail = if let Some(t) = &tail {
+            Some(expand_com_forms_expr(context, opts, t.clone())?)
+        } else {
+            None
+        };
 
         return Ok(Rc::new(BodyForm::Call(l.clone(), call_args, new_tail)));
     }
@@ -236,26 +201,63 @@ pub fn expand_com_forms_expr(
     Ok(body)
 }
 
-/// Expand compiler forms using the modern evaluator before handing a program to
-/// a backend that does not implement modern compiler-form semantics.
+fn expand_com_forms_helper(
+    context: &mut BasicCompileContext,
+    opts: Rc<dyn CompilerOpts>,
+    helper: &HelperForm,
+) -> Result<HelperForm, CompileErr> {
+    match helper {
+        HelperForm::Defconstant(defconst) => Ok(HelperForm::Defconstant(DefconstData {
+            body: expand_com_forms_expr(context, opts, defconst.body.clone())?,
+            ..defconst.clone()
+        })),
+        HelperForm::Defmacro(defmacro) => Ok(HelperForm::Defmacro(DefmacData {
+            program: Rc::new(expand_com_forms(
+                context,
+                opts,
+                defmacro.program.as_ref().clone(),
+            )?),
+            ..defmacro.clone()
+        })),
+        HelperForm::Defun(inline, defun) => Ok(HelperForm::Defun(
+            *inline,
+            Box::new(DefunData {
+                body: expand_com_forms_expr(context, opts, defun.body.clone())?,
+                ..*defun.clone()
+            }),
+        )),
+        HelperForm::Defnamespace(namespace) => {
+            let helpers = namespace
+                .helpers
+                .iter()
+                .map(|helper| expand_com_forms_helper(context, opts.clone(), helper))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(HelperForm::Defnamespace(Box::new(NamespaceData {
+                helpers,
+                ..*namespace.clone()
+            })))
+        }
+        HelperForm::Defnsref(_) => Ok(helper.clone()),
+    }
+}
+
+/// Translate modern `com` forms for a backend that only implements `function`.
 pub fn expand_com_forms(
     context: &mut BasicCompileContext,
     opts: Rc<dyn CompilerOpts>,
     compileform: CompileForm,
 ) -> Result<CompileForm, CompileErr> {
-    let helpers = compileform.helpers.iter().map(|h| {
-        todo!();
-    });
-
-    let new_expr = expand_com_forms_expr(
-        context,
-        opts,
-        compileform.exp.clone()
-    )?;
+    let helpers = compileform
+        .helpers
+        .iter()
+        .map(|helper| expand_com_forms_helper(context, opts.clone(), helper))
+        .collect::<Result<Vec<_>, _>>()?;
+    let exp = expand_com_forms_expr(context, opts, compileform.exp.clone())?;
 
     Ok(CompileForm {
-        exp: new_expr,
-        .. compileform
+        helpers,
+        exp,
+        ..compileform
     })
 }
 
@@ -266,16 +268,13 @@ pub fn finish_compilation(
     opts: Rc<dyn CompilerOpts>,
     p2: CompileForm,
 ) -> Result<SExp, CompileErr> {
-    let indent = Indent::new();
     let p3 = context.post_desugar_optimization(opts.clone(), p2)?;
 
     if opts.dialect().classic_codegen {
         let mut modern_dialect = opts.dialect();
         modern_dialect.classic_codegen = false;
         let modern_opts = opts.set_dialect(modern_dialect);
-        eprintln!("{indent}p3 {}", p3.to_sexp());
         let p4 = expand_com_forms(context, modern_opts, p3)?;
-        eprintln!("{indent}expanded {}", p4.to_sexp());
         return classic_codegen(opts, p4);
     }
 
@@ -291,7 +290,7 @@ pub fn finish_compilation(
 ///
 /// The classic compiler's normal final optimization is part of its code
 /// generation contract. No modern optimization hooks run on this path.
-fn classic_codegen(opts: Rc<dyn CompilerOpts>, mut program: CompileForm) -> Result<SExp, CompileErr> {
+fn classic_codegen(opts: Rc<dyn CompilerOpts>, program: CompileForm) -> Result<SExp, CompileErr> {
     let language_flags = if opts.dialect().extra_numeric_constants {
         NEW_BIT_CONSTANTS
     } else {
@@ -306,27 +305,13 @@ fn classic_codegen(opts: Rc<dyn CompilerOpts>, mut program: CompileForm) -> Resu
     runner.set_compiler_opts(Some(opts.clone()));
 
     let mut allocator = SExpClassicAllocator::new();
-    let x_atom = SExp::Atom(program.loc(), b"X".to_vec());
-    let program_args = Rc::new(SExp::Cons(
-        program.loc(),
-        Rc::new(x_atom.clone()),
-        Rc::new(SExp::Nil(program.loc())),
-    ));
-    let cons = Rc::new(BodyForm::Value(SExp::Integer(program.loc(), 4_u32.to_bigint().unwrap())));
     let macro_lookup = default_macro_lookup(&mut allocator, runner.clone());
     let nil = allocator
         .import(program.loc(), clvm_rs::allocator::NodePtr::NIL)
         .map_err(|e| CompileErr(e.0, e.1.to_string()))?;
-    let final_program = Rc::new(SExp::Cons(
-        program.loc(),
-        Rc::new(SExp::Atom(program.loc(), b"mod".to_vec())),
-        program.to_sexp()
-    ));
-
     let args = allocator
         .from_sexp(program.to_sexp())
         .map_err(|e| CompileErr(e.0, e.1.to_string()))?;
-    // eprintln!("compile_mod {}", final_program);
     let generated = compile_mod(
         &mut allocator,
         &args,
@@ -360,7 +345,6 @@ pub fn compile_from_compileform(
     opts: Rc<dyn CompilerOpts>,
     p0: CompileForm,
 ) -> Result<SExp, CompileErr> {
-    let indent = Indent::new();
     let p1 =
         if opts.dialect().classic_codegen {
             p0
@@ -368,11 +352,9 @@ pub fn compile_from_compileform(
             context.frontend_optimization(opts.clone(), p0)?
         };
 
-    eprintln!("{indent}frontend_opt {}", p1.to_sexp());
     // Resolve includes, convert program source to lexemes
     let p2 = do_desugar(opts.clone(), &p1)?;
 
-    eprintln!("{indent}desugared {}", p2.to_sexp());
     finish_compilation(context, opts, p2)
 }
 
