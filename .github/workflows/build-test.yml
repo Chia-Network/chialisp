@@ -130,6 +130,7 @@ jobs:
         pip install --no-index --find-links target/wheels/ chialisp
         pip install clvm_rs
         pip install clvm_tools
+        pip install yaml
         cd resources/tests
         python test_clvm_step.py
         python mandelbrot-cldb.py
