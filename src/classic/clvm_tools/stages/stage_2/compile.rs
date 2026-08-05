@@ -21,7 +21,10 @@ use crate::classic::clvm_tools::stages::stage_2::helpers::{brun, evaluate, quote
 use crate::classic::clvm_tools::stages::stage_2::module::compile_mod;
 use crate::compiler::srcloc::Srcloc;
 
-const DIAG_OUTPUT: bool = true;
+use crate::classic::clvm_tools::stages::stage_2::module::Indent;
+use crate::compiler::sexp::decode_string;
+
+const DIAG_OUTPUT: bool = false;
 
 lazy_static! {
     static ref PASS_THROUGH_OPERATORS: HashSet<Vec<u8>> = {
@@ -546,8 +549,10 @@ fn find_symbol_match<A: ClassicAllocator>(
 where
     A::NodePtr: Clone,
 {
+    let indent = Indent::new();
     if let Some(symlist) = proper_list(allocator, symbol_table, true) {
         for sym in symlist {
+            eprintln!("{indent}sym {}", allocator.disassemble(&sym, None));
             if let Some(symdef) = proper_list(allocator, &sym, true) {
                 if symdef.is_empty() {
                     continue;
@@ -661,6 +666,7 @@ fn compile_application<A: ClassicAllocator>(
 where
     A::NodePtr: Clone,
 {
+    let indent = Indent::new();
     let mut compiled_args = vec![operator.clone()];
 
     let loc = allocator.loc(prog);
@@ -711,7 +717,9 @@ where
             if PASS_THROUGH_OPERATORS.contains(opbuf) || (!opbuf.is_empty() && opbuf[0] == b'_') {
                 Ok(r)
             } else {
-                find_symbol_match(allocator, opbuf, &r, symbol_table).and_then(|x| match x {
+                eprintln!("{indent}find symbol {} in\n{indent}{}\n{indent}{}", decode_string(opbuf), allocator.disassemble(&prog, None), allocator.disassemble(&symbol_table, None));
+                find_symbol_match(allocator, opbuf, &r, symbol_table).and_then(|x| {
+                match x {
                     Some(SymbolResult::Direct(v)) => Ok(v),
                     Some(SymbolResult::Matched(_symbol, value)) => {
                         let loc = allocator.loc(&value);
@@ -744,7 +752,7 @@ where
                         enlist(allocator, &[apply_atom, value, cons_enlisted])
                     }
                     None => error_result,
-                })
+                }})
             }
         }
         None => error_result,
@@ -762,9 +770,10 @@ pub fn do_com_prog<A: ClassicAllocator>(
 where
     A::NodePtr: Clone,
 {
+    let indent = Indent::new();
     if DIAG_OUTPUT {
         println!(
-            "START COMPILE {}: {}\nMACRO {}\nSYMBOLS {}",
+            "START COMPILE {}: {}\n{indent}MACRO {}\n{indent}SYMBOLS {}",
             from,
             allocator.disassemble(prog, None),
             allocator.disassemble(macro_lookup, None),
@@ -774,7 +783,7 @@ where
     do_com_prog_(allocator, prog, macro_lookup, symbol_table, run_program).inspect(|x| {
         if DIAG_OUTPUT {
             println!(
-                "DO_COM_PROG {}: {}\nMACRO {}\nSYMBOLS {}\nRESULT {}",
+                "DO_COM_PROG {}: {}\n{indent}MACRO {}\n{indent}SYMBOLS {}\n{indent}RESULT {}",
                 from,
                 allocator.disassemble(prog, None),
                 allocator.disassemble(macro_lookup, None),
@@ -795,6 +804,7 @@ fn do_com_prog_<A: ClassicAllocator>(
 where
     A::NodePtr: Clone,
 {
+    let indent = Indent::new();
     /*
      * Turn the given program `prog` into a clvm program using
      * the macros to do transformation.
@@ -850,6 +860,7 @@ where
                                         symbol_table,
                                         run_program.clone()
                                     ).and_then(|x| x.map(Ok).unwrap_or_else(|| m! {
+                                        let _ = eprintln!("{indent}compile_application {} {}\n{indent}{}", allocator.disassemble(&operator, None), allocator.disassemble(&prog, None), allocator.disassemble(&prog_rest, None));
                                         compile_application(
                                             allocator,
                                             &prog,

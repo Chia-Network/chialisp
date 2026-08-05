@@ -45,34 +45,7 @@ use crate::compiler::srcloc::Srcloc;
 use crate::compiler::{BasicCompileContext, CompileContextWrapper};
 use crate::util::Number;
 
-lazy_static! {
-    pub static ref INDENT: AtomicI32 = AtomicI32::new(0);
-}
-
-struct Indent;
-
-impl Indent {
-    fn new() -> Self {
-        INDENT.fetch_add(1, Ordering::Relaxed);
-        Indent
-    }
-}
-
-impl std::fmt::Display for Indent {
-    fn fmt(&self, fmt: &'_ mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-        let indent = INDENT.fetch_add(0, Ordering::Relaxed);
-        for i in 0..indent {
-            write!(fmt, "  ")?;
-        }
-        Ok(())
-    }
-}
-
-impl Drop for Indent {
-    fn drop(&mut self) {
-        INDENT.fetch_add(-1, Ordering::Relaxed);
-    }
-}
+use crate::classic::clvm_tools::stages::stage_2::module::Indent;
 
 pub const SHA256TREE_PROGRAM_CLVM: &str = "(2 (1 2 (3 (7 5) (1 11 (1 . 2) (2 2 (4 2 (4 9 ()))) (2 2 (4 2 (4 13 ())))) (1 11 (1 . 1) 5)) 1) (4 (1 2 (3 (7 5) (1 11 (1 . 2) (2 2 (4 2 (4 9 ()))) (2 2 (4 2 (4 13 ())))) (1 11 (1 . 1) 5)) 1) 1))";
 
@@ -944,17 +917,16 @@ pub fn compile_pre_forms(
 
     let frontend_opts = if opts.dialect().classic_codegen {
         let mut modern_dialect = opts.dialect();
-        modern_dialect.classic_codegen = false;
-        opts.set_dialect(modern_dialect)
+        opts.set_dialect(modern_dialect).set_frontend_opt(false)
     } else {
         opts.clone()
     };
-    let p0 = frontend(frontend_opts, pre_forms)?;
+    let p0 = frontend(frontend_opts.clone(), pre_forms)?;
 
     match p0 {
         FrontendOutput::CompileForm(p0) => Ok(CompilerOutput::Program(
             p0.include_forms.clone(),
-            compile_from_compileform(context, opts, p0)?,
+            compile_from_compileform(context, frontend_opts, p0)?,
         )),
         FrontendOutput::Module(mut cf, exports) => {
             add_main_fingerprint(&mut cf, pre_forms);
