@@ -15,7 +15,7 @@ use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
 use crate::classic::clvm_tools::ir::r#type::NEW_BIT_CONSTANTS;
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 use crate::classic::clvm_tools::stages::stage_2::abstraction::{
-    ASExp, BufCarrier, ClassicAllocator, SExpClassicAllocator, SExpNode,
+    ASExp, BufCarrier, ClassicAllocator, SExpClassicAllocator,
 };
 use crate::classic::clvm_tools::stages::stage_2::defaults::default_macro_lookup;
 use crate::classic::clvm_tools::stages::stage_2::module::compile_mod;
@@ -268,15 +268,16 @@ pub fn finish_compilation(
     opts: Rc<dyn CompilerOpts>,
     p2: CompileForm,
 ) -> Result<SExp, CompileErr> {
-    let p3 = context.post_desugar_optimization(opts.clone(), p2)?;
-
     if opts.dialect().classic_codegen {
         let mut modern_dialect = opts.dialect();
         modern_dialect.classic_codegen = false;
         let modern_opts = opts.set_dialect(modern_dialect);
+        let p3 = context.post_desugar_optimization(modern_opts.clone(), p2)?;
         let p4 = expand_com_forms(context, modern_opts, p3)?;
         return classic_codegen(opts, p4);
     }
+
+    let p3 = context.post_desugar_optimization(opts.clone(), p2)?;
 
     // generate code from AST, optionally with optimization
     let generated = codegen(context, opts.clone(), &p3)?;
@@ -345,12 +346,11 @@ pub fn compile_from_compileform(
     opts: Rc<dyn CompilerOpts>,
     p0: CompileForm,
 ) -> Result<SExp, CompileErr> {
-    let p1 =
-        if opts.dialect().classic_codegen {
-            p0
-        } else {
-            context.frontend_optimization(opts.clone(), p0)?
-        };
+    let p1 = if opts.dialect().classic_codegen {
+        p0
+    } else {
+        context.frontend_optimization(opts.clone(), p0)?
+    };
 
     // Resolve includes, convert program source to lexemes
     let p2 = do_desugar(opts.clone(), &p1)?;

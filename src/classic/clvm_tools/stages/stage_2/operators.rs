@@ -18,9 +18,7 @@ use crate::classic::clvm::OPERATORS_LATEST_VERSION;
 use crate::classic::clvm::sexp::proper_list;
 use crate::classic::clvm::{keyword_from_atom, keyword_to_atom};
 
-use crate::classic::clvm_tools::binutils::{
-    assemble_from_ir, disassemble_to_ir_with_kw,
-};
+use crate::classic::clvm_tools::binutils::{assemble_from_ir, disassemble_to_ir_with_kw};
 use crate::classic::clvm_tools::ir::reader::read_ir;
 use crate::classic::clvm_tools::ir::writer::write_ir_to_stream;
 use crate::classic::clvm_tools::sha256tree::TreeHash;
