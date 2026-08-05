@@ -1306,9 +1306,6 @@ pub fn should_inline_let(
     opts: Rc<dyn CompilerOpts>,
     inline_hint: &Option<LetFormInlineHint>,
 ) -> bool {
-    if opts.dialect().classic_codegen {
-        return false;
-    }
     let match_none = opts.module_phase().is_none();
     let want_inline = matches!(inline_hint, Some(LetFormInlineHint::Inline(_)));
     want_inline || (match_none && inline_hint.is_none())
@@ -1560,6 +1557,7 @@ pub fn hoist_body_let_binding(
         BodyForm::Let(LetFormKind::Parallel, letdata) => {
             let mut out_defuns = Vec::new();
             let defun_name = gensym("letbinding".as_bytes().to_vec());
+            let force_non_inline = opts.dialect().classic_codegen && outer_context.is_some();
 
             let mut revised_bindings = Vec::new();
             for b in letdata.bindings.iter() {
@@ -1587,6 +1585,15 @@ pub fn hoist_body_let_binding(
                 revised_bindings.to_vec(),
                 letdata.body.clone(),
             );
+            let generated_defun = if force_non_inline {
+                if let HelperForm::Defun(_, defun) = generated_defun {
+                    HelperForm::Defun(false, defun)
+                } else {
+                    unreachable!()
+                }
+            } else {
+                generated_defun
+            };
             out_defuns.push(generated_defun);
 
             let mut let_args = generate_let_args(letdata.loc.clone(), revised_bindings.to_vec());
