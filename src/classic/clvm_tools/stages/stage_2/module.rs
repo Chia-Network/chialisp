@@ -1,4 +1,3 @@
-use std::sync::atomic::{AtomicI32, Ordering};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -25,35 +24,6 @@ use crate::classic::clvm_tools::stages::stage_2::inline::{
 use crate::classic::clvm_tools::stages::stage_2::optimize::optimize_sexp;
 use crate::classic::clvm_tools::stages::stage_2::reader::process_embed_file;
 use crate::compiler::srcloc::Srcloc;
-
-lazy_static! {
-    pub static ref INDENT: AtomicI32 = AtomicI32::new(0);
-}
-
-pub struct Indent;
-
-impl Indent {
-    pub fn new() -> Self {
-        INDENT.fetch_add(1, Ordering::Relaxed);
-        Indent
-    }
-}
-
-impl std::fmt::Display for Indent {
-    fn fmt(&self, fmt: &'_ mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-        let indent = INDENT.fetch_add(0, Ordering::Relaxed);
-        for i in 0..indent {
-            write!(fmt, "  ")?;
-        }
-        Ok(())
-    }
-}
-
-impl Drop for Indent {
-    fn drop(&mut self) {
-        INDENT.fetch_add(-1, Ordering::Relaxed);
-    }
-}
 
 lazy_static! {
     pub static ref MAIN_NAME: String = "".to_string();
@@ -599,7 +569,6 @@ fn compile_mod_stage_1<A: ClassicAllocator>(
 where
     A::NodePtr: Clone,
 {
-    let indent = Indent::new();
     // stage 1: collect up names of globals (functions, constants, macros)
     m! {
         let mut functions = HashMap::new();
@@ -632,10 +601,10 @@ where
                 }
 
                 let main_local_arguments = alist[0].clone();
-                eprintln!("{indent}main_local_arguments {}", allocator.disassemble(&alist[0], None));
+                eprintln!("main_local_arguments {}", allocator.disassemble(&alist[0], None));
 
                 for arg in alist.iter().take(alist.len()-1).skip(1) {
-                    eprintln!("{indent}parse_mod_sexp {}", allocator.disassemble(arg, None));
+                    eprintln!("parse_mod_sexp {}", allocator.disassemble(arg, None));
                     parse_mod_sexp(
                         allocator,
                         arg,
@@ -1095,11 +1064,9 @@ pub fn compile_mod<A: ClassicAllocator>(
 where
     A::NodePtr: Clone,
 {
-    let indent = Indent::new();
-
     // Deal with the "mod" keyword.
-    eprintln!("{indent}compile_mod {}", allocator.disassemble(args, None));
-    eprintln!("{indent}symbol_table {}", allocator.disassemble(symbol_table, None));
+    eprintln!("compile_mod {}", allocator.disassemble(args, None));
+    eprintln!("symbol_table {}", allocator.disassemble(symbol_table, None));
     let loc = allocator.loc(macro_lookup);
     let produce_extra_info_prog = assemble(allocator.allocator(), "(_symbols_extra_info)")
         .map_err(|e| ClError(loc.clone(), e))?;
