@@ -45,7 +45,7 @@ fn main() {
             e.shrink_bodyform(
                 &mut context,
                 program.args.clone(),
-                Rc::new(HashMap::new()),
+                &HashMap::new(),
                 program.exp,
                 false,
                 Some(EVAL_STACK_LIMIT),

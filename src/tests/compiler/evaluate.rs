@@ -39,7 +39,7 @@ fn shrink_expr_from_string(s: String) -> Result<String, CompileErr> {
             return e.shrink_bodyform(
                 &mut context,
                 program.args.clone(),
-                Rc::new(HashMap::new()),
+                &HashMap::new(),
                 program.exp.clone(),
                 false,
                 Some(EVAL_STACK_LIMIT),

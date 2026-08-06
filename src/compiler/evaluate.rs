@@ -1,4 +1,4 @@
-use std::borrow::{Borrow, BorrowMut};
+use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -27,48 +27,7 @@ use crate::compiler::CompileContextWrapper;
 use crate::util::{number_from_u8, u8_from_number, Number};
 
 const PRIM_RUN_LIMIT: usize = 1000000;
-pub const EVAL_STACK_LIMIT: usize = 150;
-
-pub trait Process {
-    fn run(&self) -> Result<EvalResult, CompileErr>;
-}
-
-#[derive(Debug)]
-pub struct Call {
-    loc: Srcloc,
-    name: Vec<u8>,
-    tail: Option<Rc<BodyForm>>,
-    processed_tail: Option<Rc<BodyForm>>,
-    args: Vec<Rc<BodyForm>>,
-    processed_args: Vec<Rc<BodyForm>>,
-    original: Rc<BodyForm>,
-}
-
-#[derive(Debug)]
-pub enum EvalResult {
-    Body(Rc<BodyForm>),
-    Process(Rc<EvalData>),
-    Call(Call, Rc<EvalData>),
-    Invoke(Call, Rc<EvalData>),
-}
-
-#[derive(Clone, Debug)]
-pub struct EvalData {
-    prog_args: Rc<SExp>,
-    env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
-    body: Rc<BodyForm>,
-    only_inline: bool
-}
-
-impl EvalData {
-    fn with_body_or_env(&self, new_body: Option<Rc<BodyForm>>, new_env: Option<Rc<HashMap<Vec<u8>, Rc<BodyForm>>>>) -> EvalData {
-        EvalData {
-            env: new_env.unwrap_or_else(|| self.env.clone()),
-            body: new_body.unwrap_or_else(|| self.body.clone()),
-            .. self.clone()
-        }
-    }
-}
+pub const EVAL_STACK_LIMIT: usize = 200;
 
 // Stack depth checker.
 #[derive(Clone, Debug, Default)]
@@ -201,11 +160,10 @@ fn compute_paths_of_destructure(
 }
 
 fn update_parallel_bindings(
-    bindings: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
+    bindings: &HashMap<Vec<u8>, Rc<BodyForm>>,
     have_bindings: &[Rc<Binding>],
 ) -> HashMap<Vec<u8>, Rc<BodyForm>> {
-    let new_bindings_ref: &HashMap<Vec<u8>, Rc<BodyForm>> = bindings.borrow();
-    let mut new_bindings = new_bindings_ref.clone();
+    let mut new_bindings = bindings.clone();
     for b in have_bindings.iter() {
         match &b.pattern {
             BindingPattern::Name(name) => {
@@ -482,7 +440,7 @@ pub fn second_of_alist(lst: Rc<SExp>) -> Result<Rc<SExp>, CompileErr> {
 
 fn synthesize_args(
     template: Rc<SExp>,
-    env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
+    env: &HashMap<Vec<u8>, Rc<BodyForm>>,
 ) -> Result<Rc<BodyForm>, CompileErr> {
     match template.borrow() {
         SExp::Atom(_, name) => env.get(name).map(|x| Ok(x.clone())).unwrap_or_else(|| {
@@ -499,7 +457,7 @@ fn synthesize_args(
                     l.clone(),
                     vec![
                         Rc::new(BodyForm::Value(SExp::atom_from_string(template.loc(), "c"))),
-                        synthesize_args(f.clone(), env.clone())?,
+                        synthesize_args(f.clone(), env)?,
                         synthesize_args(r.clone(), env)?,
                     ],
                     None,
@@ -716,10 +674,10 @@ pub fn eval_dont_expand_let(inline_hint: &Option<LetFormInlineHint>) -> bool {
     matches!(inline_hint, Some(LetFormInlineHint::NonInline(_)))
 }
 
-pub fn filter_capture_args(args: Rc<SExp>, name_map: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>) -> Rc<SExp> {
+pub fn filter_capture_args(args: Rc<SExp>, name_map: &HashMap<Vec<u8>, Rc<BodyForm>>) -> Rc<SExp> {
     match args.borrow() {
         SExp::Cons(l, a, b) => {
-            let a_filtered = filter_capture_args(a.clone(), name_map.clone());
+            let a_filtered = filter_capture_args(a.clone(), name_map);
             let b_filtered = filter_capture_args(b.clone(), name_map);
             if !truthy(a_filtered.clone()) && !truthy(b_filtered.clone()) {
                 return Rc::new(SExp::Nil(l.clone()));
@@ -774,7 +732,7 @@ impl<'info> Evaluator {
         program: Rc<CompileForm>,
         prog_args: Rc<SExp>,
         arguments_to_convert: &[Rc<BodyForm>],
-        env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
+        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
     ) -> Result<Rc<BodyForm>, CompileErr> {
         // Pass the SExp representation of the expressions into
         // the macro after forming an argument sexp and then
@@ -804,12 +762,10 @@ impl<'info> Evaluator {
                     self.shrink_bodyform_visited(
                         context,
                         visited,
-                        Rc::new(EvalData {
-                            prog_args: prog_args.clone(),
-                            env,
-                            body: program.exp,
-                            only_inline: false,
-                        }),
+                        prog_args.clone(),
+                        env,
+                        program.exp,
+                        false,
                     )
                 })
         } else {
@@ -828,7 +784,7 @@ impl<'info> Evaluator {
         context: &mut BasicCompileContext,
         visited_: &'info mut VisitedMarker<'_, VisitedInfo>,
         prog_args: Rc<SExp>,
-        env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
+        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
         parts: &[Rc<BodyForm>],
         only_inline: bool,
     ) -> Result<Option<LambdaApply>, CompileErr> {
@@ -837,22 +793,18 @@ impl<'info> Evaluator {
             let evaluated_prog = self.shrink_bodyform_visited(
                 context,
                 &mut visited,
-                Rc::new(EvalData {
-                    prog_args: prog_args.clone(),
-                    env: env.clone(),
-                    body: parts[1].clone(),
-                    only_inline: only_inline,
-                })
+                prog_args.clone(),
+                env,
+                parts[1].clone(),
+                only_inline,
             )?;
             let evaluated_env = self.shrink_bodyform_visited(
                 context,
                 &mut visited,
-                Rc::new(EvalData {
-                    prog_args,
-                    env,
-                    body: parts[2].clone(),
-                    only_inline,
-                })
+                prog_args,
+                env,
+                parts[2].clone(),
+                only_inline,
             )?;
             if let BodyForm::Lambda(ldata) = evaluated_prog.borrow() {
                 return Ok(Some(LambdaApply {
@@ -871,12 +823,11 @@ impl<'info> Evaluator {
         context: &mut BasicCompileContext,
         visited: &mut VisitedMarker<'info, VisitedInfo>,
         prog_args: Rc<SExp>,
-        env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
+        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
         lapply: &LambdaApply,
         only_inline: bool,
     ) -> Result<Rc<BodyForm>, CompileErr> {
-        let lambda_env_ref: &HashMap<Vec<u8>, Rc<BodyForm>> = env.borrow();
-        let mut lambda_env = lambda_env_ref.clone();
+        let mut lambda_env = env.clone();
 
         // Finish eta-expansion.
 
@@ -889,12 +840,10 @@ impl<'info> Evaluator {
         let reified_captures = self.shrink_bodyform_visited(
             context,
             visited,
-            Rc::new(EvalData {
-                prog_args,
-                env,
-                body: lapply.lambda.captures.clone(),
-                only_inline,
-            })
+            prog_args,
+            env,
+            lapply.lambda.captures.clone(),
+            only_inline,
         )?;
         let formed_caps = ArgInputs::Whole(reified_captures);
         create_argument_captures(
@@ -910,12 +859,10 @@ impl<'info> Evaluator {
         self.shrink_bodyform_visited(
             context,
             visited,
-            Rc::new(EvalData {
-                prog_args: lapply.lambda.args.clone(),
-                env: Rc::new(lambda_env),
-                body: lapply.body.clone(),
-                only_inline,
-            })
+            lapply.lambda.args.clone(),
+            &lambda_env,
+            lapply.body.clone(),
+            only_inline,
         )
     }
 
@@ -927,11 +874,11 @@ impl<'info> Evaluator {
         call: &CallSpec,
         prog_args: Rc<SExp>,
         arguments_to_convert: &[Rc<BodyForm>],
-        env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
+        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
         only_inline: bool,
     ) -> Result<Rc<BodyForm>, CompileErr> {
         let mut all_primitive = true;
-        let mut target_vec: Vec<Rc<BodyForm>> = call.args.to_vec();
+        let mut target_vec: Vec<Rc<BodyForm>> = call.args.to_owned();
         let mut visited = VisitedMarker::again(call.loc.clone(), visited_)?;
 
         if call.name == "@".as_bytes() {
@@ -968,19 +915,18 @@ impl<'info> Evaluator {
                     // Reduce all arguments.
                     let mut converted_args = SExp::Nil(call.loc.clone());
 
-                    for (i, element) in arguments_to_convert.iter().enumerate().skip(1).rev() {
+                    for i_reverse in 0..arguments_to_convert.len() {
+                        let i = arguments_to_convert.len() - i_reverse - 1;
                         let shrunk = self.shrink_bodyform_visited(
                             context,
                             &mut visited,
-                            Rc::new(EvalData {
-                                prog_args: prog_args.clone(),
-                                env: env.clone(),
-                                body: element.clone(),
-                                only_inline,
-                            })
+                            prog_args.clone(),
+                            env,
+                            arguments_to_convert[i].clone(),
+                            only_inline,
                         )?;
 
-                        target_vec[i] = shrunk.clone();
+                        target_vec[i + 1] = shrunk.clone();
 
                         if !arg_inputs_primitive(Rc::new(ArgInputs::Whole(shrunk.clone()))) {
                             all_primitive = false;
@@ -1014,7 +960,7 @@ impl<'info> Evaluator {
                         context,
                         &mut visited,
                         prog_args.clone(),
-                        env.clone(),
+                        env,
                         &target_vec,
                         only_inline,
                     )? {
@@ -1062,12 +1008,10 @@ impl<'info> Evaluator {
         let apply_result = self.shrink_bodyform_visited(
             context,
             visited,
-            Rc::new(EvalData {
-                prog_args: Rc::new(SExp::Nil(run_program.loc())),
-                env: Rc::new(bindings),
-                body: program,
-                only_inline: false,
-            })
+            Rc::new(SExp::Nil(run_program.loc())),
+            &bindings,
+            program,
+            false,
         )?;
         self.chase_apply(context, visited, apply_result)
     }
@@ -1174,12 +1118,10 @@ impl<'info> Evaluator {
         visited: &'_ mut VisitedMarker<'info, VisitedInfo>,
         call: &CallSpec,
         prog_args: Rc<SExp>,
-        arguments: &[Rc<BodyForm>],
         arguments_to_convert: &[Rc<BodyForm>],
-        translated_tail: Option<Rc<BodyForm>>,
-        env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
+        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
         only_inline: bool,
-    ) -> Result<EvalResult, CompileErr> {
+    ) -> Result<Rc<BodyForm>, CompileErr> {
         let helper = select_helper(&self.helpers, call.name);
         match helper {
             Some(HelperForm::Defmacro(mac)) => {
@@ -1198,26 +1140,57 @@ impl<'info> Evaluator {
                     prog_args,
                     arguments_to_convert,
                     env,
-                ).map(|r| EvalResult::Body(r))
+                )
             }
             Some(HelperForm::Defun(inline, defun)) => {
                 if !inline && only_inline {
-                    return Ok(EvalResult::Body(call.original.clone()));
+                    return Ok(call.original.clone());
                 }
 
-                let argument_captures = build_argument_captures(
+                let translated_tail = if let Some(t) = call.tail.as_ref() {
+                    Some(self.shrink_bodyform_visited(
+                        context,
+                        visited,
+                        prog_args.clone(),
+                        env,
+                        t.clone(),
+                        only_inline,
+                    )?)
+                } else {
+                    None
+                };
+
+                let argument_captures_untranslated = build_argument_captures(
                     &call.loc.clone(),
-                    &arguments[1..],
+                    arguments_to_convert,
                     translated_tail.clone(),
                     defun.args.clone(),
                 )?;
 
-                Ok(EvalResult::Process(Rc::new(EvalData {
-                    prog_args: defun.args.clone(),
-                    env: Rc::new(argument_captures),
-                    body: defun.body,
+                let mut argument_captures = HashMap::new();
+                // Do this to protect against misalignment
+                // between argument vec and destructuring.
+                for kv in argument_captures_untranslated.iter() {
+                    let shrunk = self.shrink_bodyform_visited(
+                        context,
+                        visited,
+                        prog_args.clone(),
+                        env,
+                        kv.1.clone(),
+                        only_inline,
+                    )?;
+
+                    argument_captures.insert(kv.0.clone(), shrunk.clone());
+                }
+
+                self.shrink_bodyform_visited(
+                    context,
+                    visited,
+                    defun.args.clone(),
+                    &argument_captures,
+                    defun.body,
                     only_inline,
-                })))
+                )
             }
             _ => self
                 .invoke_primitive(
@@ -1229,8 +1202,7 @@ impl<'info> Evaluator {
                     env,
                     only_inline,
                 )
-                .and_then(|res| self.chase_apply(context, visited, res))
-                .map(|r| EvalResult::Body(r)),
+                .and_then(|res| self.chase_apply(context, visited, res)),
         }
     }
 
@@ -1239,7 +1211,7 @@ impl<'info> Evaluator {
         context: &mut BasicCompileContext,
         visited: &'info mut VisitedMarker<'_, VisitedInfo>,
         prog_args: Rc<SExp>,
-        env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
+        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
         ldata: &LambdaData,
         only_inline: bool,
     ) -> Result<Rc<BodyForm>, CompileErr> {
@@ -1251,12 +1223,10 @@ impl<'info> Evaluator {
         let new_captures = self.shrink_bodyform_visited(
             context,
             visited,
-            Rc::new(EvalData {
-                prog_args: prog_args.clone(),
-                env,
-                body: ldata.captures.clone(),
-                only_inline,
-            })
+            prog_args.clone(),
+            env,
+            ldata.captures.clone(),
+            only_inline,
         )?;
 
         // Break up and make binding map.
@@ -1286,20 +1256,17 @@ impl<'info> Evaluator {
         ));
 
         // Eliminate the captures via beta substituion.
-        let interpretable_rc = Rc::new(interpretable_captures);
         let simplified_body = self.shrink_bodyform_visited(
             context,
             visited,
-            Rc::new(EvalData {
-                prog_args: combined_args.clone(),
-                env: interpretable_rc.clone(),
-                body: ldata.body.clone(),
-                only_inline,
-            })
+            combined_args.clone(),
+            &interpretable_captures,
+            ldata.body.clone(),
+            only_inline,
         )?;
 
         let new_capture_args =
-            filter_capture_args(ldata.capture_args.clone(), interpretable_rc);
+            filter_capture_args(ldata.capture_args.clone(), &interpretable_captures);
         Ok(Rc::new(BodyForm::Lambda(Box::new(LambdaData {
             args: ldata.args.clone(),
             capture_args: new_capture_args,
@@ -1334,175 +1301,46 @@ impl<'info> Evaluator {
         ))
     }
 
+    // A frontend language evaluator and minifier
     fn shrink_bodyform_visited(
         &self,
         context: &mut BasicCompileContext,
-        visited: &'info mut VisitedMarker<'_, VisitedInfo>,
-        eval_data: Rc<EvalData>,
-    ) -> Result<Rc<BodyForm>, CompileErr> {
-        let mut result_stack = vec![EvalResult::Process(eval_data.clone())];
-
-        let choose_call_target = |call: &Call| -> Option<Rc<BodyForm>> {
-            if let Some(t) = call.tail.as_ref() {
-                if call.processed_tail.is_none() {
-                    return Some(t.clone());
-                }
-            }
-
-            if call.processed_args.len() >= call.args.len() {
-                return None;
-            }
-
-            Some(call.args[call.processed_args.len()].clone())
-        };
-
-        let handle_call = |result_stack: &mut Vec<EvalResult>, call: Call, eval_data: Rc<EvalData>| -> Result<(), CompileErr> {
-            if let Some(t) = choose_call_target(&call) {
-                result_stack.push(EvalResult::Call(call, eval_data.clone()));
-                result_stack.push(EvalResult::Process(
-                    Rc::new(eval_data.with_body_or_env(Some(t.clone()), None)),
-                ));
-            } else {
-                result_stack.push(EvalResult::Invoke(
-                    call,
-                    eval_data.clone(),
-                ));
-            }
-
-            Ok(())
-        };
-
-        loop {
-            let result = result_stack.pop();
-            match result {
-                None => {
-                    return Err(CompileErr(eval_data.body.loc(), "empty eval stack".to_string()));
-                }
-                Some(EvalResult::Body(b)) => {
-                    match result_stack.pop() {
-                        None => {
-                            return Ok(b.clone());
-                        }
-                        Some(EvalResult::Body(_)) => {
-                            return Err(CompileErr(b.loc(), "can't collapse concrete value".to_string()));
-                        }
-                        Some(EvalResult::Process(_)) => {
-                            result_stack.push(EvalResult::Body(b));
-                        }
-                        Some(EvalResult::Call(mut call, eval_data)) => {
-                            let need_tail = call.tail.is_some() && call.processed_tail.is_none();
-                            let need_arg = call.processed_args.len() < call.args.len();
-                            if need_tail || need_arg {
-                                if need_tail {
-                                    call.processed_tail = Some(b.clone());
-                                } else if need_arg {
-                                    call.processed_args.push(b.clone());
-                                }
-                            }
-
-                            if call.processed_args.len() < call.args.len() {
-                                let new_arg = call.args[call.processed_args.len()].clone();
-                                result_stack.push(EvalResult::Call(call, eval_data.clone()));
-                                result_stack.push(EvalResult::Process(Rc::new(eval_data.with_body_or_env(Some(new_arg), None))));
-                            } else {
-                                result_stack.push(EvalResult::Invoke(call, eval_data.clone()));
-                            }
-                        }
-                        Some(EvalResult::Invoke(call, eval_data)) => {
-                            result_stack.push(self.handle_invoke(
-                                allocator,
-                                visited,
-                                &CallSpec {
-                                    args: &call.args,
-                                    name: &call.name,
-                                    loc: call.loc.clone(),
-                                    original: call.original.clone(),
-                                    tail: call.tail.clone(),
-                                },
-                                eval_data.prog_args.clone(),
-                                &call.processed_args,
-                                &call.args,
-                                call.processed_tail.clone(),
-                                eval_data.env.clone(),
-                                eval_data.only_inline
-                            )?);
-                        }
-                    }
-                }
-                Some(EvalResult::Call(call, eval_data)) => {
-                    handle_call(&mut result_stack, call, eval_data.clone())?;
-                }
-                Some(EvalResult::Invoke(call, eval_data)) => {
-                    result_stack.push(self.handle_invoke(
-                        allocator,
-                        visited,
-                        &CallSpec {
-                            loc: call.loc.clone(),
-                            name: &call.name,
-                            args: &call.args,
-                            original: call.original.clone(),
-                            tail: call.tail.clone(),
-                        },
-                        eval_data.prog_args.clone(),
-                        &call.args,
-                        &call.processed_args,
-                        call.processed_tail.clone(),
-                        eval_data.env.clone(),
-                        eval_data.only_inline,
-                    )?);
-                }
-                Some(EvalResult::Process(eval_data)) => {
-                    result_stack.push(self.shrink_bodyform_visited_main(
-                        allocator,
-                        visited,
-                        eval_data.clone()
-                    )?);
-                }
-            }
-        }
-    }
-
-    // A frontend language evaluator and minifier
-    fn shrink_bodyform_visited_main(
-        &self,
-        context: &mut BasicCompileContext,
         visited_: &'info mut VisitedMarker<'_, VisitedInfo>,
-        eval_data: Rc<EvalData>,
-    ) -> Result<EvalResult, CompileErr> {
-        let mut visited = VisitedMarker::again(eval_data.body.loc(), visited_)?;
-        match eval_data.body.borrow() {
+        prog_args: Rc<SExp>,
+        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
+        body: Rc<BodyForm>,
+        only_inline: bool,
+    ) -> Result<Rc<BodyForm>, CompileErr> {
+        let mut visited = VisitedMarker::again(body.loc(), visited_)?;
+        match body.borrow() {
             BodyForm::Let(LetFormKind::Parallel, letdata) => {
-                if eval_dont_expand_let(&letdata.inline_hint) && eval_data.only_inline {
-                    return Ok(EvalResult::Body(eval_data.body.clone()));
+                if eval_dont_expand_let(&letdata.inline_hint) && only_inline {
+                    return Ok(body.clone());
                 }
 
-                let updated_bindings = update_parallel_bindings(eval_data.env.clone(), &letdata.bindings);
-                self.shrink_bodyform_visited_main(
+                let updated_bindings = update_parallel_bindings(env, &letdata.bindings);
+                self.shrink_bodyform_visited(
                     context,
                     &mut visited,
-                    Rc::new(EvalData {
-                        prog_args: eval_data.prog_args.clone(),
-                        env: Rc::new(updated_bindings),
-                        body: letdata.body.clone(),
-                        only_inline: eval_data.only_inline,
-                    })
+                    prog_args,
+                    &updated_bindings,
+                    letdata.body.clone(),
+                    only_inline,
                 )
             }
             BodyForm::Let(LetFormKind::Sequential, letdata) => {
-                if eval_dont_expand_let(&letdata.inline_hint) && eval_data.only_inline {
-                    return Ok(EvalResult::Body(eval_data.body.clone()));
+                if eval_dont_expand_let(&letdata.inline_hint) && only_inline {
+                    return Ok(body.clone());
                 }
 
                 if letdata.bindings.is_empty() {
-                    self.shrink_bodyform_visited_main(
+                    self.shrink_bodyform_visited(
                         context,
                         &mut visited,
-                        Rc::new(EvalData {
-                            prog_args: eval_data.prog_args.clone(),
-                            env: eval_data.env.clone(),
-                            body: letdata.body.clone(),
-                            only_inline: eval_data.only_inline,
-                        })
+                        prog_args,
+                        env,
+                        letdata.body.clone(),
+                        only_inline,
                     )
                 } else {
                     let first_binding_as_list: Vec<Rc<Binding>> =
@@ -1510,108 +1348,96 @@ impl<'info> Evaluator {
                     let rest_of_bindings: Vec<Rc<Binding>> =
                         letdata.bindings.iter().skip(1).cloned().collect();
 
-                    let updated_bindings = update_parallel_bindings(eval_data.env.clone(), &first_binding_as_list);
-                    self.shrink_bodyform_visited_main(
+                    let updated_bindings = update_parallel_bindings(env, &first_binding_as_list);
+                    self.shrink_bodyform_visited(
                         context,
                         &mut visited,
-                        Rc::new(EvalData {
-                            prog_args: eval_data.prog_args.clone(),
-                            env: Rc::new(updated_bindings),
-                            body: Rc::new(BodyForm::Let(
-                                LetFormKind::Sequential,
-                                Box::new(LetData {
-                                    bindings: rest_of_bindings,
-                                    ..*letdata.clone()
-                                }),
-                            )),
-                            only_inline: eval_data.only_inline,
-                        })
+                        prog_args,
+                        &updated_bindings,
+                        Rc::new(BodyForm::Let(
+                            LetFormKind::Sequential,
+                            Box::new(LetData {
+                                bindings: rest_of_bindings,
+                                ..*letdata.clone()
+                            }),
+                        )),
+                        only_inline,
                     )
                 }
             }
             BodyForm::Let(LetFormKind::Assign, letdata) => {
-                if eval_dont_expand_let(&letdata.inline_hint) && eval_data.only_inline {
-                    return Ok(EvalResult::Body(eval_data.body.clone()));
+                if eval_dont_expand_let(&letdata.inline_hint) && only_inline {
+                    return Ok(body.clone());
                 }
 
-                self.shrink_bodyform_visited_main(
+                self.shrink_bodyform_visited(
                     context,
                     &mut visited,
-                    Rc::new(EvalData {
-                        prog_args: eval_data.prog_args.clone(),
-                        env: eval_data.env.clone(),
-                        body: Rc::new(hoist_assign_form(letdata)?),
-                        only_inline: eval_data.only_inline,
-                    })
+                    prog_args,
+                    env,
+                    Rc::new(hoist_assign_form(letdata)?),
+                    only_inline,
                 )
             }
-            BodyForm::Quoted(_) => Ok(EvalResult::Body(eval_data.body.clone())),
+            BodyForm::Quoted(_) => Ok(body.clone()),
             BodyForm::Value(SExp::Atom(l, name)) => {
                 if name == &"@".as_bytes().to_vec() {
-                    let literal_args = synthesize_args(eval_data.prog_args.clone(), eval_data.env.clone())?;
-                    self.shrink_bodyform_visited_main(
+                    let literal_args = synthesize_args(prog_args.clone(), env)?;
+                    self.shrink_bodyform_visited(
                         context,
                         &mut visited,
-                        Rc::new(EvalData {
-                            prog_args: eval_data.prog_args.clone(),
-                            env: eval_data.env.clone(),
-                            body: literal_args,
-                            only_inline: eval_data.only_inline,
-                        })
+                        prog_args,
+                        env,
+                        literal_args,
+                        only_inline,
                     )
                 } else if let Some(function) = self.get_function(name) {
-                    self.shrink_bodyform_visited_main(
+                    self.shrink_bodyform_visited(
                         context,
                         &mut visited,
-                        Rc::new(EvalData {
-                            prog_args: eval_data.prog_args.clone(),
-                            env: eval_data.env.clone(),
-                            body: self.create_mod_for_fun(l, function.borrow()),
-                            only_inline: eval_data.only_inline,
-                        })
+                        prog_args,
+                        env,
+                        self.create_mod_for_fun(l, function.borrow()),
+                        only_inline,
                     )
                 } else {
-                    eval_data.env.get(name)
+                    env.get(name)
                         .map(|x| {
                             if reflex_capture(name, x.clone()) {
-                                Ok(EvalResult::Body(x.clone()))
+                                Ok(x.clone())
                             } else {
-                                self.shrink_bodyform_visited_main(
+                                self.shrink_bodyform_visited(
                                     context,
                                     &mut visited,
-                                    Rc::new(EvalData {
-                                        prog_args: eval_data.prog_args.clone(),
-                                        env: eval_data.env.clone(),
-                                        body: x.clone(),
-                                        only_inline: eval_data.only_inline,
-                                    })
+                                    prog_args.clone(),
+                                    env,
+                                    x.clone(),
+                                    only_inline,
                                 )
                             }
                         })
                         .unwrap_or_else(|| {
                             self.get_constant(name)
                                 .map(|x| {
-                                    self.shrink_bodyform_visited_main(
+                                    self.shrink_bodyform_visited(
                                         context,
                                         &mut visited,
-                                        Rc::new(EvalData {
-                                            prog_args: eval_data.prog_args.clone(),
-                                            env: eval_data.env.clone(),
-                                            body: x,
-                                            only_inline: eval_data.only_inline,
-                                        })
+                                        prog_args.clone(),
+                                        env,
+                                        x,
+                                        only_inline,
                                     )
                                 })
                                 .unwrap_or_else(|| {
-                                    Ok(EvalResult::Body(Rc::new(BodyForm::Value(SExp::Atom(
+                                    Ok(Rc::new(BodyForm::Value(SExp::Atom(
                                         l.clone(),
                                         name.clone(),
-                                    )))))
+                                    ))))
                                 })
                         })
                 }
             }
-            BodyForm::Value(v) => Ok(EvalResult::Body(Rc::new(BodyForm::Quoted(v.clone())))),
+            BodyForm::Value(v) => Ok(Rc::new(BodyForm::Quoted(v.clone()))),
             BodyForm::Call(l, parts, tail) => {
                 if parts.is_empty() {
                     return Err(CompileErr(
@@ -1621,32 +1447,40 @@ impl<'info> Evaluator {
                 }
 
                 let head_expr = parts[0].clone();
+                let arguments_to_convert: Vec<Rc<BodyForm>> =
+                    parts.iter().skip(1).cloned().collect();
 
                 match head_expr.borrow() {
-                    BodyForm::Value(SExp::Atom(_call_loc, call_name)) => Ok(EvalResult::Call(
-                        Call {
+                    BodyForm::Value(SExp::Atom(_call_loc, call_name)) => self.handle_invoke(
+                        context,
+                        &mut visited,
+                        &CallSpec {
                             loc: l.clone(),
-                            name: call_name.clone(),
+                            name: call_name,
+                            args: parts,
+                            original: body.clone(),
                             tail: tail.clone(),
-                            processed_tail: None,
-                            args: parts.clone(),
-                            processed_args: vec![parts[0].clone()],
-                            original: eval_data.body.clone(),
                         },
-                        eval_data.clone(),
-                    )),
-                    BodyForm::Value(SExp::Integer(_call_loc, call_int)) => Ok(EvalResult::Call(
-                        Call {
+                        prog_args,
+                        &arguments_to_convert,
+                        env,
+                        only_inline,
+                    ),
+                    BodyForm::Value(SExp::Integer(_call_loc, call_int)) => self.handle_invoke(
+                        context,
+                        &mut visited,
+                        &CallSpec {
                             loc: l.clone(),
-                            name: u8_from_number(call_int.clone()),
+                            name: &u8_from_number(call_int.clone()),
+                            args: parts,
+                            original: body.clone(),
                             tail: None,
-                            processed_tail: None,
-                            args: parts.clone(),
-                            processed_args: vec![parts[0].clone()],
-                            original: eval_data.body.clone(),
                         },
-                        eval_data.clone()
-                    )),
+                        prog_args,
+                        &arguments_to_convert,
+                        env,
+                        only_inline,
+                    ),
                     _ => Err(CompileErr(
                         l.clone(),
                         format!("Don't know how to call {}", head_expr.to_sexp()),
@@ -1660,16 +1494,16 @@ impl<'info> Evaluator {
                 let mut context_wrapper =
                     CompileContextWrapper::new(self.runner.clone(), &mut symbols, optimizer);
                 let code = codegen(context_wrapper.context(), self.opts.clone(), program)?;
-                Ok(EvalResult::Body(Rc::new(BodyForm::Quoted(code))))
+                Ok(Rc::new(BodyForm::Quoted(code)))
             }
             BodyForm::Lambda(ldata) => self.enrich_lambda_site_info(
                 context,
                 &mut visited,
-                eval_data.prog_args.clone(),
-                eval_data.env.clone(),
+                prog_args,
+                env,
                 ldata,
-                eval_data.only_inline,
-            ).map(|r| EvalResult::Body(r)),
+                only_inline,
+            ),
         }
     }
 
@@ -1692,7 +1526,7 @@ impl<'info> Evaluator {
         &self,
         context: &mut BasicCompileContext,
         prog_args: Rc<SExp>,
-        env: Rc<HashMap<Vec<u8>, Rc<BodyForm>>>,
+        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
         body: Rc<BodyForm>,
         only_inline: bool,
         stack_limit: Option<usize>,
@@ -1705,12 +1539,10 @@ impl<'info> Evaluator {
         self.shrink_bodyform_visited(
             context,
             &mut visited_marker,
-            Rc::new(EvalData {
-                prog_args,
-                env,
-                body,
-                only_inline,
-            })
+            prog_args,
+            env,
+            body,
+            only_inline,
         )
     }
 
