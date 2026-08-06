@@ -13,7 +13,7 @@ use crate::compiler::clvm::{run, truthy};
 use crate::compiler::codegen::{codegen, hoist_assign_form};
 use crate::compiler::compiler::is_at_capture;
 use crate::compiler::comptypes::{
-    Binding, BindingPattern, BodyForm, CallSpec, CompileErr, CompileForm, CompilerOpts, DefunData,
+    Binding, BindingPattern, BodyForm, CompileErr, CompileForm, CompilerOpts, DefunData,
     HelperForm, LambdaData, LetData, LetFormInlineHint, LetFormKind,
 };
 use crate::compiler::frontend::frontend;
@@ -21,7 +21,6 @@ use crate::compiler::optimize::get_optimizer;
 use crate::compiler::runtypes::RunFailure;
 use crate::compiler::sexp::SExp;
 use crate::compiler::srcloc::Srcloc;
-use crate::compiler::stackvisit::{HasDepthLimit, VisitedMarker};
 use crate::compiler::BasicCompileContext;
 use crate::compiler::CompileContextWrapper;
 use crate::util::{number_from_u8, u8_from_number, Number};
@@ -29,47 +28,210 @@ use crate::util::{number_from_u8, u8_from_number, Number};
 const PRIM_RUN_LIMIT: usize = 1000000;
 pub const EVAL_STACK_LIMIT: usize = 200;
 
-// Stack depth checker.
 #[derive(Clone, Debug, Default)]
 pub struct VisitedInfo {
     functions: HashMap<Vec<u8>, Rc<BodyForm>>,
     max_depth: Option<usize>,
 }
 
-impl HasDepthLimit<Srcloc, CompileErr> for VisitedInfo {
-    fn depth_limit(&self) -> Option<usize> {
-        self.max_depth
-    }
-    fn stack_err(&self, loc: Srcloc) -> CompileErr {
-        CompileErr(loc, "stack limit exceeded".to_string())
-    }
-}
-
-trait VisitedInfoAccess {
-    fn get_function(&mut self, name: &[u8]) -> Option<Rc<BodyForm>>;
-    fn insert_function(&mut self, name: Vec<u8>, body: Rc<BodyForm>);
-}
-
-impl VisitedInfoAccess for VisitedMarker<'_, VisitedInfo> {
-    fn get_function(&mut self, name: &[u8]) -> Option<Rc<BodyForm>> {
-        if let Some(ref mut info) = self.info {
-            info.functions.get(name).cloned()
-        } else {
-            None
-        }
-    }
-
-    fn insert_function(&mut self, name: Vec<u8>, body: Rc<BodyForm>) {
-        if let Some(ref mut info) = self.info {
-            info.functions.insert(name, body);
-        }
-    }
-}
-
+#[derive(Clone)]
 pub struct LambdaApply {
     lambda: LambdaData,
     body: Rc<BodyForm>,
     env: Rc<BodyForm>,
+}
+
+type EvalEnv = Rc<HashMap<Vec<u8>, Rc<BodyForm>>>;
+
+#[derive(Clone)]
+struct OwnedCallSpec {
+    loc: Srcloc,
+    name: Vec<u8>,
+    args: Vec<Rc<BodyForm>>,
+    tail: Option<Rc<BodyForm>>,
+    original: Rc<BodyForm>,
+}
+
+struct ShrinkRequest {
+    prog_args: Rc<SExp>,
+    env: EvalEnv,
+    body: Rc<BodyForm>,
+    only_inline: bool,
+    depth: usize,
+}
+
+struct IsLambdaRequest {
+    prog_args: Rc<SExp>,
+    env: EvalEnv,
+    parts: Vec<Rc<BodyForm>>,
+    only_inline: bool,
+    depth: usize,
+}
+
+struct PrimitiveRequest {
+    call: OwnedCallSpec,
+    prog_args: Rc<SExp>,
+    arguments: Vec<Rc<BodyForm>>,
+    env: EvalEnv,
+    only_inline: bool,
+    depth: usize,
+}
+
+struct LambdaRequest {
+    prog_args: Rc<SExp>,
+    env: EvalEnv,
+    lapply: LambdaApply,
+    only_inline: bool,
+    depth: usize,
+}
+
+struct InvokeRequest {
+    call: OwnedCallSpec,
+    prog_args: Rc<SExp>,
+    arguments: Vec<Rc<BodyForm>>,
+    env: EvalEnv,
+    only_inline: bool,
+    depth: usize,
+}
+
+struct ChaseRequest {
+    body: Rc<BodyForm>,
+    depth: usize,
+}
+
+struct MashRequest {
+    maybe_condition: Rc<BodyForm>,
+    env: Rc<BodyForm>,
+    depth: usize,
+}
+
+struct EnrichRequest {
+    prog_args: Rc<SExp>,
+    env: EvalEnv,
+    ldata: LambdaData,
+    only_inline: bool,
+    depth: usize,
+}
+
+enum EvalRequest {
+    Shrink(ShrinkRequest),
+    IsLambda(IsLambdaRequest),
+    Primitive(PrimitiveRequest),
+    Lambda(LambdaRequest),
+    Invoke(InvokeRequest),
+    Chase(ChaseRequest),
+    Mash(MashRequest),
+    Enrich(EnrichRequest),
+}
+
+impl EvalRequest {
+    fn loc(&self) -> Srcloc {
+        match self {
+            Self::Shrink(request) => request.body.loc(),
+            Self::IsLambda(request) => request
+                .parts
+                .first()
+                .map(|part| part.loc())
+                .unwrap_or_else(|| Srcloc::start(&"*evaluator*".to_string())),
+            Self::Primitive(request) => request.call.loc.clone(),
+            Self::Lambda(request) => request.lapply.body.loc(),
+            Self::Invoke(request) => request.call.loc.clone(),
+            Self::Chase(request) => request.body.loc(),
+            Self::Mash(request) => request.maybe_condition.loc(),
+            Self::Enrich(request) => request.ldata.loc.clone(),
+        }
+    }
+}
+
+enum EvalValue {
+    Body(Rc<BodyForm>),
+    Lambda(Option<LambdaApply>),
+}
+
+type EvalResult = Result<EvalValue, CompileErr>;
+
+struct PrimitiveState {
+    call: OwnedCallSpec,
+    prog_args: Rc<SExp>,
+    arguments: Vec<Rc<BodyForm>>,
+    env: EvalEnv,
+    only_inline: bool,
+    depth: usize,
+    prim: Rc<SExp>,
+    target: Vec<Rc<BodyForm>>,
+    converted: Vec<Option<Rc<SExp>>>,
+    next: usize,
+    all_primitive: bool,
+}
+
+struct DefunState {
+    defun: Box<DefunData>,
+    prog_args: Rc<SExp>,
+    arguments: Vec<Rc<BodyForm>>,
+    env: EvalEnv,
+    only_inline: bool,
+    depth: usize,
+    call_loc: Srcloc,
+}
+
+struct CaptureState {
+    defun: Box<DefunData>,
+    prog_args: Rc<SExp>,
+    env: EvalEnv,
+    only_inline: bool,
+    depth: usize,
+    captures: Vec<(Vec<u8>, Rc<BodyForm>)>,
+    translated: HashMap<Vec<u8>, Rc<BodyForm>>,
+    next: usize,
+}
+
+enum Continuation {
+    Identity,
+    IsLambdaProgram(IsLambdaRequest),
+    IsLambdaEnv {
+        evaluated_prog: Rc<BodyForm>,
+        request: IsLambdaRequest,
+    },
+    LambdaCaptures(LambdaRequest),
+    PrimitiveArg(PrimitiveState),
+    PrimitiveLambda(PrimitiveState),
+    Chase {
+        depth: usize,
+    },
+    ContinueApply {
+        depth: usize,
+    },
+    MashOrOriginal {
+        original: Rc<BodyForm>,
+    },
+    MashTrue {
+        x_head: Rc<BodyForm>,
+        cond: Rc<BodyForm>,
+        iffalse: Rc<BodyForm>,
+        apply_head: Rc<BodyForm>,
+        env: Rc<BodyForm>,
+        location: Srcloc,
+        depth: usize,
+    },
+    MashFalse {
+        x_head: Rc<BodyForm>,
+        cond: Rc<BodyForm>,
+        true_result: Rc<BodyForm>,
+        location: Srcloc,
+    },
+    DefunTail(DefunState),
+    DefunCapture(CaptureState),
+    EnrichCaptures(EnrichRequest),
+    EnrichBody {
+        ldata: LambdaData,
+        new_captures: Rc<BodyForm>,
+        interpretable: HashMap<Vec<u8>, Rc<BodyForm>>,
+    },
+}
+
+enum EvalStep {
+    Request(EvalRequest, Continuation),
+    Complete(EvalResult),
 }
 
 // Frontend evaluator based on my fuzzer representation and direct interpreter of
@@ -695,7 +857,7 @@ pub fn filter_capture_args(args: Rc<SExp>, name_map: &HashMap<Vec<u8>, Rc<BodyFo
     }
 }
 
-impl<'info> Evaluator {
+impl Evaluator {
     pub fn new(
         opts: Rc<dyn CompilerOpts>,
         runner: Rc<dyn TRunProgram>,
@@ -722,28 +884,58 @@ impl<'info> Evaluator {
         }
     }
 
+    fn body_result(result: EvalResult, loc: Srcloc) -> Result<Rc<BodyForm>, CompileErr> {
+        match result? {
+            EvalValue::Body(body) => Ok(body),
+            EvalValue::Lambda(_) => Err(CompileErr(
+                loc,
+                "internal evaluator return type mismatch".to_string(),
+            )),
+        }
+    }
+
+    fn body_done(result: Result<Rc<BodyForm>, CompileErr>) -> EvalStep {
+        EvalStep::Complete(result.map(EvalValue::Body))
+    }
+
+    fn increment_depth(
+        state: &VisitedInfo,
+        depth: usize,
+        loc: Srcloc,
+    ) -> Result<usize, CompileErr> {
+        if state.max_depth.is_some_and(|limit| depth >= limit) {
+            Err(CompileErr(loc, "stack limit exceeded".to_string()))
+        } else {
+            Ok(depth + 1)
+        }
+    }
+
+    fn request_body(request: ShrinkRequest, continuation: Continuation) -> EvalStep {
+        EvalStep::Request(EvalRequest::Shrink(request), continuation)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn invoke_macro_expansion(
         &self,
         context: &mut BasicCompileContext,
-        visited: &'_ mut VisitedMarker<'info, VisitedInfo>,
         l: Srcloc,
         call_loc: Srcloc,
         program: Rc<CompileForm>,
         prog_args: Rc<SExp>,
-        arguments_to_convert: &[Rc<BodyForm>],
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
-    ) -> Result<Rc<BodyForm>, CompileErr> {
-        // Pass the SExp representation of the expressions into
-        // the macro after forming an argument sexp and then
+        arguments: Vec<Rc<BodyForm>>,
+        env: EvalEnv,
+        depth: usize,
+    ) -> EvalStep {
         let mut macro_args = Rc::new(SExp::Nil(l.clone()));
-        for i_reverse in 0..arguments_to_convert.len() {
-            let i = arguments_to_convert.len() - i_reverse - 1;
-            let arg_repr = arguments_to_convert[i].to_sexp();
+        for argument in arguments.iter().rev() {
+            let arg_repr = argument.to_sexp();
             macro_args = Rc::new(SExp::Cons(l.clone(), arg_repr, macro_args));
         }
 
-        let macro_expansion = self.expand_macro(context, l.clone(), program, macro_args)?;
+        let macro_expansion = match self.expand_macro(context, l.clone(), program, macro_args) {
+            Ok(expansion) => expansion,
+            Err(error) => return Self::body_done(Err(error)),
+        };
 
         if let Ok(input) = dequote(call_loc, macro_expansion.clone()) {
             let frontend_macro_input = Rc::new(SExp::Cons(
@@ -756,524 +948,401 @@ impl<'info> Evaluator {
                 )),
             ));
 
-            frontend(self.opts.clone(), &[frontend_macro_input])
-                .map(|p| p.compileform().clone())
-                .and_then(|program| {
-                    self.shrink_bodyform_visited(
-                        context,
-                        visited,
-                        prog_args.clone(),
+            match frontend(self.opts.clone(), &[frontend_macro_input]) {
+                Ok(program) => Self::request_body(
+                    ShrinkRequest {
+                        prog_args,
                         env,
-                        program.exp,
-                        false,
-                    )
-                })
+                        body: program.compileform().exp.clone(),
+                        only_inline: false,
+                        depth,
+                    },
+                    Continuation::Identity,
+                ),
+                Err(error) => Self::body_done(Err(error)),
+            }
         } else {
-            promote_program_to_bodyform(
+            Self::body_done(promote_program_to_bodyform(
                 macro_expansion.to_sexp(),
                 Rc::new(BodyForm::Value(SExp::Atom(
                     macro_expansion.loc(),
                     vec![b'@'],
                 ))),
-            )
+            ))
         }
     }
 
-    fn is_lambda_apply(
-        &self,
-        context: &mut BasicCompileContext,
-        visited_: &'info mut VisitedMarker<'_, VisitedInfo>,
-        prog_args: Rc<SExp>,
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
-        parts: &[Rc<BodyForm>],
-        only_inline: bool,
-    ) -> Result<Option<LambdaApply>, CompileErr> {
-        if parts.len() == 3 && is_apply_atom(parts[0].to_sexp()) {
-            let mut visited = VisitedMarker::again(parts[0].loc(), visited_)?;
-            let evaluated_prog = self.shrink_bodyform_visited(
-                context,
-                &mut visited,
-                prog_args.clone(),
-                env,
-                parts[1].clone(),
-                only_inline,
-            )?;
-            let evaluated_env = self.shrink_bodyform_visited(
-                context,
-                &mut visited,
-                prog_args,
-                env,
-                parts[2].clone(),
-                only_inline,
-            )?;
-            if let BodyForm::Lambda(ldata) = evaluated_prog.borrow() {
-                return Ok(Some(LambdaApply {
-                    lambda: *ldata.clone(),
-                    body: ldata.body.clone(),
-                    env: evaluated_env,
-                }));
-            }
+    fn is_lambda_apply(&self, request: IsLambdaRequest) -> EvalStep {
+        if request.parts.len() != 3 || !is_apply_atom(request.parts[0].to_sexp()) {
+            return EvalStep::Complete(Ok(EvalValue::Lambda(None)));
         }
 
-        Ok(None)
-    }
-
-    fn do_lambda_apply(
-        &self,
-        context: &mut BasicCompileContext,
-        visited: &mut VisitedMarker<'info, VisitedInfo>,
-        prog_args: Rc<SExp>,
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
-        lapply: &LambdaApply,
-        only_inline: bool,
-    ) -> Result<Rc<BodyForm>, CompileErr> {
-        let mut lambda_env = env.clone();
-
-        // Finish eta-expansion.
-
-        // We're carrying an enriched environment which we can use to enrich
-        // the env map at this time.  Once we do that we can expand the body
-        // fully because we're carring the info that goes with the primary
-        // arguments.
-        //
-        // Generate the enriched environment.
-        let reified_captures = self.shrink_bodyform_visited(
-            context,
-            visited,
-            prog_args,
-            env,
-            lapply.lambda.captures.clone(),
-            only_inline,
-        )?;
-        let formed_caps = ArgInputs::Whole(reified_captures);
-        create_argument_captures(
-            &mut lambda_env,
-            &formed_caps,
-            lapply.lambda.capture_args.clone(),
-        )?;
-
-        // Create captures with the actual parameters.
-        let formed_args = ArgInputs::Whole(lapply.env.clone());
-        create_argument_captures(&mut lambda_env, &formed_args, lapply.lambda.args.clone())?;
-
-        self.shrink_bodyform_visited(
-            context,
-            visited,
-            lapply.lambda.args.clone(),
-            &lambda_env,
-            lapply.body.clone(),
-            only_inline,
+        Self::request_body(
+            ShrinkRequest {
+                prog_args: request.prog_args.clone(),
+                env: request.env.clone(),
+                body: request.parts[1].clone(),
+                only_inline: request.only_inline,
+                depth: request.depth,
+            },
+            Continuation::IsLambdaProgram(request),
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    fn do_lambda_apply(&self, request: LambdaRequest) -> EvalStep {
+        Self::request_body(
+            ShrinkRequest {
+                prog_args: request.prog_args.clone(),
+                env: request.env.clone(),
+                body: request.lapply.lambda.captures.clone(),
+                only_inline: request.only_inline,
+                depth: request.depth,
+            },
+            Continuation::LambdaCaptures(request),
+        )
+    }
+
     fn invoke_primitive(
         &self,
         context: &mut BasicCompileContext,
-        visited_: &'_ mut VisitedMarker<'info, VisitedInfo>,
-        call: &CallSpec,
-        prog_args: Rc<SExp>,
-        arguments_to_convert: &[Rc<BodyForm>],
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
-        only_inline: bool,
-    ) -> Result<Rc<BodyForm>, CompileErr> {
-        let mut all_primitive = true;
-        let mut target_vec: Vec<Rc<BodyForm>> = call.args.to_owned();
-        let mut visited = VisitedMarker::again(call.loc.clone(), visited_)?;
+        request: PrimitiveRequest,
+    ) -> EvalStep {
+        if request.call.name == b"@" {
+            return Self::body_done(Ok(Rc::new(BodyForm::Quoted(SExp::Cons(
+                request.call.loc.clone(),
+                Rc::new(SExp::Nil(request.call.loc)),
+                request.prog_args,
+            )))));
+        }
 
-        if call.name == "@".as_bytes() {
-            // Synthesize the environment for this function
-            Ok(Rc::new(BodyForm::Quoted(SExp::Cons(
-                call.loc.clone(),
-                Rc::new(SExp::Nil(call.loc.clone())),
-                prog_args,
-            ))))
-        } else if call.name == "com".as_bytes() {
+        if request.call.name == b"com" {
             let mut end_of_list = Rc::new(SExp::Cons(
-                call.loc.clone(),
-                arguments_to_convert[0].to_sexp(),
-                Rc::new(SExp::Nil(call.loc.clone())),
+                request.call.loc.clone(),
+                request.arguments[0].to_sexp(),
+                Rc::new(SExp::Nil(request.call.loc.clone())),
             ));
-
             for h in self.helpers.iter() {
-                end_of_list = Rc::new(SExp::Cons(call.loc.clone(), h.to_sexp(), end_of_list))
+                end_of_list = Rc::new(SExp::Cons(
+                    request.call.loc.clone(),
+                    h.to_sexp(),
+                    end_of_list,
+                ))
             }
-
             let use_body = SExp::Cons(
-                call.loc.clone(),
-                Rc::new(SExp::Atom(call.loc.clone(), "mod".as_bytes().to_vec())),
-                Rc::new(SExp::Cons(call.loc.clone(), prog_args, end_of_list)),
+                request.call.loc.clone(),
+                Rc::new(SExp::Atom(request.call.loc.clone(), b"mod".to_vec())),
+                Rc::new(SExp::Cons(
+                    request.call.loc.clone(),
+                    request.prog_args,
+                    end_of_list,
+                )),
             );
+            return match self.compile_code(context, false, Rc::new(use_body)) {
+                Ok(compiled) => {
+                    Self::body_done(Ok(Rc::new(BodyForm::Quoted(compiled.as_ref().clone()))))
+                }
+                Err(error) => Self::body_done(Err(error)),
+            };
+        }
 
-            let compiled = self.compile_code(context, false, Rc::new(use_body))?;
-            let compiled_borrowed: &SExp = compiled.borrow();
-            Ok(Rc::new(BodyForm::Quoted(compiled_borrowed.clone())))
-        } else {
-            let pres = self
-                .lookup_prim(call.loc.clone(), call.name)
-                .map(|prim| {
-                    // Reduce all arguments.
-                    let mut converted_args = SExp::Nil(call.loc.clone());
+        let Some(prim) = self.lookup_prim(request.call.loc.clone(), &request.call.name) else {
+            return Self::body_done(Err(CompileErr(
+                request.call.loc,
+                format!(
+                    "Don't yet support this call type {} {:?}",
+                    request.call.original.to_sexp(),
+                    request.call.original
+                ),
+            )));
+        };
 
-                    for i_reverse in 0..arguments_to_convert.len() {
-                        let i = arguments_to_convert.len() - i_reverse - 1;
-                        let shrunk = self.shrink_bodyform_visited(
-                            context,
-                            &mut visited,
-                            prog_args.clone(),
-                            env,
-                            arguments_to_convert[i].clone(),
-                            only_inline,
-                        )?;
+        let count = request.arguments.len();
+        let state = PrimitiveState {
+            call: request.call,
+            prog_args: request.prog_args,
+            arguments: request.arguments,
+            env: request.env,
+            only_inline: request.only_inline,
+            depth: request.depth,
+            prim,
+            target: Vec::new(),
+            converted: vec![None; count],
+            next: count,
+            all_primitive: true,
+        };
+        self.next_primitive_argument(context, state)
+    }
 
-                        target_vec[i + 1] = shrunk.clone();
+    fn next_primitive_argument(
+        &self,
+        context: &mut BasicCompileContext,
+        mut state: PrimitiveState,
+    ) -> EvalStep {
+        if state.target.is_empty() {
+            state.target = state.call.args.clone();
+        }
+        if state.next > 0 {
+            let index = state.next - 1;
+            state.next = index;
+            return Self::request_body(
+                ShrinkRequest {
+                    prog_args: state.prog_args.clone(),
+                    env: state.env.clone(),
+                    body: state.arguments[index].clone(),
+                    only_inline: state.only_inline,
+                    depth: state.depth,
+                },
+                Continuation::PrimitiveArg(state),
+            );
+        }
 
-                        if !arg_inputs_primitive(Rc::new(ArgInputs::Whole(shrunk.clone()))) {
-                            all_primitive = false;
-                        }
+        let mut converted_args = SExp::Nil(state.call.loc.clone());
+        for converted in state.converted.iter().rev() {
+            converted_args = SExp::Cons(
+                state.call.loc.clone(),
+                converted.as_ref().expect("converted argument").clone(),
+                Rc::new(converted_args),
+            );
+        }
+        if state.all_primitive {
+            let result = self.run_prim(
+                context.allocator(),
+                state.call.loc.clone(),
+                make_prim_call(state.call.loc.clone(), state.prim, Rc::new(converted_args)),
+                Rc::new(SExp::Nil(state.call.loc.clone())),
+            );
+            return match result {
+                Ok(body) => Self::body_done(Ok(body)),
+                Err(_) if state.only_inline || self.ignore_exn => Self::body_done(Ok(Rc::new(
+                    BodyForm::Call(state.call.loc, state.target, None),
+                ))),
+                Err(error) => Self::body_done(Err(error)),
+            };
+        }
 
-                        converted_args =
-                            SExp::Cons(call.loc.clone(), shrunk.to_sexp(), Rc::new(converted_args));
-                    }
+        EvalStep::Request(
+            EvalRequest::IsLambda(IsLambdaRequest {
+                prog_args: state.prog_args.clone(),
+                env: state.env.clone(),
+                parts: state.target.clone(),
+                only_inline: state.only_inline,
+                depth: state.depth,
+            }),
+            Continuation::PrimitiveLambda(state),
+        )
+    }
 
-                    if all_primitive {
-                        match self.run_prim(
-                            context.allocator(),
-                            call.loc.clone(),
-                            make_prim_call(call.loc.clone(), prim, Rc::new(converted_args)),
-                            Rc::new(SExp::Nil(call.loc.clone())),
-                        ) {
-                            Ok(res) => Ok(res),
-                            Err(e) => {
-                                if only_inline || self.ignore_exn {
-                                    Ok(Rc::new(BodyForm::Call(
-                                        call.loc.clone(),
-                                        target_vec.clone(),
-                                        None,
-                                    )))
-                                } else {
-                                    Err(e)
-                                }
-                            }
-                        }
-                    } else if let Some(applied_lambda) = self.is_lambda_apply(
-                        context,
-                        &mut visited,
-                        prog_args.clone(),
-                        env,
-                        &target_vec,
-                        only_inline,
-                    )? {
-                        self.do_lambda_apply(
-                            context,
-                            &mut visited,
-                            prog_args.clone(),
-                            env,
-                            &applied_lambda,
-                            only_inline,
-                        )
-                    } else {
-                        // Since this is a primitive, there's no tail transform.
-                        let reformed =
-                            BodyForm::Call(call.loc.clone(), target_vec.clone(), call.tail.clone());
-                        self.chase_apply(context, &mut visited, Rc::new(reformed))
-                    }
-                })
-                .unwrap_or_else(|| {
-                    // Build SExp arguments for external call or
-                    // return the unevaluated chunk with minimized
-                    // arguments.
-                    Err(CompileErr(
-                        call.loc.clone(),
-                        format!(
-                            "Don't yet support this call type {} {:?}",
-                            call.original.to_sexp(),
-                            call.original
-                        ),
-                    ))
-                })?;
-            Ok(pres)
+    fn continue_apply(&self, env: Rc<BodyForm>, run_program: Rc<SExp>, depth: usize) -> EvalStep {
+        match promote_program_to_bodyform(run_program.clone(), env) {
+            Ok(program) => Self::request_body(
+                ShrinkRequest {
+                    prog_args: Rc::new(SExp::Nil(run_program.loc())),
+                    env: Rc::new(HashMap::new()),
+                    body: program,
+                    only_inline: false,
+                    depth,
+                },
+                Continuation::ContinueApply { depth },
+            ),
+            Err(error) => Self::body_done(Err(error)),
         }
     }
 
-    fn continue_apply(
-        &self,
-        context: &mut BasicCompileContext,
-        visited: &'_ mut VisitedMarker<'info, VisitedInfo>,
-        env: Rc<BodyForm>,
-        run_program: Rc<SExp>,
-    ) -> Result<Rc<BodyForm>, CompileErr> {
-        let bindings = HashMap::new();
-        let program = promote_program_to_bodyform(run_program.clone(), env)?;
-        let apply_result = self.shrink_bodyform_visited(
-            context,
-            visited,
-            Rc::new(SExp::Nil(run_program.loc())),
-            &bindings,
-            program,
-            false,
-        )?;
-        self.chase_apply(context, visited, apply_result)
-    }
-
-    fn do_mash_condition(
-        &self,
-        context: &mut BasicCompileContext,
-        visited: &'_ mut VisitedMarker<'info, VisitedInfo>,
-        maybe_condition: Rc<BodyForm>,
-        env: Rc<BodyForm>,
-    ) -> Result<Rc<BodyForm>, CompileErr> {
-        // The inner part could be an 'i' which we know passes on
-        // one of the two conditional arguments.  This was an apply so
-        // we can distribute over the conditional arguments.
-        if let Some((cond, iftrue, iffalse)) = match_i_op(maybe_condition.clone()) {
+    fn do_mash_condition(&self, request: MashRequest, state: &mut VisitedInfo) -> EvalStep {
+        if let Some((cond, iftrue, iffalse)) = match_i_op(request.maybe_condition.clone()) {
             let x_head = Rc::new(BodyForm::Value(SExp::Atom(cond.loc(), vec![b'x'])));
             let apply_head = Rc::new(BodyForm::Value(SExp::Atom(iftrue.loc(), vec![2])));
             let where_from = cond.loc().to_string();
             let where_from_vec = where_from.as_bytes().to_vec();
 
-            if let Some(present) = visited.get_function(&where_from_vec) {
-                return Ok(present);
+            if let Some(present) = state.functions.get(&where_from_vec) {
+                return Self::body_done(Ok(present.clone()));
             }
-
-            visited.insert_function(
+            state.functions.insert(
                 where_from_vec,
                 Rc::new(BodyForm::Call(
-                    maybe_condition.loc(),
+                    request.maybe_condition.loc(),
                     vec![x_head.clone(), cond.clone()],
                     None,
                 )),
             );
-
-            let surrogate_apply_true = self.chase_apply(
-                context,
-                visited,
-                Rc::new(BodyForm::Call(
-                    iftrue.loc(),
-                    vec![apply_head.clone(), iftrue.clone(), env.clone()],
-                    None,
-                )),
-            );
-
-            let surrogate_apply_false = self.chase_apply(
-                context,
-                visited,
-                Rc::new(BodyForm::Call(
-                    iffalse.loc(),
-                    vec![apply_head, iffalse.clone(), env],
-                    None,
-                )),
-            );
-
-            // Reproduce the equivalent hull over the used values of
-            // (a (i cond surrogate_apply_true surrogate_apply_false))
-            // Flatten and short circuit any farther evaluation since we just
-            // want the argument names passed through from the environment.
-            let res = Rc::new(BodyForm::Call(
-                maybe_condition.loc(),
-                vec![
+            return EvalStep::Request(
+                EvalRequest::Chase(ChaseRequest {
+                    body: Rc::new(BodyForm::Call(
+                        iftrue.loc(),
+                        vec![apply_head.clone(), iftrue.clone(), request.env.clone()],
+                        None,
+                    )),
+                    depth: request.depth,
+                }),
+                Continuation::MashTrue {
                     x_head,
-                    flatten_expression_to_names(cond.to_sexp()),
-                    flatten_expression_to_names(surrogate_apply_true?.to_sexp()),
-                    flatten_expression_to_names(surrogate_apply_false?.to_sexp()),
-                ],
-                None,
-            ));
-
-            return Ok(res);
+                    cond,
+                    iffalse,
+                    apply_head,
+                    env: request.env,
+                    location: request.maybe_condition.loc(),
+                    depth: request.depth,
+                },
+            );
         }
-
-        Err(CompileErr(maybe_condition.loc(), "not i op".to_string()))
+        Self::body_done(Err(CompileErr(
+            request.maybe_condition.loc(),
+            "not i op".to_string(),
+        )))
     }
 
-    fn chase_apply(
-        &self,
-        context: &mut BasicCompileContext,
-        visited: &'_ mut VisitedMarker<'info, VisitedInfo>,
-        body: Rc<BodyForm>,
-    ) -> Result<Rc<BodyForm>, CompileErr> {
-        if let BodyForm::Call(l, vec, None) = body.borrow() {
-            if is_apply_atom(vec[0].to_sexp()) {
+    fn chase_apply(&self, request: ChaseRequest) -> EvalStep {
+        if let BodyForm::Call(l, vec, None) = request.body.borrow() {
+            if !vec.is_empty() && is_apply_atom(vec[0].to_sexp()) {
                 if let Ok(run_program) = dequote(l.clone(), vec[1].clone()) {
-                    return self.continue_apply(context, visited, vec[2].clone(), run_program);
+                    return self.continue_apply(vec[2].clone(), run_program, request.depth);
                 }
-
                 if self.mash_conditions {
-                    if let Ok(mashed) =
-                        self.do_mash_condition(context, visited, vec[1].clone(), vec[2].clone())
-                    {
-                        return Ok(mashed);
-                    }
+                    return EvalStep::Request(
+                        EvalRequest::Mash(MashRequest {
+                            maybe_condition: vec[1].clone(),
+                            env: vec[2].clone(),
+                            depth: request.depth,
+                        }),
+                        Continuation::MashOrOriginal {
+                            original: request.body.clone(),
+                        },
+                    );
                 }
             }
         }
-
-        Ok(body)
+        Self::body_done(Ok(request.body))
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn handle_invoke(
-        &self,
-        context: &mut BasicCompileContext,
-        visited: &'_ mut VisitedMarker<'info, VisitedInfo>,
-        call: &CallSpec,
-        prog_args: Rc<SExp>,
-        arguments_to_convert: &[Rc<BodyForm>],
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
-        only_inline: bool,
-    ) -> Result<Rc<BodyForm>, CompileErr> {
-        let helper = select_helper(&self.helpers, call.name);
+    fn handle_invoke(&self, context: &mut BasicCompileContext, request: InvokeRequest) -> EvalStep {
+        let helper = select_helper(&self.helpers, &request.call.name);
         match helper {
             Some(HelperForm::Defmacro(mac)) => {
-                if call.tail.is_some() {
-                    return Err(CompileErr(
-                        call.loc.clone(),
+                if request.call.tail.is_some() {
+                    return Self::body_done(Err(CompileErr(
+                        request.call.loc,
                         "Macros cannot use runtime rest arguments".to_string(),
-                    ));
+                    )));
                 }
                 self.invoke_macro_expansion(
                     context,
-                    visited,
                     mac.loc.clone(),
-                    call.loc.clone(),
+                    request.call.loc,
                     mac.program,
-                    prog_args,
-                    arguments_to_convert,
-                    env,
+                    request.prog_args,
+                    request.arguments,
+                    request.env,
+                    request.depth,
                 )
             }
             Some(HelperForm::Defun(inline, defun)) => {
-                if !inline && only_inline {
-                    return Ok(call.original.clone());
+                if !inline && request.only_inline {
+                    return Self::body_done(Ok(request.call.original));
                 }
-
-                let translated_tail = if let Some(t) = call.tail.as_ref() {
-                    Some(self.shrink_bodyform_visited(
-                        context,
-                        visited,
-                        prog_args.clone(),
-                        env,
-                        t.clone(),
-                        only_inline,
-                    )?)
-                } else {
-                    None
+                let state = DefunState {
+                    defun,
+                    prog_args: request.prog_args,
+                    arguments: request.arguments,
+                    env: request.env,
+                    only_inline: request.only_inline,
+                    depth: request.depth,
+                    call_loc: request.call.loc,
                 };
-
-                let argument_captures_untranslated = build_argument_captures(
-                    &call.loc.clone(),
-                    arguments_to_convert,
-                    translated_tail.clone(),
-                    defun.args.clone(),
-                )?;
-
-                let mut argument_captures = HashMap::new();
-                // Do this to protect against misalignment
-                // between argument vec and destructuring.
-                for kv in argument_captures_untranslated.iter() {
-                    let shrunk = self.shrink_bodyform_visited(
-                        context,
-                        visited,
-                        prog_args.clone(),
-                        env,
-                        kv.1.clone(),
-                        only_inline,
-                    )?;
-
-                    argument_captures.insert(kv.0.clone(), shrunk.clone());
+                if let Some(tail) = request.call.tail {
+                    Self::request_body(
+                        ShrinkRequest {
+                            prog_args: state.prog_args.clone(),
+                            env: state.env.clone(),
+                            body: tail,
+                            only_inline: state.only_inline,
+                            depth: state.depth,
+                        },
+                        Continuation::DefunTail(state),
+                    )
+                } else {
+                    self.start_defun_captures(state, None)
                 }
-
-                self.shrink_bodyform_visited(
-                    context,
-                    visited,
-                    defun.args.clone(),
-                    &argument_captures,
-                    defun.body,
-                    only_inline,
-                )
             }
-            _ => self
-                .invoke_primitive(
-                    context,
-                    visited,
-                    call,
-                    prog_args,
-                    arguments_to_convert,
-                    env,
-                    only_inline,
-                )
-                .and_then(|res| self.chase_apply(context, visited, res)),
+            _ => EvalStep::Request(
+                EvalRequest::Primitive(PrimitiveRequest {
+                    call: request.call,
+                    prog_args: request.prog_args,
+                    arguments: request.arguments,
+                    env: request.env,
+                    only_inline: request.only_inline,
+                    depth: request.depth,
+                }),
+                Continuation::Chase {
+                    depth: request.depth,
+                },
+            ),
         }
     }
 
-    fn enrich_lambda_site_info(
-        &self,
-        context: &mut BasicCompileContext,
-        visited: &'info mut VisitedMarker<'_, VisitedInfo>,
-        prog_args: Rc<SExp>,
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
-        ldata: &LambdaData,
-        only_inline: bool,
-    ) -> Result<Rc<BodyForm>, CompileErr> {
-        if !truthy(ldata.capture_args.clone()) {
-            return Ok(Rc::new(BodyForm::Lambda(Box::new(ldata.clone()))));
+    fn start_defun_captures(&self, state: DefunState, tail: Option<Rc<BodyForm>>) -> EvalStep {
+        let captures = match build_argument_captures(
+            &state.call_loc,
+            &state.arguments,
+            tail,
+            state.defun.args.clone(),
+        ) {
+            Ok(captures) => captures.into_iter().collect(),
+            Err(error) => return Self::body_done(Err(error)),
+        };
+        self.next_defun_capture(CaptureState {
+            defun: state.defun,
+            prog_args: state.prog_args,
+            env: state.env,
+            only_inline: state.only_inline,
+            depth: state.depth,
+            captures,
+            translated: HashMap::new(),
+            next: 0,
+        })
+    }
+
+    fn next_defun_capture(&self, mut state: CaptureState) -> EvalStep {
+        if state.next < state.captures.len() {
+            let body = state.captures[state.next].1.clone();
+            state.next += 1;
+            return Self::request_body(
+                ShrinkRequest {
+                    prog_args: state.prog_args.clone(),
+                    env: state.env.clone(),
+                    body,
+                    only_inline: state.only_inline,
+                    depth: state.depth,
+                },
+                Continuation::DefunCapture(state),
+            );
         }
+        Self::request_body(
+            ShrinkRequest {
+                prog_args: state.defun.args.clone(),
+                env: Rc::new(state.translated),
+                body: state.defun.body,
+                only_inline: state.only_inline,
+                depth: state.depth,
+            },
+            Continuation::Identity,
+        )
+    }
 
-        // Rewrite the captures based on what we know at the call site.
-        let new_captures = self.shrink_bodyform_visited(
-            context,
-            visited,
-            prog_args.clone(),
-            env,
-            ldata.captures.clone(),
-            only_inline,
-        )?;
-
-        // Break up and make binding map.
-        let deconsed_args = decons_args(new_captures.clone());
-        let mut arg_captures = HashMap::new();
-        create_argument_captures(
-            &mut arg_captures,
-            &deconsed_args,
-            ldata.capture_args.clone(),
-        )?;
-
-        // Filter out elements that are not interpretable yet.
-        let mut interpretable_captures = HashMap::new();
-        for (n, v) in arg_captures.iter() {
-            if dequote(v.loc(), v.clone()).is_ok() {
-                // This capture has already been made into a literal.
-                // We will substitute it in the lambda body and remove it
-                // from the capture set.
-                interpretable_captures.insert(n.clone(), v.clone());
-            }
+    fn enrich_lambda_site_info(&self, request: EnrichRequest) -> EvalStep {
+        if !truthy(request.ldata.capture_args.clone()) {
+            return Self::body_done(Ok(Rc::new(BodyForm::Lambda(Box::new(request.ldata)))));
         }
-
-        let combined_args = Rc::new(SExp::Cons(
-            ldata.loc.clone(),
-            ldata.capture_args.clone(),
-            ldata.args.clone(),
-        ));
-
-        // Eliminate the captures via beta substituion.
-        let simplified_body = self.shrink_bodyform_visited(
-            context,
-            visited,
-            combined_args.clone(),
-            &interpretable_captures,
-            ldata.body.clone(),
-            only_inline,
-        )?;
-
-        let new_capture_args =
-            filter_capture_args(ldata.capture_args.clone(), &interpretable_captures);
-        Ok(Rc::new(BodyForm::Lambda(Box::new(LambdaData {
-            args: ldata.args.clone(),
-            capture_args: new_capture_args,
-            captures: new_captures,
-            body: simplified_body,
-            ..ldata.clone()
-        }))))
+        Self::request_body(
+            ShrinkRequest {
+                prog_args: request.prog_args.clone(),
+                env: request.env.clone(),
+                body: request.ldata.captures.clone(),
+                only_inline: request.only_inline,
+                depth: request.depth,
+            },
+            Continuation::EnrichCaptures(request),
+        )
     }
 
     fn get_function(&self, name: &[u8]) -> Option<Box<DefunData>> {
@@ -1301,46 +1370,96 @@ impl<'info> Evaluator {
         ))
     }
 
-    // A frontend language evaluator and minifier
-    fn shrink_bodyform_visited(
+    fn dispatch(
         &self,
         context: &mut BasicCompileContext,
-        visited_: &'info mut VisitedMarker<'_, VisitedInfo>,
-        prog_args: Rc<SExp>,
-        env: &HashMap<Vec<u8>, Rc<BodyForm>>,
-        body: Rc<BodyForm>,
-        only_inline: bool,
-    ) -> Result<Rc<BodyForm>, CompileErr> {
-        let mut visited = VisitedMarker::again(body.loc(), visited_)?;
+        request: EvalRequest,
+        state: &mut VisitedInfo,
+    ) -> EvalStep {
+        match request {
+            EvalRequest::Shrink(mut request) => {
+                request.depth =
+                    match Self::increment_depth(state, request.depth, request.body.loc()) {
+                        Ok(depth) => depth,
+                        Err(error) => return Self::body_done(Err(error)),
+                    };
+                self.shrink_bodyform_visited(context, request)
+            }
+            EvalRequest::IsLambda(mut request) => {
+                let loc = request
+                    .parts
+                    .first()
+                    .map(|part| part.loc())
+                    .unwrap_or_else(|| Srcloc::start(&"*evaluator*".to_string()));
+                request.depth = match Self::increment_depth(state, request.depth, loc) {
+                    Ok(depth) => depth,
+                    Err(error) => {
+                        return EvalStep::Complete(Err(error));
+                    }
+                };
+                self.is_lambda_apply(request)
+            }
+            EvalRequest::Primitive(mut request) => {
+                request.depth =
+                    match Self::increment_depth(state, request.depth, request.call.loc.clone()) {
+                        Ok(depth) => depth,
+                        Err(error) => return Self::body_done(Err(error)),
+                    };
+                self.invoke_primitive(context, request)
+            }
+            EvalRequest::Lambda(request) => self.do_lambda_apply(request),
+            EvalRequest::Invoke(request) => self.handle_invoke(context, request),
+            EvalRequest::Chase(request) => self.chase_apply(request),
+            EvalRequest::Mash(request) => self.do_mash_condition(request, state),
+            EvalRequest::Enrich(request) => self.enrich_lambda_site_info(request),
+        }
+    }
+
+    fn shrink_bodyform_visited(
+        &self,
+        _context: &mut BasicCompileContext,
+        request: ShrinkRequest,
+    ) -> EvalStep {
+        let ShrinkRequest {
+            prog_args,
+            env,
+            body,
+            only_inline,
+            depth,
+        } = request;
         match body.borrow() {
             BodyForm::Let(LetFormKind::Parallel, letdata) => {
                 if eval_dont_expand_let(&letdata.inline_hint) && only_inline {
-                    return Ok(body.clone());
+                    return Self::body_done(Ok(body.clone()));
                 }
 
-                let updated_bindings = update_parallel_bindings(env, &letdata.bindings);
-                self.shrink_bodyform_visited(
-                    context,
-                    &mut visited,
-                    prog_args,
-                    &updated_bindings,
-                    letdata.body.clone(),
-                    only_inline,
+                let updated_bindings = update_parallel_bindings(&env, &letdata.bindings);
+                Self::request_body(
+                    ShrinkRequest {
+                        prog_args,
+                        env: Rc::new(updated_bindings),
+                        body: letdata.body.clone(),
+                        only_inline,
+                        depth,
+                    },
+                    Continuation::Identity,
                 )
             }
             BodyForm::Let(LetFormKind::Sequential, letdata) => {
                 if eval_dont_expand_let(&letdata.inline_hint) && only_inline {
-                    return Ok(body.clone());
+                    return Self::body_done(Ok(body.clone()));
                 }
 
                 if letdata.bindings.is_empty() {
-                    self.shrink_bodyform_visited(
-                        context,
-                        &mut visited,
-                        prog_args,
-                        env,
-                        letdata.body.clone(),
-                        only_inline,
+                    Self::request_body(
+                        ShrinkRequest {
+                            prog_args,
+                            env,
+                            body: letdata.body.clone(),
+                            only_inline,
+                            depth,
+                        },
+                        Continuation::Identity,
                     )
                 } else {
                     let first_binding_as_list: Vec<Rc<Binding>> =
@@ -1348,162 +1467,436 @@ impl<'info> Evaluator {
                     let rest_of_bindings: Vec<Rc<Binding>> =
                         letdata.bindings.iter().skip(1).cloned().collect();
 
-                    let updated_bindings = update_parallel_bindings(env, &first_binding_as_list);
-                    self.shrink_bodyform_visited(
-                        context,
-                        &mut visited,
-                        prog_args,
-                        &updated_bindings,
-                        Rc::new(BodyForm::Let(
-                            LetFormKind::Sequential,
-                            Box::new(LetData {
-                                bindings: rest_of_bindings,
-                                ..*letdata.clone()
-                            }),
-                        )),
-                        only_inline,
+                    let updated_bindings = update_parallel_bindings(&env, &first_binding_as_list);
+                    Self::request_body(
+                        ShrinkRequest {
+                            prog_args,
+                            env: Rc::new(updated_bindings),
+                            body: Rc::new(BodyForm::Let(
+                                LetFormKind::Sequential,
+                                Box::new(LetData {
+                                    bindings: rest_of_bindings,
+                                    ..*letdata.clone()
+                                }),
+                            )),
+                            only_inline,
+                            depth,
+                        },
+                        Continuation::Identity,
                     )
                 }
             }
             BodyForm::Let(LetFormKind::Assign, letdata) => {
                 if eval_dont_expand_let(&letdata.inline_hint) && only_inline {
-                    return Ok(body.clone());
+                    return Self::body_done(Ok(body.clone()));
                 }
 
-                self.shrink_bodyform_visited(
-                    context,
-                    &mut visited,
-                    prog_args,
-                    env,
-                    Rc::new(hoist_assign_form(letdata)?),
-                    only_inline,
-                )
-            }
-            BodyForm::Quoted(_) => Ok(body.clone()),
-            BodyForm::Value(SExp::Atom(l, name)) => {
-                if name == &"@".as_bytes().to_vec() {
-                    let literal_args = synthesize_args(prog_args.clone(), env)?;
-                    self.shrink_bodyform_visited(
-                        context,
-                        &mut visited,
-                        prog_args,
-                        env,
-                        literal_args,
-                        only_inline,
-                    )
-                } else if let Some(function) = self.get_function(name) {
-                    self.shrink_bodyform_visited(
-                        context,
-                        &mut visited,
-                        prog_args,
-                        env,
-                        self.create_mod_for_fun(l, function.borrow()),
-                        only_inline,
-                    )
-                } else {
-                    env.get(name)
-                        .map(|x| {
-                            if reflex_capture(name, x.clone()) {
-                                Ok(x.clone())
-                            } else {
-                                self.shrink_bodyform_visited(
-                                    context,
-                                    &mut visited,
-                                    prog_args.clone(),
-                                    env,
-                                    x.clone(),
-                                    only_inline,
-                                )
-                            }
-                        })
-                        .unwrap_or_else(|| {
-                            self.get_constant(name)
-                                .map(|x| {
-                                    self.shrink_bodyform_visited(
-                                        context,
-                                        &mut visited,
-                                        prog_args.clone(),
-                                        env,
-                                        x,
-                                        only_inline,
-                                    )
-                                })
-                                .unwrap_or_else(|| {
-                                    Ok(Rc::new(BodyForm::Value(SExp::Atom(
-                                        l.clone(),
-                                        name.clone(),
-                                    ))))
-                                })
-                        })
+                match hoist_assign_form(letdata) {
+                    Ok(hoisted) => Self::request_body(
+                        ShrinkRequest {
+                            prog_args,
+                            env,
+                            body: Rc::new(hoisted),
+                            only_inline,
+                            depth,
+                        },
+                        Continuation::Identity,
+                    ),
+                    Err(error) => Self::body_done(Err(error)),
                 }
             }
-            BodyForm::Value(v) => Ok(Rc::new(BodyForm::Quoted(v.clone()))),
+            BodyForm::Quoted(_) => Self::body_done(Ok(body.clone())),
+            BodyForm::Value(SExp::Atom(l, name)) => {
+                if name == b"@" {
+                    match synthesize_args(prog_args.clone(), &env) {
+                        Ok(literal_args) => Self::request_body(
+                            ShrinkRequest {
+                                prog_args,
+                                env,
+                                body: literal_args,
+                                only_inline,
+                                depth,
+                            },
+                            Continuation::Identity,
+                        ),
+                        Err(error) => Self::body_done(Err(error)),
+                    }
+                } else if let Some(function) = self.get_function(name) {
+                    Self::request_body(
+                        ShrinkRequest {
+                            prog_args,
+                            env,
+                            body: self.create_mod_for_fun(l, function.borrow()),
+                            only_inline,
+                            depth,
+                        },
+                        Continuation::Identity,
+                    )
+                } else if let Some(value) = env.get(name) {
+                    let value = value.clone();
+                    if reflex_capture(name, value.clone()) {
+                        Self::body_done(Ok(value))
+                    } else {
+                        Self::request_body(
+                            ShrinkRequest {
+                                prog_args,
+                                env,
+                                body: value,
+                                only_inline,
+                                depth,
+                            },
+                            Continuation::Identity,
+                        )
+                    }
+                } else if let Some(constant) = self.get_constant(name) {
+                    Self::request_body(
+                        ShrinkRequest {
+                            prog_args,
+                            env,
+                            body: constant,
+                            only_inline,
+                            depth,
+                        },
+                        Continuation::Identity,
+                    )
+                } else {
+                    Self::body_done(Ok(Rc::new(BodyForm::Value(SExp::Atom(
+                        l.clone(),
+                        name.clone(),
+                    )))))
+                }
+            }
+            BodyForm::Value(v) => Self::body_done(Ok(Rc::new(BodyForm::Quoted(v.clone())))),
             BodyForm::Call(l, parts, tail) => {
                 if parts.is_empty() {
-                    return Err(CompileErr(
+                    return Self::body_done(Err(CompileErr(
                         l.clone(),
                         "Impossible empty call list".to_string(),
-                    ));
+                    )));
                 }
 
                 let head_expr = parts[0].clone();
-                let arguments_to_convert: Vec<Rc<BodyForm>> =
-                    parts.iter().skip(1).cloned().collect();
+                let arguments: Vec<Rc<BodyForm>> = parts.iter().skip(1).cloned().collect();
 
-                match head_expr.borrow() {
-                    BodyForm::Value(SExp::Atom(_call_loc, call_name)) => self.handle_invoke(
-                        context,
-                        &mut visited,
-                        &CallSpec {
-                            loc: l.clone(),
-                            name: call_name,
-                            args: parts,
-                            original: body.clone(),
-                            tail: tail.clone(),
-                        },
+                let call = match head_expr.borrow() {
+                    BodyForm::Value(SExp::Atom(_, call_name)) => OwnedCallSpec {
+                        loc: l.clone(),
+                        name: call_name.clone(),
+                        args: parts.clone(),
+                        original: body.clone(),
+                        tail: tail.clone(),
+                    },
+                    BodyForm::Value(SExp::Integer(_, call_int)) => OwnedCallSpec {
+                        loc: l.clone(),
+                        name: u8_from_number(call_int.clone()),
+                        args: parts.clone(),
+                        original: body.clone(),
+                        tail: None,
+                    },
+                    _ => {
+                        return Self::body_done(Err(CompileErr(
+                            l.clone(),
+                            format!("Don't know how to call {}", head_expr.to_sexp()),
+                        )))
+                    }
+                };
+                EvalStep::Request(
+                    EvalRequest::Invoke(InvokeRequest {
+                        call,
                         prog_args,
-                        &arguments_to_convert,
+                        arguments,
                         env,
                         only_inline,
-                    ),
-                    BodyForm::Value(SExp::Integer(_call_loc, call_int)) => self.handle_invoke(
-                        context,
-                        &mut visited,
-                        &CallSpec {
-                            loc: l.clone(),
-                            name: &u8_from_number(call_int.clone()),
-                            args: parts,
-                            original: body.clone(),
-                            tail: None,
-                        },
-                        prog_args,
-                        &arguments_to_convert,
-                        env,
-                        only_inline,
-                    ),
-                    _ => Err(CompileErr(
-                        l.clone(),
-                        format!("Don't know how to call {}", head_expr.to_sexp()),
-                    )),
-                }
+                        depth,
+                    }),
+                    Continuation::Identity,
+                )
             }
             BodyForm::Mod(l, program) => {
-                // A mod form yields the compiled code.
                 let mut symbols = HashMap::new();
-                let optimizer = get_optimizer(l, self.opts.clone())?;
+                let optimizer = match get_optimizer(l, self.opts.clone()) {
+                    Ok(optimizer) => optimizer,
+                    Err(error) => return Self::body_done(Err(error)),
+                };
                 let mut context_wrapper =
                     CompileContextWrapper::new(self.runner.clone(), &mut symbols, optimizer);
-                let code = codegen(context_wrapper.context(), self.opts.clone(), program)?;
-                Ok(Rc::new(BodyForm::Quoted(code)))
+                Self::body_done(
+                    codegen(context_wrapper.context(), self.opts.clone(), program)
+                        .map(|code| Rc::new(BodyForm::Quoted(code))),
+                )
             }
-            BodyForm::Lambda(ldata) => self.enrich_lambda_site_info(
-                context,
-                &mut visited,
-                prog_args,
-                env,
-                ldata,
-                only_inline,
+            BodyForm::Lambda(ldata) => EvalStep::Request(
+                EvalRequest::Enrich(EnrichRequest {
+                    prog_args,
+                    env,
+                    ldata: *ldata.clone(),
+                    only_inline,
+                    depth,
+                }),
+                Continuation::Identity,
             ),
+        }
+    }
+
+    fn resume(
+        &self,
+        context: &mut BasicCompileContext,
+        continuation: Continuation,
+        result: EvalResult,
+    ) -> EvalStep {
+        match continuation {
+            Continuation::Identity => EvalStep::Complete(result),
+            Continuation::IsLambdaProgram(request) => {
+                let evaluated_prog = match Self::body_result(result, request.parts[1].loc()) {
+                    Ok(body) => body,
+                    Err(error) => return EvalStep::Complete(Err(error)),
+                };
+                Self::request_body(
+                    ShrinkRequest {
+                        prog_args: request.prog_args.clone(),
+                        env: request.env.clone(),
+                        body: request.parts[2].clone(),
+                        only_inline: request.only_inline,
+                        depth: request.depth,
+                    },
+                    Continuation::IsLambdaEnv {
+                        evaluated_prog,
+                        request,
+                    },
+                )
+            }
+            Continuation::IsLambdaEnv {
+                evaluated_prog,
+                request,
+            } => {
+                let evaluated_env = match Self::body_result(result, request.parts[2].loc()) {
+                    Ok(body) => body,
+                    Err(error) => return EvalStep::Complete(Err(error)),
+                };
+                let applied = match evaluated_prog.borrow() {
+                    BodyForm::Lambda(ldata) => Some(LambdaApply {
+                        lambda: *ldata.clone(),
+                        body: ldata.body.clone(),
+                        env: evaluated_env,
+                    }),
+                    _ => None,
+                };
+                EvalStep::Complete(Ok(EvalValue::Lambda(applied)))
+            }
+            Continuation::LambdaCaptures(request) => {
+                let reified = match Self::body_result(result, request.lapply.lambda.captures.loc())
+                {
+                    Ok(body) => body,
+                    Err(error) => return Self::body_done(Err(error)),
+                };
+                let mut lambda_env = (*request.env).clone();
+                if let Err(error) = create_argument_captures(
+                    &mut lambda_env,
+                    &ArgInputs::Whole(reified),
+                    request.lapply.lambda.capture_args.clone(),
+                ) {
+                    return Self::body_done(Err(error));
+                }
+                if let Err(error) = create_argument_captures(
+                    &mut lambda_env,
+                    &ArgInputs::Whole(request.lapply.env.clone()),
+                    request.lapply.lambda.args.clone(),
+                ) {
+                    return Self::body_done(Err(error));
+                }
+                Self::request_body(
+                    ShrinkRequest {
+                        prog_args: request.lapply.lambda.args,
+                        env: Rc::new(lambda_env),
+                        body: request.lapply.body,
+                        only_inline: request.only_inline,
+                        depth: request.depth,
+                    },
+                    Continuation::Identity,
+                )
+            }
+            Continuation::PrimitiveArg(mut state) => {
+                let index = state.next;
+                let shrunk = match Self::body_result(result, state.arguments[index].loc()) {
+                    Ok(body) => body,
+                    Err(error) => return Self::body_done(Err(error)),
+                };
+                state.target[index + 1] = shrunk.clone();
+                state.converted[index] = Some(shrunk.to_sexp());
+                state.all_primitive &= arg_inputs_primitive(Rc::new(ArgInputs::Whole(shrunk)));
+                self.next_primitive_argument(context, state)
+            }
+            Continuation::PrimitiveLambda(state) => match result {
+                Ok(EvalValue::Lambda(Some(applied))) => EvalStep::Request(
+                    EvalRequest::Lambda(LambdaRequest {
+                        prog_args: state.prog_args,
+                        env: state.env,
+                        lapply: applied,
+                        only_inline: state.only_inline,
+                        depth: state.depth,
+                    }),
+                    Continuation::Identity,
+                ),
+                Ok(EvalValue::Lambda(None)) => EvalStep::Request(
+                    EvalRequest::Chase(ChaseRequest {
+                        body: Rc::new(BodyForm::Call(
+                            state.call.loc,
+                            state.target,
+                            state.call.tail,
+                        )),
+                        depth: state.depth,
+                    }),
+                    Continuation::Identity,
+                ),
+                Ok(EvalValue::Body(_)) => Self::body_done(Err(CompileErr(
+                    state.call.loc,
+                    "internal evaluator return type mismatch".to_string(),
+                ))),
+                Err(error) => Self::body_done(Err(error)),
+            },
+            Continuation::Chase { depth } => match result {
+                Ok(EvalValue::Body(body)) => EvalStep::Request(
+                    EvalRequest::Chase(ChaseRequest { body, depth }),
+                    Continuation::Identity,
+                ),
+                other => EvalStep::Complete(other),
+            },
+            Continuation::ContinueApply { depth } => match result {
+                Ok(EvalValue::Body(body)) => EvalStep::Request(
+                    EvalRequest::Chase(ChaseRequest { body, depth }),
+                    Continuation::Identity,
+                ),
+                other => EvalStep::Complete(other),
+            },
+            Continuation::MashOrOriginal { original } => match result {
+                Ok(value) => EvalStep::Complete(Ok(value)),
+                Err(_) => Self::body_done(Ok(original)),
+            },
+            Continuation::MashTrue {
+                x_head,
+                cond,
+                iffalse,
+                apply_head,
+                env,
+                location,
+                depth,
+            } => {
+                let true_result = match Self::body_result(result, location.clone()) {
+                    Ok(body) => body,
+                    Err(error) => return Self::body_done(Err(error)),
+                };
+                EvalStep::Request(
+                    EvalRequest::Chase(ChaseRequest {
+                        body: Rc::new(BodyForm::Call(
+                            iffalse.loc(),
+                            vec![apply_head, iffalse, env],
+                            None,
+                        )),
+                        depth,
+                    }),
+                    Continuation::MashFalse {
+                        x_head,
+                        cond,
+                        true_result,
+                        location,
+                    },
+                )
+            }
+            Continuation::MashFalse {
+                x_head,
+                cond,
+                true_result,
+                location,
+            } => {
+                let false_result = match Self::body_result(result, location.clone()) {
+                    Ok(body) => body,
+                    Err(error) => return Self::body_done(Err(error)),
+                };
+                Self::body_done(Ok(Rc::new(BodyForm::Call(
+                    location,
+                    vec![
+                        x_head,
+                        flatten_expression_to_names(cond.to_sexp()),
+                        flatten_expression_to_names(true_result.to_sexp()),
+                        flatten_expression_to_names(false_result.to_sexp()),
+                    ],
+                    None,
+                ))))
+            }
+            Continuation::DefunTail(state) => {
+                let tail = match Self::body_result(result, state.call_loc.clone()) {
+                    Ok(body) => body,
+                    Err(error) => return Self::body_done(Err(error)),
+                };
+                self.start_defun_captures(state, Some(tail))
+            }
+            Continuation::DefunCapture(mut state) => {
+                let index = state.next - 1;
+                let shrunk = match Self::body_result(result, state.captures[index].1.loc()) {
+                    Ok(body) => body,
+                    Err(error) => return Self::body_done(Err(error)),
+                };
+                state
+                    .translated
+                    .insert(state.captures[index].0.clone(), shrunk);
+                self.next_defun_capture(state)
+            }
+            Continuation::EnrichCaptures(request) => {
+                let new_captures = match Self::body_result(result, request.ldata.captures.loc()) {
+                    Ok(body) => body,
+                    Err(error) => return Self::body_done(Err(error)),
+                };
+                let mut arg_captures = HashMap::new();
+                if let Err(error) = create_argument_captures(
+                    &mut arg_captures,
+                    &decons_args(new_captures.clone()),
+                    request.ldata.capture_args.clone(),
+                ) {
+                    return Self::body_done(Err(error));
+                }
+                let interpretable: HashMap<_, _> = arg_captures
+                    .into_iter()
+                    .filter(|(_, value)| dequote(value.loc(), value.clone()).is_ok())
+                    .collect();
+                let combined_args = Rc::new(SExp::Cons(
+                    request.ldata.loc.clone(),
+                    request.ldata.capture_args.clone(),
+                    request.ldata.args.clone(),
+                ));
+                Self::request_body(
+                    ShrinkRequest {
+                        prog_args: combined_args,
+                        env: Rc::new(interpretable.clone()),
+                        body: request.ldata.body.clone(),
+                        only_inline: request.only_inline,
+                        depth: request.depth,
+                    },
+                    Continuation::EnrichBody {
+                        ldata: request.ldata,
+                        new_captures,
+                        interpretable,
+                    },
+                )
+            }
+            Continuation::EnrichBody {
+                ldata,
+                new_captures,
+                interpretable,
+            } => {
+                let simplified = match Self::body_result(result, ldata.body.loc()) {
+                    Ok(body) => body,
+                    Err(error) => return Self::body_done(Err(error)),
+                };
+                let new_capture_args =
+                    filter_capture_args(ldata.capture_args.clone(), &interpretable);
+                Self::body_done(Ok(Rc::new(BodyForm::Lambda(Box::new(LambdaData {
+                    args: ldata.args.clone(),
+                    capture_args: new_capture_args,
+                    captures: new_captures,
+                    body: simplified,
+                    ..ldata
+                })))))
+            }
         }
     }
 
@@ -1531,19 +1924,54 @@ impl<'info> Evaluator {
         only_inline: bool,
         stack_limit: Option<usize>,
     ) -> Result<Rc<BodyForm>, CompileErr> {
-        let visited_info = VisitedInfo {
+        let mut state = VisitedInfo {
             max_depth: stack_limit,
             ..Default::default()
         };
-        let mut visited_marker = VisitedMarker::new(visited_info);
-        self.shrink_bodyform_visited(
+        let mut continuations = Vec::new();
+        let mut step = self.dispatch(
             context,
-            &mut visited_marker,
-            prog_args,
-            env,
-            body,
-            only_inline,
-        )
+            EvalRequest::Shrink(ShrinkRequest {
+                prog_args,
+                env: Rc::new(env.clone()),
+                body,
+                only_inline,
+                depth: 1,
+            }),
+            &mut state,
+        );
+        loop {
+            step = match step {
+                EvalStep::Request(request, continuation) => {
+                    if state
+                        .max_depth
+                        .is_some_and(|limit| continuations.len() >= limit)
+                    {
+                        self.resume(
+                            context,
+                            continuation,
+                            Err(CompileErr(
+                                request.loc(),
+                                "stack limit exceeded".to_string(),
+                            )),
+                        )
+                    } else {
+                        continuations.push(continuation);
+                        self.dispatch(context, request, &mut state)
+                    }
+                }
+                EvalStep::Complete(result) => {
+                    if let Some(continuation) = continuations.pop() {
+                        self.resume(context, continuation, result)
+                    } else {
+                        return Self::body_result(
+                            result,
+                            Srcloc::start(&"*evaluator*".to_string()),
+                        );
+                    }
+                }
+            };
+        }
     }
 
     fn expand_macro(

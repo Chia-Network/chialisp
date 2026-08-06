@@ -5,7 +5,7 @@ use clvm_rs::allocator::Allocator;
 
 use crate::compiler::compiler::compile_file;
 use crate::compiler::compiler::DefaultCompilerOpts;
-use crate::compiler::comptypes::{CompileErr, CompilerOpts};
+use crate::compiler::comptypes::{BodyForm, CompileErr, CompilerOpts, LetData, LetFormKind};
 use crate::compiler::evaluate::{Evaluator, EVAL_STACK_LIMIT};
 use crate::compiler::frontend::{from_clvm, frontend};
 use crate::compiler::optimize::get_optimizer;
@@ -49,6 +49,78 @@ fn shrink_expr_from_string(s: String) -> Result<String, CompileErr> {
     let result_sexp =
         squash_name_differences(result.to_sexp()).map_err(|e| CompileErr(loc.clone(), e))?;
     Ok(result_sexp.to_string())
+}
+
+fn evaluator_and_context() -> (Evaluator, BasicCompileContext, Rc<dyn CompilerOpts>, Srcloc) {
+    let runner = Rc::new(DefaultProgramRunner::new());
+    let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(&"*program*".to_string()));
+    let loc = Srcloc::start(&"*program*".to_string());
+    let context = BasicCompileContext::new(
+        Allocator::new(),
+        runner.clone(),
+        HashMap::new(),
+        get_optimizer(&loc, opts.clone()).unwrap(),
+    );
+    (
+        Evaluator::new(opts.clone(), runner, Vec::new()),
+        context,
+        opts,
+        loc,
+    )
+}
+
+#[test]
+fn test_explicit_stack_limit_boundary() {
+    let (evaluator, mut context, _, loc) = evaluator_and_context();
+    let body = Rc::new(BodyForm::Quoted(SExp::Integer(loc.clone(), 1.into())));
+    let args = Rc::new(SExp::Nil(loc.clone()));
+    let env = HashMap::new();
+
+    let error = evaluator
+        .shrink_bodyform(
+            &mut context,
+            args.clone(),
+            &env,
+            body.clone(),
+            false,
+            Some(1),
+        )
+        .unwrap_err();
+    assert_eq!(error.1, "stack limit exceeded");
+
+    assert!(evaluator
+        .shrink_bodyform(&mut context, args, &env, body, false, Some(2))
+        .is_ok());
+}
+
+#[test]
+fn test_deep_evaluation_uses_trampoline() {
+    let (evaluator, mut context, _, loc) = evaluator_and_context();
+    let mut body = Rc::new(BodyForm::Quoted(SExp::Integer(loc.clone(), 7.into())));
+    for _ in 0..10_000 {
+        body = Rc::new(BodyForm::Let(
+            LetFormKind::Sequential,
+            Box::new(LetData {
+                loc: loc.clone(),
+                kw: None,
+                inline_hint: None,
+                bindings: Vec::new(),
+                body,
+            }),
+        ));
+    }
+
+    let result = evaluator
+        .shrink_bodyform(
+            &mut context,
+            Rc::new(SExp::Nil(loc)),
+            &HashMap::new(),
+            body,
+            false,
+            None,
+        )
+        .unwrap();
+    assert_eq!(result.to_sexp().to_string(), "(q . 7)");
 }
 
 #[test]
