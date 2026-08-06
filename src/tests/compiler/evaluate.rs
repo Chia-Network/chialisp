@@ -110,6 +110,18 @@ fn test_deep_evaluation_uses_trampoline() {
         ));
     }
 
+    let error = evaluator
+        .shrink_bodyform(
+            &mut context,
+            Rc::new(SExp::Nil(loc.clone())),
+            &HashMap::new(),
+            body.clone(),
+            false,
+            Some(100),
+        )
+        .unwrap_err();
+    assert_eq!(error.1, "stack limit exceeded");
+
     let result = evaluator
         .shrink_bodyform(
             &mut context,
