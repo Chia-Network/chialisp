@@ -124,25 +124,6 @@ enum EvalRequest {
     Enrich(EnrichRequest),
 }
 
-impl EvalRequest {
-    fn loc(&self) -> Srcloc {
-        match self {
-            Self::Shrink(request) => request.body.loc(),
-            Self::IsLambda(request) => request
-                .parts
-                .first()
-                .map(|part| part.loc())
-                .unwrap_or_else(|| Srcloc::start(&"*evaluator*".to_string())),
-            Self::Primitive(request) => request.call.loc.clone(),
-            Self::Lambda(request) => request.lapply.body.loc(),
-            Self::Invoke(request) => request.call.loc.clone(),
-            Self::Chase(request) => request.body.loc(),
-            Self::Mash(request) => request.maybe_condition.loc(),
-            Self::Enrich(request) => request.ldata.loc.clone(),
-        }
-    }
-}
-
 enum EvalValue {
     Body(Rc<BodyForm>),
     Lambda(Option<LambdaApply>),
@@ -1943,22 +1924,8 @@ impl Evaluator {
         loop {
             step = match step {
                 EvalStep::Request(request, continuation) => {
-                    if state
-                        .max_depth
-                        .is_some_and(|limit| continuations.len() >= limit)
-                    {
-                        self.resume(
-                            context,
-                            continuation,
-                            Err(CompileErr(
-                                request.loc(),
-                                "stack limit exceeded".to_string(),
-                            )),
-                        )
-                    } else {
-                        continuations.push(continuation);
-                        self.dispatch(context, request, &mut state)
-                    }
+                    continuations.push(continuation);
+                    self.dispatch(context, request, &mut state)
                 }
                 EvalStep::Complete(result) => {
                     if let Some(continuation) = continuations.pop() {
