@@ -211,7 +211,7 @@ enum Continuation {
 }
 
 enum EvalStep {
-    Request(EvalRequest, Continuation),
+    Request(Box<EvalRequest>, Box<Continuation>),
     Complete(EvalResult),
 }
 
@@ -892,7 +892,11 @@ impl Evaluator {
     }
 
     fn request_body(request: ShrinkRequest, continuation: Continuation) -> EvalStep {
-        EvalStep::Request(EvalRequest::Shrink(request), continuation)
+        Self::request(EvalRequest::Shrink(request), continuation)
+    }
+
+    fn request(request: EvalRequest, continuation: Continuation) -> EvalStep {
+        EvalStep::Request(Box::new(request), Box::new(continuation))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1101,7 +1105,7 @@ impl Evaluator {
             };
         }
 
-        EvalStep::Request(
+        Self::request(
             EvalRequest::IsLambda(IsLambdaRequest {
                 prog_args: state.prog_args.clone(),
                 env: state.env.clone(),
@@ -1147,7 +1151,7 @@ impl Evaluator {
                     None,
                 )),
             );
-            return EvalStep::Request(
+            return Self::request(
                 EvalRequest::Chase(ChaseRequest {
                     body: Rc::new(BodyForm::Call(
                         iftrue.loc(),
@@ -1180,7 +1184,7 @@ impl Evaluator {
                     return self.continue_apply(vec[2].clone(), run_program, request.depth);
                 }
                 if self.mash_conditions {
-                    return EvalStep::Request(
+                    return Self::request(
                         EvalRequest::Mash(MashRequest {
                             maybe_condition: vec[1].clone(),
                             env: vec[2].clone(),
@@ -1245,7 +1249,7 @@ impl Evaluator {
                     self.start_defun_captures(state, None)
                 }
             }
-            _ => EvalStep::Request(
+            _ => Self::request(
                 EvalRequest::Primitive(PrimitiveRequest {
                     call: request.call,
                     prog_args: request.prog_args,
@@ -1371,7 +1375,7 @@ impl Evaluator {
                     .parts
                     .first()
                     .map(|part| part.loc())
-                    .unwrap_or_else(|| Srcloc::start(&"*evaluator*".to_string()));
+                    .unwrap_or_else(|| Srcloc::start("*evaluator*"));
                 request.depth = match Self::increment_depth(state, request.depth, loc) {
                     Ok(depth) => depth,
                     Err(error) => {
@@ -1581,7 +1585,7 @@ impl Evaluator {
                         )))
                     }
                 };
-                EvalStep::Request(
+                Self::request(
                     EvalRequest::Invoke(InvokeRequest {
                         call,
                         prog_args,
@@ -1606,7 +1610,7 @@ impl Evaluator {
                         .map(|code| Rc::new(BodyForm::Quoted(code))),
                 )
             }
-            BodyForm::Lambda(ldata) => EvalStep::Request(
+            BodyForm::Lambda(ldata) => Self::request(
                 EvalRequest::Enrich(EnrichRequest {
                     prog_args,
                     env,
@@ -1708,7 +1712,7 @@ impl Evaluator {
                 self.next_primitive_argument(context, state)
             }
             Continuation::PrimitiveLambda(state) => match result {
-                Ok(EvalValue::Lambda(Some(applied))) => EvalStep::Request(
+                Ok(EvalValue::Lambda(Some(applied))) => Self::request(
                     EvalRequest::Lambda(LambdaRequest {
                         prog_args: state.prog_args,
                         env: state.env,
@@ -1718,7 +1722,7 @@ impl Evaluator {
                     }),
                     Continuation::Identity,
                 ),
-                Ok(EvalValue::Lambda(None)) => EvalStep::Request(
+                Ok(EvalValue::Lambda(None)) => Self::request(
                     EvalRequest::Chase(ChaseRequest {
                         body: Rc::new(BodyForm::Call(
                             state.call.loc,
@@ -1736,14 +1740,14 @@ impl Evaluator {
                 Err(error) => Self::body_done(Err(error)),
             },
             Continuation::Chase { depth } => match result {
-                Ok(EvalValue::Body(body)) => EvalStep::Request(
+                Ok(EvalValue::Body(body)) => Self::request(
                     EvalRequest::Chase(ChaseRequest { body, depth }),
                     Continuation::Identity,
                 ),
                 other => EvalStep::Complete(other),
             },
             Continuation::ContinueApply { depth } => match result {
-                Ok(EvalValue::Body(body)) => EvalStep::Request(
+                Ok(EvalValue::Body(body)) => Self::request(
                     EvalRequest::Chase(ChaseRequest { body, depth }),
                     Continuation::Identity,
                 ),
@@ -1766,7 +1770,7 @@ impl Evaluator {
                     Ok(body) => body,
                     Err(error) => return Self::body_done(Err(error)),
                 };
-                EvalStep::Request(
+                Self::request(
                     EvalRequest::Chase(ChaseRequest {
                         body: Rc::new(BodyForm::Call(
                             iffalse.loc(),
@@ -1925,16 +1929,13 @@ impl Evaluator {
             step = match step {
                 EvalStep::Request(request, continuation) => {
                     continuations.push(continuation);
-                    self.dispatch(context, request, &mut state)
+                    self.dispatch(context, *request, &mut state)
                 }
                 EvalStep::Complete(result) => {
                     if let Some(continuation) = continuations.pop() {
-                        self.resume(context, continuation, result)
+                        self.resume(context, *continuation, result)
                     } else {
-                        return Self::body_result(
-                            result,
-                            Srcloc::start(&"*evaluator*".to_string()),
-                        );
+                        return Self::body_result(result, Srcloc::start("*evaluator*"));
                     }
                 }
             };
