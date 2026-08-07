@@ -93,6 +93,10 @@ name = "cldb"
 path = "src/classic/bins/cldb.rs"
 
 [[bin]]
+name = "clvm_cov"
+path = "src/classic/bins/clvm_cov.rs"
+
+[[bin]]
 name = "shrink"
 path = "src/classic/bins/shrink.rs"
 
