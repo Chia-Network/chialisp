@@ -400,6 +400,7 @@ mod tests {
                 quote(nil_loc.clone(), nil),
             ],
         ));
+        let expected_result_loc = program.loc();
 
         let mut allocator = SExpClassicAllocator::new();
         let program = allocator.from_sexp(program).unwrap();
@@ -409,7 +410,7 @@ mod tests {
 
         match result.sexp.as_ref() {
             SExp::Cons(loc, first, rest) => {
-                assert_eq!(*loc, operator_loc);
+                assert_eq!(*loc, expected_result_loc);
                 assert_eq!(first.loc(), value_loc);
                 assert_eq!(rest.loc(), nil_loc);
             }
