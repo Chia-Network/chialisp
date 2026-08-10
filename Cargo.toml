@@ -70,7 +70,7 @@ getrandom = { version = "0.3.4" }
 
 
 [build-dependencies]
-pyo3-build-config = "0.24.0"
+pyo3-build-config = "0.29.0"
 
 [[bin]]
 name = "opd"
