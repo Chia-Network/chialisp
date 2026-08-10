@@ -36,7 +36,7 @@ jobs:
       with:
         toolchain: 1.97.1
 
-    - uses: actions/setup-python@v6
+    - uses: actions/setup-python@v7
       name: Install Python ${{ matrix.python }}
       with:
         python-version: ${{ matrix.python }}
@@ -316,7 +316,7 @@ jobs:
 
     - name: Configure AWS credentials
       if: steps.check_secrets.outputs.HAS_AWS_SECRET
-      uses: aws-actions/configure-aws-credentials@v6.2.0
+      uses: aws-actions/configure-aws-credentials@v6.2.3
       with:
         role-to-assume: arn:aws:iam::${{ secrets.CHIA_AWS_ACCOUNT_ID }}:role/installer-upload
         aws-region: us-west-2
@@ -358,7 +358,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 1
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install rust

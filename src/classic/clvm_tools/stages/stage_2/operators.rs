@@ -12,15 +12,14 @@ use clvm_rs::error::EvalErr;
 use clvm_rs::reduction::{Reduction, Response};
 use clvm_rs::run_program::run_program_with_pre_eval;
 
-use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, Stream};
+use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
 use crate::classic::clvm::OPERATORS_LATEST_VERSION;
 
 use crate::classic::clvm::sexp::proper_list;
-use crate::classic::clvm::{keyword_from_atom, keyword_to_atom};
+use crate::classic::clvm::keyword_to_atom;
 
-use crate::classic::clvm_tools::binutils::{assemble_from_ir, disassemble_to_ir_with_kw};
+use crate::classic::clvm_tools::binutils::assemble_from_ir;
 use crate::classic::clvm_tools::ir::reader::read_ir;
-use crate::classic::clvm_tools::ir::writer::write_ir_to_stream;
 use crate::classic::clvm_tools::sha256tree::TreeHash;
 use crate::classic::clvm_tools::stages::stage_0::{
     choose_run_flags, DefaultProgramRunner, OriginalDialect, RunProgramOption, TRunProgram,
@@ -275,39 +274,6 @@ impl CompilerOperatorsInternal {
         }
     }
 
-    fn write(&self, allocator: &Allocator, sexp: NodePtr) -> Response {
-        if let SExp::Pair(filename_sexp, r) = allocator.sexp(sexp) {
-            if let SExp::Pair(data, _) = allocator.sexp(r) {
-                if let SExp::Atom = allocator.sexp(filename_sexp) {
-                    let filename_atom = allocator.atom(filename_sexp);
-                    let filename_bytes =
-                        Bytes::new(Some(BytesFromType::Raw(filename_atom.as_ref().to_vec())));
-                    let ir = disassemble_to_ir_with_kw(
-                        allocator,
-                        data,
-                        keyword_from_atom(self.get_disassembly_ver()),
-                        true,
-                    );
-                    let mut stream = Stream::new(None);
-                    write_ir_to_stream(Rc::new(ir), &mut stream, self.language_flags);
-                    return fs::write(filename_bytes.decode(), stream.get_value().decode())
-                        .map_err(|_| {
-                            EvalErr::InternalError(
-                                sexp,
-                                format!("failed to write {}", filename_bytes.decode()),
-                            )
-                        })
-                        .map(|_| Reduction(1, NodePtr::NIL));
-                }
-            }
-        }
-
-        Err(EvalErr::InternalError(
-            sexp,
-            "failed to write data".to_string(),
-        ))
-    }
-
     fn get_compile_filename(&self, allocator: &mut Allocator) -> Response {
         let converted_filename = allocator.new_atom(self.source_file.as_bytes())?;
         Ok(Reduction(1, converted_filename))
@@ -389,12 +355,6 @@ impl CompilerOperatorsInternal {
         }
 
         Ok(Reduction(1, NodePtr::NIL))
-    }
-
-    fn get_disassembly_ver(&self) -> usize {
-        self.get_compiler_opts()
-            .and_then(|o| o.disassembly_ver())
-            .unwrap_or(OPERATORS_LATEST_VERSION)
     }
 
     fn is_modern(&self) -> bool {
@@ -522,8 +482,6 @@ impl Dialect for CompilerOperatorsInternal {
                 let opbuf = op_atom.as_ref();
                 if opbuf == b"_read" {
                     self.read(allocator, sexp)
-                } else if opbuf == b"_write" {
-                    self.write(allocator, sexp)
                 } else if opbuf == b"com" {
                     let assembled;
                     let sexp = if self.is_modern() {
