@@ -123,11 +123,9 @@ where
         );
     }
     if sc_r && nn_r {
-        let r_export = allocator.export(r);
-        let res = runner
-            .run_program(allocator.allocator(), r_export, NodePtr::NIL, None)
-            .map_err(|e| ClError(allocator.loc(r), e))?;
-        let r1 = allocator.import(allocator.loc(r), res.1)?;
+        let loc = allocator.loc(r);
+        let nil = allocator.new_atom(loc, &[])?;
+        let r1 = allocator.run_clvm(runner, r, &nil)?;
         if DIAG_OPTIMIZATIONS {
             println!(
                 "CONSTANT_OPTIMIZER {} TO {}",

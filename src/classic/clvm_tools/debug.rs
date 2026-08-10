@@ -119,13 +119,12 @@ where
     let mut map_result: Vec<A::NodePtr> = Vec::new();
 
     for (k, v) in constants_lookup.iter() {
-        let v_export = allocator.export(v);
         let vloc = allocator.loc(v);
-        let run_result = run_program
-            .run_program(allocator.allocator(), v_export, NodePtr::NIL, None)
-            .map_err(|e| allocator.map_err(vloc.clone(), e))?;
+        let nil = allocator.new_atom(vloc.clone(), &[])?;
+        let run_result = allocator.run_clvm(run_program.clone(), v, &nil)?;
+        let run_result = allocator.export(&run_result);
 
-        let sha256 = sha256tree(allocator.allocator(), run_result.1).hex();
+        let sha256 = sha256tree(allocator.allocator(), run_result).hex();
         let sha_atom = allocator.new_atom(vloc.clone(), sha256.as_bytes())?;
         let name_atom = allocator.new_atom(vloc.clone(), &k.clone())?;
 
