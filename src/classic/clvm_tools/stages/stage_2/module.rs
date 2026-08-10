@@ -676,32 +676,19 @@ where
                                 produce_extra_info
                             )?;
 
-                        let compiled_export = allocator.export(&compiled);
-                        let loc = allocator.loc(&compiled);
-                        let compilation_result =
-                            run_program.run_program(
-                                allocator.allocator(),
-                                compiled_export,
-                                NodePtr::NIL,
-                                None
-                            ).map_err(|e| {
-                                ClError(loc.clone(), e)
-                            })?;
-
-                        let result =
-                            run_program.run_program(
-                                allocator.allocator(),
-                                compilation_result.1,
-                                NodePtr::NIL,
-                                None
-                            ).map_err(|e| {
-                                ClError(loc.clone(), e)
-                            })?;
-
-                        let result_imp = allocator.import(loc, result.1)?;
+                        let compilation_result = allocator.run_clvm(
+                            run_program.clone(),
+                            &compiled,
+                            &nil_import,
+                        )?;
+                        let result = allocator.run_clvm(
+                            run_program.clone(),
+                            &compilation_result,
+                            &nil_import,
+                        )?;
                         delayed_constants.remove(name);
                         result_collection.constants.insert(
-                            name.to_vec(), quote(allocator, &result_imp)?
+                            name.to_vec(), quote(allocator, &result)?
                         );
                     }
 

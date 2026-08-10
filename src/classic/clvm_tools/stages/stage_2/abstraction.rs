@@ -7,6 +7,10 @@ use clvm_rs::error::EvalErr;
 
 use crate::classic::clvm::__type_compatibility__::bi_zero;
 use crate::classic::clvm_tools::binutils::disassemble;
+use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
+use crate::compiler::clvm;
+use crate::compiler::prims;
+use crate::compiler::runtypes::RunFailure;
 use crate::compiler::sexp::SExp as ModernSExp;
 use crate::compiler::srcloc::Srcloc;
 use crate::util::{number_from_u8, u8_from_number};
@@ -70,6 +74,17 @@ pub trait ClassicAllocator {
     ) -> Result<Self::NodePtr, ClError>;
     fn import(&mut self, loc: Srcloc, node: NodePtr) -> Result<Self::NodePtr, ClError>;
     fn export(&self, node: &Self::NodePtr) -> NodePtr;
+    /// Run CLVM using the representation best suited to this allocator.
+    ///
+    /// The supplied runner remains the fallback dialect for non-core
+    /// operators. Located allocators may evaluate core CLVM without first
+    /// exporting the program to clvmr.
+    fn run_clvm(
+        &mut self,
+        runner: Rc<dyn TRunProgram>,
+        program: &Self::NodePtr,
+        args: &Self::NodePtr,
+    ) -> Result<Self::NodePtr, ClError>;
 }
 
 thread_local! {
@@ -126,6 +141,18 @@ impl ClassicAllocator for Allocator {
     }
     fn export(&self, node: &Self::NodePtr) -> NodePtr {
         *node
+    }
+    fn run_clvm(
+        &mut self,
+        runner: Rc<dyn TRunProgram>,
+        program: &Self::NodePtr,
+        args: &Self::NodePtr,
+    ) -> Result<Self::NodePtr, ClError> {
+        let loc = self.loc(program);
+        runner
+            .run_program(self, *program, *args, None)
+            .map(|result| result.1)
+            .map_err(|err| ClError(loc, err))
     }
 }
 
@@ -303,5 +330,90 @@ impl ClassicAllocator for SExpClassicAllocator {
 
     fn export(&self, node: &Self::NodePtr) -> NodePtr {
         node.raw
+    }
+
+    fn run_clvm(
+        &mut self,
+        runner: Rc<dyn TRunProgram>,
+        program: &Self::NodePtr,
+        args: &Self::NodePtr,
+    ) -> Result<Self::NodePtr, ClError> {
+        let result = clvm::run(
+            &mut self.allocator,
+            runner,
+            prims::prim_map(),
+            program.sexp.clone(),
+            args.sexp.clone(),
+            None,
+            None,
+        )
+        .map_err(|err| match err {
+            RunFailure::RunErr(loc, message) => {
+                ClError(loc, EvalErr::InternalError(NodePtr::NIL, message))
+            }
+            RunFailure::RunExn(loc, value) => ClError(
+                loc,
+                EvalErr::InternalError(NodePtr::NIL, format!("exception: {value}")),
+            ),
+        })?;
+
+        self.from_sexp(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ClassicAllocator, SExpClassicAllocator};
+    use crate::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
+    use crate::compiler::sexp::{enlist, SExp};
+    use crate::compiler::srcloc::Srcloc;
+    use num_bigint::ToBigInt;
+    use std::rc::Rc;
+
+    fn quote(loc: Srcloc, value: Rc<SExp>) -> Rc<SExp> {
+        Rc::new(SExp::Cons(
+            loc.clone(),
+            Rc::new(SExp::Integer(loc, 1_i32.to_bigint().unwrap())),
+            value,
+        ))
+    }
+
+    #[test]
+    fn located_allocator_runs_core_clvm_without_losing_result_locations() {
+        let file = Rc::new("*located-runner-test*".to_string());
+        let program_loc = Srcloc::new(file.clone(), 1, 1);
+        let operator_loc = Srcloc::new(file.clone(), 1, 2);
+        let value_loc = Srcloc::new(file.clone(), 1, 5);
+        let nil_loc = Srcloc::new(file.clone(), 1, 10);
+        let args_loc = Srcloc::new(file, 1, 12);
+
+        let value = Rc::new(SExp::Atom(value_loc.clone(), b"value".to_vec()));
+        let nil = Rc::new(SExp::Nil(nil_loc.clone()));
+        let program = Rc::new(enlist(
+            program_loc,
+            &[
+                Rc::new(SExp::Integer(
+                    operator_loc.clone(),
+                    4_i32.to_bigint().unwrap(),
+                )),
+                quote(value_loc.clone(), value),
+                quote(nil_loc.clone(), nil),
+            ],
+        ));
+
+        let mut allocator = SExpClassicAllocator::new();
+        let program = allocator.from_sexp(program).unwrap();
+        let args = allocator.from_sexp(Rc::new(SExp::Nil(args_loc))).unwrap();
+        let runner: Rc<dyn TRunProgram> = Rc::new(DefaultProgramRunner::new());
+        let result = allocator.run_clvm(runner, &program, &args).unwrap();
+
+        match result.sexp.as_ref() {
+            SExp::Cons(loc, first, rest) => {
+                assert_eq!(*loc, operator_loc);
+                assert_eq!(first.loc(), value_loc);
+                assert_eq!(rest.loc(), nil_loc);
+            }
+            result => panic!("expected cons result, got {result}"),
+        }
     }
 }
