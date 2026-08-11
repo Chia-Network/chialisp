@@ -107,8 +107,9 @@ fn build_default_macro_lookup<A: ClassicAllocator>(
     eval_f: Rc<dyn TRunProgram>,
     macros_src: &[String],
 ) -> A::NodePtr {
-    let run = assemble(allocator.allocator(), "(a (com 2 3) 1)").unwrap();
     let macro_loc = Srcloc::start("*macros*");
+    let run = assemble(allocator.allocator(), "(a (com 2 3) 1)").unwrap();
+    let run = allocator.import(macro_loc.clone(), run).unwrap();
     let imported_nil = allocator.import(macro_loc.clone(), NodePtr::NIL).unwrap();
     let mut default_macro_lookup = imported_nil;
     for macro_src in macros_src {
@@ -121,18 +122,12 @@ fn build_default_macro_lookup<A: ClassicAllocator>(
                 &default_macro_lookup,
             )
             .unwrap();
-        let exported_env = allocator.export(&env);
-        let new_macro = eval_f
-            .run_program(allocator.allocator(), run, exported_env, None)
+        let new_macro = allocator
+            .run_program(eval_f.clone(), &run, &env, None)
             .unwrap()
             .1;
-        let imported_new_macro = allocator.import(macro_loc.clone(), new_macro).unwrap();
         default_macro_lookup = allocator
-            .new_pair(
-                macro_loc.clone(),
-                &imported_new_macro,
-                &default_macro_lookup,
-            )
+            .new_pair(macro_loc.clone(), &new_macro, &default_macro_lookup)
             .unwrap();
     }
     default_macro_lookup

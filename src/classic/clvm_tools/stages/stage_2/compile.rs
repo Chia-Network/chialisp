@@ -3,7 +3,6 @@ use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::error::EvalErr;
-use clvm_rs::reduction::Reduction;
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
 use crate::classic::clvm::sexp::{enlist, first, map_m, proper_list, rest};
@@ -964,8 +963,10 @@ pub fn get_compile_filename(
 ) -> Result<Option<String>, EvalErr> {
     let cvt_prog = assemble(allocator, "(_get_compile_filename)")?;
 
-    let Reduction(_, cvt_prog_result) =
-        runner.run_program(allocator, cvt_prog, NodePtr::NIL, None)?;
+    let cvt_prog_result = allocator
+        .run_program(runner, &cvt_prog, &NodePtr::NIL, None)
+        .map_err(|err| err.1)?
+        .1;
 
     if cvt_prog_result == NodePtr::NIL {
         return Ok(None);
@@ -993,14 +994,15 @@ pub fn get_search_paths<A: ClassicAllocator>(
 where
     A::NodePtr: Clone,
 {
-    let search_paths_result = ((|| {
-        let search_paths_prog = assemble(allocator.allocator(), "(_get_include_paths)")?;
-        runner.run_program(allocator.allocator(), search_paths_prog, NodePtr::NIL, None)
-    })())
-    .map_err(|e| ClError(loc.clone(), e))?;
+    let search_paths_prog = assemble(allocator.allocator(), "(_get_include_paths)")
+        .map_err(|err| ClError(loc.clone(), err))?;
+    let search_paths_prog = allocator.import(loc.clone(), search_paths_prog)?;
+    let nil = allocator.import(loc, NodePtr::NIL)?;
+    let search_paths_result = allocator
+        .run_program(runner, &search_paths_prog, &nil, None)?
+        .1;
     let mut res = Vec::new();
-    let search_paths_result_import = allocator.import(loc, search_paths_result.1)?;
-    if let Some(l) = proper_list(allocator, &search_paths_result_import, true) {
+    if let Some(l) = proper_list(allocator, &search_paths_result, true) {
         for elt in l.iter() {
             if let ASExp::Atom = allocator.sexp(elt) {
                 // Only elt in scope.
