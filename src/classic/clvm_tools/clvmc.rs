@@ -11,7 +11,8 @@ use crate::classic::clvm_tools::binutils::{assemble_from_ir, disassemble};
 use crate::classic::clvm_tools::ir::r#type::NEW_BIT_CONSTANTS;
 use crate::classic::clvm_tools::ir::reader::read_ir;
 use crate::classic::clvm_tools::stages::run;
-use crate::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
+use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
+use crate::classic::clvm_tools::stages::stage_2::abstraction::ClassicAllocator;
 use crate::classic::clvm_tools::stages::stage_2::operators::run_program_for_search_paths;
 
 use crate::classic::platform::distutils::dep_util::newer;
@@ -152,8 +153,9 @@ pub fn compile_clvm_text_maybe_opt(
         if classic_with_opts {
             run_program.set_compiler_opts(Some(opts));
         }
-        let run_program_output =
-            run_program.run_program(allocator, compile_invoke_code, input_sexp, None)?;
+        let run_program_output = allocator
+            .run_program(run_program, &compile_invoke_code, &input_sexp, None)
+            .map_err(|err| CompileError::from(err.1))?;
         Ok(run_program_output.1)
     }
 }

@@ -1,12 +1,15 @@
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use std::ops::Index;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
+use clvm_rs::cost::Cost;
 use clvm_rs::error::EvalErr;
 
-use crate::classic::clvm::__type_compatibility__::bi_zero;
+use crate::classic::clvm::__type_compatibility__::{bi_zero, sha256, Bytes, BytesFromType};
 use crate::classic::clvm_tools::binutils::disassemble;
+use crate::classic::clvm_tools::stages::stage_0::{RunProgramOption, TRunProgram};
 use crate::compiler::sexp::SExp as ModernSExp;
 use crate::compiler::srcloc::Srcloc;
 use crate::util::{number_from_u8, u8_from_number};
@@ -70,6 +73,17 @@ pub trait ClassicAllocator {
     ) -> Result<Self::NodePtr, ClError>;
     fn import(&mut self, loc: Srcloc, node: NodePtr) -> Result<Self::NodePtr, ClError>;
     fn export(&self, node: &Self::NodePtr) -> NodePtr;
+    /// Execute via `TRunProgram`, retaining this allocator's node representation.
+    ///
+    /// Location-aware allocators may use an execution-scoped tree-hash cache to
+    /// restore metadata on result subtrees which are unchanged by evaluation.
+    fn run_program(
+        &mut self,
+        runner: Rc<dyn TRunProgram>,
+        program: &Self::NodePtr,
+        args: &Self::NodePtr,
+        option: Option<RunProgramOption>,
+    ) -> Result<(Cost, Self::NodePtr), ClError>;
 }
 
 thread_local! {
@@ -127,6 +141,19 @@ impl ClassicAllocator for Allocator {
     fn export(&self, node: &Self::NodePtr) -> NodePtr {
         *node
     }
+    fn run_program(
+        &mut self,
+        runner: Rc<dyn TRunProgram>,
+        program: &Self::NodePtr,
+        args: &Self::NodePtr,
+        option: Option<RunProgramOption>,
+    ) -> Result<(Cost, Self::NodePtr), ClError> {
+        let loc = self.loc(program);
+        runner
+            .run_program(self, *program, *args, option)
+            .map(|result| (result.0, result.1))
+            .map_err(|err| ClError(loc, err))
+    }
 }
 
 /// A stage-2 node backed by the compiler's location-aware S-expression.
@@ -149,6 +176,7 @@ impl std::fmt::Display for SExpNode {
 /// Adapts modern compiler S-expressions to the classic stage-2 compiler.
 pub struct SExpClassicAllocator {
     allocator: Allocator,
+    run_program_cache: HashMap<String, Srcloc>,
 }
 
 impl Default for SExpClassicAllocator {
@@ -161,6 +189,7 @@ impl SExpClassicAllocator {
     pub fn new() -> Self {
         Self {
             allocator: Allocator::new(),
+            run_program_cache: HashMap::new(),
         }
     }
 
@@ -187,6 +216,88 @@ impl SExpClassicAllocator {
                 .map_err(|e| self.map_err(loc.clone(), e))?,
         };
         Ok(SExpNode { sexp, raw })
+    }
+
+    fn atom_tree_hash(&self, node: NodePtr) -> Bytes {
+        sha256(
+            Bytes::new(Some(BytesFromType::Raw(vec![1]))).concat(&Bytes::new(Some(
+                BytesFromType::Raw(self.allocator.atom(node).as_ref().to_vec()),
+            ))),
+        )
+    }
+
+    fn pair_tree_hash(left: &Bytes, right: &Bytes) -> Bytes {
+        sha256(
+            Bytes::new(Some(BytesFromType::Raw(vec![2])))
+                .concat(left)
+                .concat(right),
+        )
+    }
+
+    fn cache_locations(
+        allocator: &Allocator,
+        cache: &mut HashMap<String, Srcloc>,
+        raw: NodePtr,
+        sexp: &ModernSExp,
+    ) -> Bytes {
+        let hash = match (allocator.sexp(raw), sexp) {
+            (SExp::Pair(raw_first, raw_rest), ModernSExp::Cons(_, first, rest)) => {
+                let first_hash = Self::cache_locations(allocator, cache, raw_first, first.as_ref());
+                let rest_hash = Self::cache_locations(allocator, cache, raw_rest, rest.as_ref());
+                Self::pair_tree_hash(&first_hash, &rest_hash)
+            }
+            (SExp::Atom, _) => sha256(Bytes::new(Some(BytesFromType::Raw(vec![1]))).concat(
+                &Bytes::new(Some(BytesFromType::Raw(
+                    allocator.atom(raw).as_ref().to_vec(),
+                ))),
+            )),
+            (SExp::Pair(_, _), _) => {
+                unreachable!("modern and raw S-expression representations diverged")
+            }
+        };
+        cache.entry(hash.hex()).or_insert_with(|| sexp.loc());
+        hash
+    }
+
+    fn import_with_cached_locations(
+        &self,
+        fallback_loc: &Srcloc,
+        node: NodePtr,
+    ) -> (Rc<ModernSExp>, Bytes) {
+        match self.allocator.sexp(node) {
+            SExp::Pair(first, rest) => {
+                let (first, first_hash) = self.import_with_cached_locations(fallback_loc, first);
+                let (rest, rest_hash) = self.import_with_cached_locations(fallback_loc, rest);
+                let hash = Self::pair_tree_hash(&first_hash, &rest_hash);
+                let loc = self
+                    .run_program_cache
+                    .get(&hash.hex())
+                    .cloned()
+                    .unwrap_or_else(|| fallback_loc.clone());
+                (Rc::new(ModernSExp::Cons(loc, first, rest)), hash)
+            }
+            SExp::Atom => {
+                let hash = self.atom_tree_hash(node);
+                let loc = self
+                    .run_program_cache
+                    .get(&hash.hex())
+                    .cloned()
+                    .unwrap_or_else(|| fallback_loc.clone());
+                let value = self.allocator.atom(node);
+                let value = value.as_ref();
+                let sexp = if value.is_empty() {
+                    ModernSExp::Nil(loc)
+                } else {
+                    let integer = number_from_u8(value);
+                    if u8_from_number(integer.clone()) == value {
+                        ModernSExp::Integer(loc, integer)
+                    } else {
+                        ModernSExp::Atom(loc, value.to_vec())
+                    }
+                };
+                (Rc::new(sexp), hash)
+            }
+        }
     }
 }
 
@@ -303,5 +414,140 @@ impl ClassicAllocator for SExpClassicAllocator {
 
     fn export(&self, node: &Self::NodePtr) -> NodePtr {
         node.raw
+    }
+
+    fn run_program(
+        &mut self,
+        runner: Rc<dyn TRunProgram>,
+        program: &Self::NodePtr,
+        args: &Self::NodePtr,
+        option: Option<RunProgramOption>,
+    ) -> Result<(Cost, Self::NodePtr), ClError> {
+        self.run_program_cache.clear();
+        Self::cache_locations(
+            &self.allocator,
+            &mut self.run_program_cache,
+            args.raw,
+            args.sexp.as_ref(),
+        );
+        Self::cache_locations(
+            &self.allocator,
+            &mut self.run_program_cache,
+            program.raw,
+            program.sexp.as_ref(),
+        );
+
+        let loc = self.loc(program);
+        let result = runner.run_program(&mut self.allocator, program.raw, args.raw, option);
+        let result = match result {
+            Ok(result) => result,
+            Err(err) => {
+                self.run_program_cache.clear();
+                return Err(ClError(loc, err));
+            }
+        };
+
+        let (relabeled, _) = self.import_with_cached_locations(&loc, result.1);
+        self.run_program_cache.clear();
+
+        Ok((
+            result.0,
+            SExpNode {
+                sexp: relabeled,
+                raw: result.1,
+            },
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BufCarrier, ClassicAllocator, SExpClassicAllocator};
+    use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
+    use crate::compiler::sexp::{enlist, SExp};
+    use crate::compiler::srcloc::Srcloc;
+    use num_bigint::ToBigInt;
+    use std::rc::Rc;
+
+    fn quote(loc: Srcloc, value: Rc<SExp>) -> Rc<SExp> {
+        Rc::new(SExp::Cons(
+            loc.clone(),
+            Rc::new(SExp::Integer(loc, 1_i32.to_bigint().unwrap())),
+            value,
+        ))
+    }
+
+    #[test]
+    fn run_program_restores_matching_locations_and_clears_its_cache() {
+        let file = Rc::new("*run-program-cache-test*".to_string());
+        let program_loc = Srcloc::new(file.clone(), 1, 1);
+        let value_loc = Srcloc::new(file.clone(), 1, 5);
+        let rest_loc = Srcloc::new(file.clone(), 1, 10);
+        let args_loc = Srcloc::new(file.clone(), 1, 12);
+
+        let value = Rc::new(SExp::Atom(value_loc.clone(), b"value".to_vec()));
+        let rest = Rc::new(SExp::Atom(rest_loc.clone(), b"rest".to_vec()));
+        let program = Rc::new(enlist(
+            program_loc.clone(),
+            &[
+                Rc::new(SExp::Integer(
+                    program_loc.clone(),
+                    4_i32.to_bigint().unwrap(),
+                )),
+                quote(value_loc.clone(), value),
+                quote(rest_loc.clone(), rest),
+            ],
+        ));
+
+        let mut allocator = SExpClassicAllocator::new();
+        let program = allocator.from_sexp(program).unwrap();
+        let args = allocator.from_sexp(Rc::new(SExp::Nil(args_loc))).unwrap();
+        let result = allocator
+            .run_program(Rc::new(DefaultProgramRunner::new()), &program, &args, None)
+            .unwrap()
+            .1;
+
+        match result.sexp.as_ref() {
+            SExp::Cons(loc, first, rest) => {
+                assert_eq!(*loc, program_loc);
+                assert_eq!(first.loc(), value_loc);
+                assert_eq!(rest.loc(), rest_loc);
+            }
+            result => panic!("expected cons result, got {result}"),
+        }
+
+        let second_program_loc = Srcloc::new(file.clone(), 2, 1);
+        let left_loc = Srcloc::new(file.clone(), 2, 8);
+        let right_loc = Srcloc::new(file, 2, 14);
+        let second_program = Rc::new(enlist(
+            second_program_loc.clone(),
+            &[
+                Rc::new(SExp::Integer(
+                    second_program_loc.clone(),
+                    14_i32.to_bigint().unwrap(),
+                )),
+                quote(
+                    left_loc.clone(),
+                    Rc::new(SExp::Atom(left_loc, b"val".to_vec())),
+                ),
+                quote(
+                    right_loc.clone(),
+                    Rc::new(SExp::Atom(right_loc, b"ue".to_vec())),
+                ),
+            ],
+        ));
+        let second_program = allocator.from_sexp(second_program).unwrap();
+        let second_result = allocator
+            .run_program(
+                Rc::new(DefaultProgramRunner::new()),
+                &second_program,
+                &args,
+                None,
+            )
+            .unwrap()
+            .1;
+
+        assert_eq!(allocator.atom(&second_result).as_ref(), b"value");
+        assert_eq!(second_result.sexp.loc(), second_program_loc);
     }
 }

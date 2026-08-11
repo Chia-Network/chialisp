@@ -225,12 +225,11 @@ where
     let loc = allocator.loc(name);
     let prog = assemble(allocator.allocator(), "(_read (_full_path_for_name 1))")
         .map_err(|e| ClError(loc.clone(), e))?;
-    let name_export = allocator.export(name);
-    let assembled_sexp = run_program
-        .run_program(allocator.allocator(), prog, name_export, None)
-        .map_err(|e| ClError(loc.clone(), e))?;
-    let assembled_sexp_import = allocator.import(loc.clone(), assembled_sexp.1)?;
-    if let Some(assembled) = proper_list(allocator, &assembled_sexp_import, true) {
+    let prog = allocator.import(loc.clone(), prog)?;
+    let assembled_sexp = allocator
+        .run_program(run_program.clone(), &prog, name, None)?
+        .1;
+    if let Some(assembled) = proper_list(allocator, &assembled_sexp, true) {
         for sexp in assembled {
             parse_mod_sexp(
                 allocator,
@@ -248,7 +247,10 @@ where
 
     Err(ClError(
         loc,
-        EvalErr::InternalError(name_export, "include returned malformed result".to_string()),
+        EvalErr::InternalError(
+            allocator.export(name),
+            "include returned malformed result".to_string(),
+        ),
     ))
 }
 
@@ -676,32 +678,25 @@ where
                                 produce_extra_info
                             )?;
 
-                        let compiled_export = allocator.export(&compiled);
-                        let loc = allocator.loc(&compiled);
-                        let compilation_result =
-                            run_program.run_program(
-                                allocator.allocator(),
-                                compiled_export,
-                                NodePtr::NIL,
-                                None
-                            ).map_err(|e| {
-                                ClError(loc.clone(), e)
-                            })?;
-
-                        let result =
-                            run_program.run_program(
-                                allocator.allocator(),
-                                compilation_result.1,
-                                NodePtr::NIL,
-                                None
-                            ).map_err(|e| {
-                                ClError(loc.clone(), e)
-                            })?;
-
-                        let result_imp = allocator.import(loc, result.1)?;
+                        let compilation_result = allocator
+                            .run_program(
+                                run_program.clone(),
+                                &compiled,
+                                &nil_import,
+                                None,
+                            )?
+                            .1;
+                        let result = allocator
+                            .run_program(
+                                run_program.clone(),
+                                &compilation_result,
+                                &nil_import,
+                                None,
+                            )?
+                            .1;
                         delayed_constants.remove(name);
                         result_collection.constants.insert(
-                            name.to_vec(), quote(allocator, &result_imp)?
+                            name.to_vec(), quote(allocator, &result)?
                         );
                     }
 
@@ -1037,10 +1032,8 @@ where
         )
         .map_err(|e| ClError(loc.clone(), e))?;
 
-        let exported_symbols = allocator.export(&symbols);
-        run_program
-            .run_program(allocator.allocator(), to_run, exported_symbols, None)
-            .map_err(|e| ClError(loc, e))?;
+        let to_run = allocator.import(loc, to_run)?;
+        allocator.run_program(run_program.clone(), &to_run, &symbols, None)?;
 
         Ok(opt_list)
     } else {
@@ -1066,17 +1059,17 @@ where
     let loc = allocator.loc(macro_lookup);
     let produce_extra_info_prog = assemble(allocator.allocator(), "(_symbols_extra_info)")
         .map_err(|e| ClError(loc.clone(), e))?;
-    let produce_extra_info_null = NodePtr::NIL;
-    let extra_info_res = run_program
+    let produce_extra_info_prog = allocator.import(loc.clone(), produce_extra_info_prog)?;
+    let produce_extra_info_null = allocator.import(loc, NodePtr::NIL)?;
+    let extra_info_res = allocator
         .run_program(
-            allocator.allocator(),
-            produce_extra_info_prog,
-            produce_extra_info_null,
+            run_program.clone(),
+            &produce_extra_info_prog,
+            &produce_extra_info_null,
             None,
-        )
-        .map_err(|e| ClError(loc.clone(), e))?;
-    let imported_extra_info = allocator.import(loc, extra_info_res.1)?;
-    let produce_extra_info = !allocator.is_nil(&imported_extra_info);
+        )?
+        .1;
+    let produce_extra_info = !allocator.is_nil(&extra_info_res);
 
     let cr = compile_mod_stage_1(
         allocator,
