@@ -378,7 +378,7 @@ impl ClassicAllocator for SExpClassicAllocator {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClassicAllocator, SExpClassicAllocator};
+    use super::{BufCarrier, ClassicAllocator, SExpClassicAllocator};
     use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
     use crate::compiler::sexp::{enlist, SExp};
     use crate::compiler::srcloc::Srcloc;
