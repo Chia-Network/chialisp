@@ -7,10 +7,9 @@ use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::cost::Cost;
 use clvm_rs::error::EvalErr;
 
-use crate::classic::clvm::__type_compatibility__::bi_zero;
+use crate::classic::clvm::__type_compatibility__::{bi_zero, sha256, Bytes, BytesFromType};
 use crate::classic::clvm_tools::binutils::disassemble;
 use crate::classic::clvm_tools::stages::stage_0::{RunProgramOption, TRunProgram};
-use crate::compiler::debug::{build_swap_table_mut, relabel};
 use crate::compiler::sexp::SExp as ModernSExp;
 use crate::compiler::srcloc::Srcloc;
 use crate::util::{number_from_u8, u8_from_number};
@@ -177,7 +176,7 @@ impl std::fmt::Display for SExpNode {
 /// Adapts modern compiler S-expressions to the classic stage-2 compiler.
 pub struct SExpClassicAllocator {
     allocator: Allocator,
-    run_program_cache: HashMap<String, ModernSExp>,
+    run_program_cache: HashMap<String, Srcloc>,
 }
 
 impl Default for SExpClassicAllocator {
@@ -217,6 +216,88 @@ impl SExpClassicAllocator {
                 .map_err(|e| self.map_err(loc.clone(), e))?,
         };
         Ok(SExpNode { sexp, raw })
+    }
+
+    fn atom_tree_hash(&self, node: NodePtr) -> Bytes {
+        sha256(
+            Bytes::new(Some(BytesFromType::Raw(vec![1]))).concat(&Bytes::new(Some(
+                BytesFromType::Raw(self.allocator.atom(node).as_ref().to_vec()),
+            ))),
+        )
+    }
+
+    fn pair_tree_hash(left: &Bytes, right: &Bytes) -> Bytes {
+        sha256(
+            Bytes::new(Some(BytesFromType::Raw(vec![2])))
+                .concat(left)
+                .concat(right),
+        )
+    }
+
+    fn cache_locations(
+        allocator: &Allocator,
+        cache: &mut HashMap<String, Srcloc>,
+        raw: NodePtr,
+        sexp: &ModernSExp,
+    ) -> Bytes {
+        let hash = match (allocator.sexp(raw), sexp) {
+            (SExp::Pair(raw_first, raw_rest), ModernSExp::Cons(_, first, rest)) => {
+                let first_hash = Self::cache_locations(allocator, cache, raw_first, first.as_ref());
+                let rest_hash = Self::cache_locations(allocator, cache, raw_rest, rest.as_ref());
+                Self::pair_tree_hash(&first_hash, &rest_hash)
+            }
+            (SExp::Atom, _) => sha256(Bytes::new(Some(BytesFromType::Raw(vec![1]))).concat(
+                &Bytes::new(Some(BytesFromType::Raw(
+                    allocator.atom(raw).as_ref().to_vec(),
+                ))),
+            )),
+            (SExp::Pair(_, _), _) => {
+                unreachable!("modern and raw S-expression representations diverged")
+            }
+        };
+        cache.entry(hash.hex()).or_insert_with(|| sexp.loc());
+        hash
+    }
+
+    fn import_with_cached_locations(
+        &self,
+        fallback_loc: &Srcloc,
+        node: NodePtr,
+    ) -> (Rc<ModernSExp>, Bytes) {
+        match self.allocator.sexp(node) {
+            SExp::Pair(first, rest) => {
+                let (first, first_hash) = self.import_with_cached_locations(fallback_loc, first);
+                let (rest, rest_hash) = self.import_with_cached_locations(fallback_loc, rest);
+                let hash = Self::pair_tree_hash(&first_hash, &rest_hash);
+                let loc = self
+                    .run_program_cache
+                    .get(&hash.hex())
+                    .cloned()
+                    .unwrap_or_else(|| fallback_loc.clone());
+                (Rc::new(ModernSExp::Cons(loc, first, rest)), hash)
+            }
+            SExp::Atom => {
+                let hash = self.atom_tree_hash(node);
+                let loc = self
+                    .run_program_cache
+                    .get(&hash.hex())
+                    .cloned()
+                    .unwrap_or_else(|| fallback_loc.clone());
+                let value = self.allocator.atom(node);
+                let value = value.as_ref();
+                let sexp = if value.is_empty() {
+                    ModernSExp::Nil(loc)
+                } else {
+                    let integer = number_from_u8(value);
+                    if u8_from_number(integer.clone()) == value {
+                        ModernSExp::Integer(loc, integer)
+                    } else {
+                        ModernSExp::Atom(loc, value.to_vec())
+                    }
+                };
+                (Rc::new(sexp), hash)
+            }
+        }
     }
 }
 
@@ -343,8 +424,18 @@ impl ClassicAllocator for SExpClassicAllocator {
         option: Option<RunProgramOption>,
     ) -> Result<(Cost, Self::NodePtr), ClError> {
         self.run_program_cache.clear();
-        build_swap_table_mut(&mut self.run_program_cache, program.sexp.as_ref());
-        build_swap_table_mut(&mut self.run_program_cache, args.sexp.as_ref());
+        Self::cache_locations(
+            &self.allocator,
+            &mut self.run_program_cache,
+            args.raw,
+            args.sexp.as_ref(),
+        );
+        Self::cache_locations(
+            &self.allocator,
+            &mut self.run_program_cache,
+            program.raw,
+            program.sexp.as_ref(),
+        );
 
         let loc = self.loc(program);
         let result = runner.run_program(&mut self.allocator, program.raw, args.raw, option);
@@ -356,20 +447,13 @@ impl ClassicAllocator for SExpClassicAllocator {
             }
         };
 
-        let imported = match self.import(loc, result.1) {
-            Ok(imported) => imported,
-            Err(err) => {
-                self.run_program_cache.clear();
-                return Err(err);
-            }
-        };
-        let relabeled = relabel(&self.run_program_cache, imported.sexp.as_ref());
+        let (relabeled, _) = self.import_with_cached_locations(&loc, result.1);
         self.run_program_cache.clear();
 
         Ok((
             result.0,
             SExpNode {
-                sexp: Rc::new(relabeled),
+                sexp: relabeled,
                 raw: result.1,
             },
         ))
