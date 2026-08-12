@@ -1,7 +1,6 @@
 use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 use std::mem::swap;
-use std::rc::Rc;
 
 use clvm_rs::error::EvalErr;
 use num_bigint::ToBigInt;
@@ -14,7 +13,6 @@ use crate::classic::clvm::sexp::{enlist, equal_to, first, fold_m, map_m, proper_
 use crate::classic::clvm_tools::node_path::NodePath;
 use crate::classic::clvm_tools::pattern_match::match_sexp;
 use crate::classic::clvm_tools::stages::assemble;
-use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 use crate::classic::clvm_tools::stages::stage_2::abstraction::{
     ASExp, BufCarrier, ClError, ClassicAllocator,
 };
@@ -91,7 +89,7 @@ pub fn constant_optimizer<A: ClassicAllocator>(
     _memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
     r: &A::NodePtr,
     _max_cost: Cost,
-    runner: Rc<dyn TRunProgram>,
+    runner: A::Runner,
 ) -> Result<A::NodePtr, ClError>
 where
     A::NodePtr: Clone,
@@ -162,7 +160,7 @@ pub fn cons_q_a_optimizer<A: ClassicAllocator>(
     allocator: &mut A,
     _memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
     r: &A::NodePtr,
-    _eval_f: Rc<dyn TRunProgram>,
+    _eval_f: A::Runner,
 ) -> Result<A::NodePtr, ClError>
 where
     A::NodePtr: Clone,
@@ -321,7 +319,7 @@ pub fn var_change_optimizer_cons_eval<A: ClassicAllocator>(
     allocator: &mut A,
     memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
     r: &A::NodePtr,
-    eval_f: Rc<dyn TRunProgram>,
+    eval_f: A::Runner,
 ) -> Result<A::NodePtr, ClError>
 where
     A::NodePtr: Clone,
@@ -451,7 +449,7 @@ pub fn children_optimizer<A: ClassicAllocator>(
     allocator: &mut A,
     memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
     r: &A::NodePtr,
-    eval_f: Rc<dyn TRunProgram>,
+    eval_f: A::Runner,
 ) -> Result<A::NodePtr, ClError>
 where
     A::NodePtr: Clone,
@@ -510,7 +508,7 @@ fn cons_optimizer<A: ClassicAllocator>(
     allocator: &mut A,
     _memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
     r: &A::NodePtr,
-    _eval_f: Rc<dyn TRunProgram>,
+    _eval_f: A::Runner,
 ) -> Result<A::NodePtr, ClError>
 where
     A::NodePtr: Clone,
@@ -563,7 +561,7 @@ fn path_optimizer<A: ClassicAllocator>(
     allocator: &mut A,
     _memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
     r: &A::NodePtr,
-    _eval_f: Rc<dyn TRunProgram>,
+    _eval_f: A::Runner,
 ) -> Result<A::NodePtr, ClError>
 where
     A::NodePtr: Clone,
@@ -625,7 +623,7 @@ fn quote_null_optimizer<A: ClassicAllocator>(
     allocator: &mut A,
     _memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
     r: &A::NodePtr,
-    _eval_f: Rc<dyn TRunProgram>,
+    _eval_f: A::Runner,
 ) -> Result<A::NodePtr, ClError>
 where
     A::NodePtr: Clone,
@@ -650,7 +648,7 @@ fn apply_null_optimizer<A: ClassicAllocator>(
     allocator: &mut A,
     _memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
     r: &A::NodePtr,
-    _eval_f: Rc<dyn TRunProgram>,
+    _eval_f: A::Runner,
 ) -> Result<A::NodePtr, ClError>
 where
     A::NodePtr: Clone,
@@ -674,7 +672,7 @@ where
         &mut A,
         &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
         &A::NodePtr,
-        Rc<dyn TRunProgram>,
+        A::Runner,
     ) -> Result<A::NodePtr, ClError>,
 }
 
@@ -687,7 +685,7 @@ where
         allocator: &mut A,
         memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
         r: &A::NodePtr,
-        eval_f: Rc<dyn TRunProgram>,
+        eval_f: A::Runner,
     ) -> Result<A::NodePtr, ClError> {
         (self.to_run)(allocator, memo, r, eval_f)
     }
@@ -699,7 +697,7 @@ where
             &mut A,
             &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
             &A::NodePtr,
-            Rc<dyn TRunProgram>,
+            A::Runner,
         ) -> Result<A::NodePtr, ClError>,
     ) -> Self {
         OptimizerRunner {
@@ -713,7 +711,7 @@ pub fn optimize_sexp_<A: ClassicAllocator>(
     allocator: &mut A,
     memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
     r_: &A::NodePtr,
-    eval_f: Rc<dyn TRunProgram>,
+    eval_f: A::Runner,
 ) -> Result<A::NodePtr, ClError>
 where
     A::NodePtr: Clone,
@@ -749,9 +747,12 @@ where
      */
     let optimizers: Vec<OptimizerRunner<A>> = vec![
         OptimizerRunner::new("cons_optimizer", &cons_optimizer),
-        OptimizerRunner::new("constant_optimizer", &|allocator, memo, r, eval_f| {
-            constant_optimizer(allocator, memo, r, 0, eval_f.clone())
-        }),
+        OptimizerRunner::new(
+            "constant_optimizer",
+            &|allocator, memo, r, eval_f: A::Runner| {
+                constant_optimizer(allocator, memo, r, 0, eval_f.clone())
+            },
+        ),
         OptimizerRunner::new("cons_q_a_optimizer", &cons_q_a_optimizer),
         OptimizerRunner::new(
             "var_change_optimizer_cons_eval",
@@ -822,7 +823,7 @@ where
 pub fn optimize_sexp<A: ClassicAllocator>(
     allocator: &mut A,
     r: &A::NodePtr,
-    eval_f: Rc<dyn TRunProgram>,
+    eval_f: A::Runner,
 ) -> Result<A::NodePtr, ClError>
 where
     A::NodePtr: Clone,
@@ -844,7 +845,7 @@ where
 }
 
 pub fn do_optimize<A: ClassicAllocator>(
-    runner: Rc<dyn TRunProgram>,
+    runner: A::Runner,
     allocator: &mut A,
     memo: &RefCell<HashMap<AllocatorRefOrTreeHash, NodePtr>>,
     r: &A::NodePtr,

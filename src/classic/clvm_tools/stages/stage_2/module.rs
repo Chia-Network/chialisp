@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::rc::Rc;
 
 use clvm_rs::allocator::NodePtr;
 use clvm_rs::error::EvalErr;
@@ -13,7 +12,6 @@ use crate::classic::clvm::sexp::{
 use crate::classic::clvm_tools::debug::{build_symbol_dump, FunctionExtraInfo};
 use crate::classic::clvm_tools::node_path::NodePath;
 use crate::classic::clvm_tools::stages::assemble;
-use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 use crate::classic::clvm_tools::stages::stage_2::abstraction::{
     ASExp, BufCarrier, ClError, ClassicAllocator,
 };
@@ -217,7 +215,7 @@ fn parse_include<A: ClassicAllocator>(
     constants: &mut HashMap<Vec<u8>, A::NodePtr>,
     delayed_constants: &mut HashMap<Vec<u8>, A::NodePtr>,
     macros: &mut Vec<(Vec<u8>, A::NodePtr)>,
-    run_program: Rc<dyn TRunProgram>,
+    run_program: A::Runner,
 ) -> Result<(), ClError>
 where
     A::NodePtr: Clone,
@@ -460,7 +458,7 @@ fn parse_mod_sexp<A: ClassicAllocator>(
     // may call local functions (such as sha256tree).
     delayed_constants: &mut HashMap<Vec<u8>, A::NodePtr>,
     macros: &mut Vec<(Vec<u8>, A::NodePtr)>,
-    run_program: Rc<dyn TRunProgram>,
+    run_program: A::Runner,
 ) -> Result<(), ClError>
 where
     A::NodePtr: Clone,
@@ -563,7 +561,7 @@ fn compile_mod_stage_1<A: ClassicAllocator>(
     allocator: &mut A,
     args: &A::NodePtr,
     macro_lookup: &A::NodePtr,
-    run_program: Rc<dyn TRunProgram>,
+    run_program: A::Runner,
     produce_extra_info: bool,
 ) -> Result<CollectionResult<A>, ClError>
 where
@@ -791,7 +789,7 @@ fn build_macro_lookup_program<A: ClassicAllocator>(
     allocator: &mut A,
     macro_lookup: &A::NodePtr,
     macros: &[(Vec<u8>, A::NodePtr)],
-    run_program: Rc<dyn TRunProgram>,
+    run_program: A::Runner,
 ) -> Result<A::NodePtr, ClError>
 where
     A::NodePtr: Clone,
@@ -937,7 +935,7 @@ fn finish_compile_from_collection<A: ClassicAllocator>(
     allocator: &mut A,
     args: &A::NodePtr,
     macro_lookup: &A::NodePtr,
-    run_program: Rc<dyn TRunProgram>,
+    run_program: A::Runner,
     cr: &CollectionResult<A>,
     produce_extra_info: bool,
 ) -> Result<A::NodePtr, ClError>
@@ -1056,7 +1054,7 @@ pub fn compile_mod<A: ClassicAllocator>(
     args: &A::NodePtr,
     macro_lookup: &A::NodePtr,
     _symbol_table: &A::NodePtr,
-    run_program: Rc<dyn TRunProgram>,
+    run_program: A::Runner,
     _level: usize,
 ) -> Result<A::NodePtr, ClError>
 where

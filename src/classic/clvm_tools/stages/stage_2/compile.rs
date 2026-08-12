@@ -47,7 +47,7 @@ struct Closure<'a, A: ClassicAllocator> {
         &A::NodePtr,
         &A::NodePtr,
         &A::NodePtr,
-        Rc<dyn TRunProgram>,
+        A::Runner,
         usize,
     ) -> Result<A::NodePtr, ClError>,
 }
@@ -99,7 +99,7 @@ fn com_qq<A: ClassicAllocator>(
     ident: String,
     macro_lookup: &A::NodePtr,
     symbol_table: &A::NodePtr,
-    runner: Rc<dyn TRunProgram>,
+    runner: A::Runner,
     sexp: &A::NodePtr,
 ) -> Result<A::NodePtr, ClError>
 where
@@ -116,7 +116,7 @@ pub fn compile_qq<A: ClassicAllocator>(
     args: &A::NodePtr,
     macro_lookup: &A::NodePtr,
     symbol_table: &A::NodePtr,
-    runner: Rc<dyn TRunProgram>,
+    runner: A::Runner,
     level: usize,
 ) -> Result<A::NodePtr, ClError>
 where
@@ -236,7 +236,7 @@ pub fn compile_macros<A: ClassicAllocator>(
     _args: &A::NodePtr,
     macro_lookup: &A::NodePtr,
     _symbol_table: &A::NodePtr,
-    _run_program: Rc<dyn TRunProgram>,
+    _run_program: A::Runner,
     _level: usize,
 ) -> Result<A::NodePtr, ClError>
 where
@@ -250,7 +250,7 @@ pub fn compile_symbols<A: ClassicAllocator>(
     _args: &A::NodePtr,
     _macro_lookup: &A::NodePtr,
     symbol_table: &A::NodePtr,
-    _run_program: Rc<dyn TRunProgram>,
+    _run_program: A::Runner,
     _level: usize,
 ) -> Result<A::NodePtr, ClError>
 where
@@ -496,7 +496,7 @@ fn compile_operator_atom<A: ClassicAllocator>(
     avec: &[u8],
     macro_lookup: &A::NodePtr,
     symbol_table: &A::NodePtr,
-    run_program: Rc<dyn TRunProgram>,
+    run_program: A::Runner,
 ) -> Result<Option<A::NodePtr>, ClError>
 where
     A::NodePtr: Clone,
@@ -661,7 +661,7 @@ fn compile_application<A: ClassicAllocator>(
     rest: &A::NodePtr,
     macro_lookup: &A::NodePtr,
     symbol_table: &A::NodePtr,
-    run_program: Rc<dyn TRunProgram>,
+    run_program: A::Runner,
 ) -> Result<A::NodePtr, ClError>
 where
     A::NodePtr: Clone,
@@ -762,7 +762,7 @@ pub fn do_com_prog<A: ClassicAllocator>(
     prog: &A::NodePtr,
     macro_lookup: &A::NodePtr,
     symbol_table: &A::NodePtr,
-    run_program: Rc<dyn TRunProgram>,
+    run_program: A::Runner,
 ) -> Result<A::NodePtr, ClError>
 where
     A::NodePtr: Clone,
@@ -795,7 +795,7 @@ fn do_com_prog_<A: ClassicAllocator>(
     prog_: &A::NodePtr,
     macro_lookup: &A::NodePtr,
     symbol_table: &A::NodePtr,
-    run_program: Rc<dyn TRunProgram>,
+    run_program: A::Runner,
 ) -> Result<A::NodePtr, ClError>
 where
     A::NodePtr: Clone,
@@ -894,7 +894,7 @@ where
 }
 
 pub fn do_com_prog_for_dialect<A: ClassicAllocator>(
-    runner: Rc<dyn TRunProgram>,
+    runner: A::Runner,
     allocator: &mut A,
     sexp: &A::NodePtr,
 ) -> Result<A::NodePtr, ClError>
@@ -986,7 +986,7 @@ pub fn get_compile_filename(
 }
 
 pub fn get_search_paths<A: ClassicAllocator>(
-    runner: Rc<dyn TRunProgram>,
+    runner: A::Runner,
     loc: Srcloc,
     allocator: &mut A,
 ) -> Result<Vec<String>, ClError>

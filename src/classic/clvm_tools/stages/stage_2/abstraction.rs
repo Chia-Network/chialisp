@@ -7,6 +7,7 @@ use clvm_rs::error::EvalErr;
 
 use crate::classic::clvm::__type_compatibility__::bi_zero;
 use crate::classic::clvm_tools::binutils::disassemble;
+use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 use crate::compiler::sexp::SExp as ModernSExp;
 use crate::compiler::srcloc::Srcloc;
 use crate::util::{number_from_u8, u8_from_number};
@@ -53,6 +54,7 @@ impl<'a> BufCarrier<'a> for BufHolder<'a> {
 
 pub trait ClassicAllocator {
     type NodePtr;
+    type Runner: Clone + std::ops::Deref<Target = dyn TRunProgram>;
     fn loc(&self, node: &Self::NodePtr) -> Srcloc;
     fn sexp(&self, node: &Self::NodePtr) -> ASExp<Self::NodePtr>;
     fn atom<'a>(&'a self, node: &Self::NodePtr) -> BufHolder<'a>;
@@ -78,6 +80,7 @@ thread_local! {
 
 impl ClassicAllocator for Allocator {
     type NodePtr = clvmr::NodePtr;
+    type Runner = Rc<dyn TRunProgram>;
 
     fn loc(&self, _node: &Self::NodePtr) -> Srcloc {
         DEFAULT_SRCLOC.with(|s| s.clone())
@@ -192,6 +195,7 @@ impl SExpClassicAllocator {
 
 impl ClassicAllocator for SExpClassicAllocator {
     type NodePtr = SExpNode;
+    type Runner = Rc<dyn TRunProgram>;
 
     fn loc(&self, node: &Self::NodePtr) -> Srcloc {
         node.sexp.loc()

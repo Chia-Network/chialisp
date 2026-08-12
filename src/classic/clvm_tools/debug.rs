@@ -9,7 +9,6 @@ use crate::classic::clvm::serialize::sexp_to_stream;
 use crate::classic::clvm::sexp::{enlist, proper_list, rest, First, SelectNode, ThisNode};
 
 use crate::classic::clvm_tools::sha256tree::sha256tree;
-use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 use crate::classic::clvm_tools::stages::stage_2::abstraction::{ClError, ClassicAllocator};
 
 use crate::compiler::comptypes::{CompileErr, CompilerOpts};
@@ -110,7 +109,7 @@ pub fn build_symbol_dump<A: ClassicAllocator>(
     allocator: &mut A,
     constants_lookup: &HashMap<Vec<u8>, A::NodePtr>,
     extra_function_data: &HashMap<Vec<u8>, FunctionExtraInfo<A>>,
-    run_program: Rc<dyn TRunProgram>,
+    run_program: A::Runner,
     extra_info: bool,
 ) -> Result<A::NodePtr, ClError>
 where

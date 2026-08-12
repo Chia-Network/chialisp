@@ -1,5 +1,4 @@
 use std::fs;
-use std::rc::Rc;
 
 use clvm_rs::error::EvalErr;
 use clvmr::allocator::NodePtr;
@@ -8,7 +7,6 @@ use crate::classic::clvm::__type_compatibility__::{Bytes, Stream, UnvalidatedByt
 use crate::classic::clvm::serialize::{sexp_from_stream, SimpleCreateCLVMObject};
 use crate::classic::clvm::sexp::{proper_list, rest};
 use crate::classic::clvm_tools::stages::assemble;
-use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 use crate::classic::clvm_tools::stages::stage_2::abstraction::{
     ASExp, BufCarrier, ClError, ClassicAllocator,
 };
@@ -62,7 +60,7 @@ where
 /// error nicely by using the form the user gave (parent_sexp) in the error
 /// report.
 pub fn read_file<A: ClassicAllocator>(
-    runner: Rc<dyn TRunProgram>,
+    runner: A::Runner,
     allocator: &mut A,
     parent_sexp: &A::NodePtr,
     filename: &str,
@@ -96,7 +94,7 @@ where
 /// as a constant or an error if the file wasn't found.
 pub fn process_embed_file<A: ClassicAllocator>(
     allocator: &mut A,
-    runner: Rc<dyn TRunProgram>,
+    runner: A::Runner,
     declaration_sexp: &A::NodePtr,
 ) -> Result<(Vec<u8>, A::NodePtr), ClError>
 where
