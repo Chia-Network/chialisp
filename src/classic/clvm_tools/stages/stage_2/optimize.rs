@@ -747,9 +747,12 @@ where
      */
     let optimizers: Vec<OptimizerRunner<A>> = vec![
         OptimizerRunner::new("cons_optimizer", &cons_optimizer),
-        OptimizerRunner::new("constant_optimizer", &|allocator, memo, r, eval_f| {
-            constant_optimizer(allocator, memo, r, 0, eval_f.clone())
-        }),
+        OptimizerRunner::new(
+            "constant_optimizer",
+            &|allocator, memo, r, eval_f: A::Runner| {
+                constant_optimizer(allocator, memo, r, 0, eval_f.clone())
+            },
+        ),
         OptimizerRunner::new("cons_q_a_optimizer", &cons_q_a_optimizer),
         OptimizerRunner::new(
             "var_change_optimizer_cons_eval",

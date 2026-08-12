@@ -193,7 +193,7 @@ fn test_present_file_smoke_not_exists() {
         run_program_for_search_paths("*test*", &vec!["resources/tests".to_string()], false, 0);
     let sexp_triggering_read = assemble(&mut allocator, "(embed-file test-file sexp embed.sexp)")
         .expect("should assemble");
-    let res = read_file(
+    let res = read_file::<Allocator>(
         runner,
         &mut allocator,
         &sexp_triggering_read,
@@ -209,7 +209,7 @@ fn test_present_file_smoke_exists() {
         run_program_for_search_paths("*test*", &vec!["resources/tests".to_string()], false, 0);
     let sexp_triggering_read = assemble(&mut allocator, "(embed-file test-file sexp embed.sexp)")
         .expect("should assemble");
-    let res = read_file(runner, &mut allocator, &sexp_triggering_read, "embed.sexp")
+    let res = read_file::<Allocator>(runner, &mut allocator, &sexp_triggering_read, "embed.sexp")
         .expect("should exist");
     assert_eq!(decode_string(&res.data), "(23 24 25)");
 }
@@ -245,7 +245,7 @@ fn test_process_embed_file_as_sexp_in_an_unexpected_location() {
     );
     let sexp_triggering_read = assemble(&mut allocator, "(embed-file test-file hex act.clvm.hex)")
         .expect("should assemble");
-    let res = read_file(
+    let res = read_file::<Allocator>(
         runner,
         &mut allocator,
         &sexp_triggering_read,
@@ -266,7 +266,7 @@ fn test_process_embed_file_as_sexp_in_an_expected_location() {
     );
     let sexp_triggering_read = assemble(&mut allocator, "(embed-file test-file hex act.clvm.hex)")
         .expect("should assemble");
-    let res = read_file(
+    let res = read_file::<Allocator>(
         runner,
         &mut allocator,
         &sexp_triggering_read,
