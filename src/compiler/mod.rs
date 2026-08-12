@@ -77,8 +77,6 @@ pub mod runtypes;
 pub mod sexp;
 /// Support for preserving the association between clvm data and locations in the source code.
 pub mod srcloc;
-/// Support for limiting stack depth during evaluation.
-pub mod stackvisit;
 /// Support for determining whether program argument values will be used statically.
 pub mod usecheck;
 
