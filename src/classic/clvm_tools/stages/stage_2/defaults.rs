@@ -1,9 +1,6 @@
-use std::rc::Rc;
-
 use clvm_rs::allocator::NodePtr;
 
 use crate::classic::clvm_tools::binutils::assemble;
-use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
 use crate::classic::clvm_tools::stages::stage_2::abstraction::ClassicAllocator;
 use crate::compiler::srcloc::Srcloc;
 
@@ -104,7 +101,7 @@ fn default_macros_src() -> Vec<&'static str> {
 
 fn build_default_macro_lookup<A: ClassicAllocator>(
     allocator: &mut A,
-    eval_f: Rc<dyn TRunProgram>,
+    eval_f: A::Runner,
     macros_src: &[String],
 ) -> A::NodePtr {
     let run = assemble(allocator.allocator(), "(a (com 2 3) 1)").unwrap();
@@ -140,7 +137,7 @@ fn build_default_macro_lookup<A: ClassicAllocator>(
 
 pub fn default_macro_lookup<A: ClassicAllocator>(
     allocator: &mut A,
-    runner: Rc<dyn TRunProgram>,
+    runner: A::Runner,
 ) -> A::NodePtr {
     let macro_srcs: Vec<String> = default_macros_src().iter().map(|s| s.to_string()).collect();
     build_default_macro_lookup(allocator, runner.clone(), &macro_srcs)
