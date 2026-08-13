@@ -14,6 +14,13 @@ use clvm_rs::allocator::Allocator;
 use crate::classic::clvm::__type_compatibility__::{bi_one, bi_zero};
 use crate::classic::clvm_tools::ir::r#type::NEW_BIT_CONSTANTS;
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
+use crate::classic::clvm_tools::stages::stage_2::abstraction::{
+    ASExp, BufCarrier, ClassicAllocator, SExpClassicAllocator,
+};
+use crate::classic::clvm_tools::stages::stage_2::defaults::default_macro_lookup;
+use crate::classic::clvm_tools::stages::stage_2::module::compile_mod;
+use crate::classic::clvm_tools::stages::stage_2::operators::run_program_for_search_paths;
+use crate::classic::clvm_tools::stages::stage_2::optimize::optimize_sexp;
 
 use crate::classic::clvm::__type_compatibility__::Stream;
 use crate::classic::clvm::sexp::sexp_as_bin;
@@ -21,9 +28,9 @@ use crate::compiler::clvm::{convert_to_clvm_rs, run, sha256tree, NewStyleIntConv
 use crate::compiler::codegen::{codegen, hoist_body_let_binding, process_helper_let_bindings};
 use crate::compiler::comptypes::{
     BodyForm, CompileErr, CompileForm, CompileModuleComponent, CompileModuleOutput, CompilerOpts,
-    CompilerOutput, ConstantKind, DefunData, Export, FrontendOutput, HelperForm, ImportLongName,
-    IncludeDesc, IncludeProcessType, ModulePhase, PrimaryCodegen, StandalonePhaseInfo,
-    SyntheticType,
+    CompilerOutput, ConstantKind, DefconstData, DefmacData, DefunData, Export, FrontendOutput,
+    HelperForm, ImportLongName, IncludeDesc, IncludeProcessType, ModulePhase, NamespaceData,
+    PrimaryCodegen, StandalonePhaseInfo, SyntheticType,
 };
 use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
 use crate::compiler::frontend::frontend;
@@ -151,6 +158,108 @@ pub fn do_desugar(
     })
 }
 
+pub fn expand_com_forms_expr(
+    opts: Rc<dyn CompilerOpts>,
+    body: Rc<BodyForm>,
+) -> Result<Rc<BodyForm>, CompileErr> {
+    if let BodyForm::Call(l, c, tail) = &*body {
+        if c.is_empty() {
+            return Ok(body);
+        }
+
+        if let BodyForm::Value(atom) = &*c[0] {
+            if c.len() == 2 && atom.atomize() == SExp::Atom(atom.loc(), b"com".to_vec()) {
+                return Ok(Rc::new(BodyForm::Call(
+                    l.clone(),
+                    vec![
+                        Rc::new(BodyForm::Value(SExp::Atom(
+                            c[0].loc(),
+                            b"function".to_vec(),
+                        ))),
+                        c[1].clone(),
+                    ],
+                    None,
+                )));
+            }
+        }
+
+        let mut call_args = vec![c[0].clone()];
+        for item in c.iter().skip(1) {
+            call_args.push(expand_com_forms_expr(opts.clone(), item.clone())?);
+        }
+
+        let new_tail = if let Some(t) = &tail {
+            Some(expand_com_forms_expr(opts, t.clone())?)
+        } else {
+            None
+        };
+
+        return Ok(Rc::new(BodyForm::Call(l.clone(), call_args, new_tail)));
+    }
+
+    Ok(body)
+}
+
+fn expand_com_forms_helper(
+    context: &mut BasicCompileContext,
+    opts: Rc<dyn CompilerOpts>,
+    helper: &HelperForm,
+) -> Result<HelperForm, CompileErr> {
+    match helper {
+        HelperForm::Defconstant(defconst) => Ok(HelperForm::Defconstant(DefconstData {
+            body: expand_com_forms_expr(opts, defconst.body.clone())?,
+            ..defconst.clone()
+        })),
+        HelperForm::Defmacro(defmacro) => Ok(HelperForm::Defmacro(DefmacData {
+            program: Rc::new(expand_com_forms(
+                context,
+                opts,
+                defmacro.program.as_ref().clone(),
+            )?),
+            ..defmacro.clone()
+        })),
+        HelperForm::Defun(inline, defun) => Ok(HelperForm::Defun(
+            *inline,
+            Box::new(DefunData {
+                body: expand_com_forms_expr(opts, defun.body.clone())?,
+                ..*defun.clone()
+            }),
+        )),
+        HelperForm::Defnamespace(namespace) => {
+            let helpers = namespace
+                .helpers
+                .iter()
+                .map(|helper| expand_com_forms_helper(context, opts.clone(), helper))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(HelperForm::Defnamespace(Box::new(NamespaceData {
+                helpers,
+                ..*namespace.clone()
+            })))
+        }
+        HelperForm::Defnsref(_) => Ok(helper.clone()),
+    }
+}
+
+/// Translate modern `com` forms for a backend that only implements `function`.
+pub fn expand_com_forms(
+    context: &mut BasicCompileContext,
+    opts: Rc<dyn CompilerOpts>,
+    compileform: CompileForm,
+) -> Result<CompileForm, CompileErr> {
+    let helpers = compileform
+        .helpers
+        .iter()
+        .map(|helper| expand_com_forms_helper(context, opts.clone(), helper))
+        .collect::<Result<Vec<_>, _>>()?;
+    let exp = expand_com_forms_expr(opts, compileform.exp.clone())?;
+
+    Ok(CompileForm {
+        helpers,
+        exp,
+        ..compileform
+    })
+}
+
 /// Given a compileform, compile it to clvm.  This comes after preprocessing
 /// and desugaring.
 pub fn finish_compilation(
@@ -158,6 +267,14 @@ pub fn finish_compilation(
     opts: Rc<dyn CompilerOpts>,
     p2: CompileForm,
 ) -> Result<SExp, CompileErr> {
+    if opts.dialect().classic_codegen {
+        let mut modern_dialect = opts.dialect();
+        modern_dialect.classic_codegen = false;
+        let modern_opts = opts.set_dialect(modern_dialect);
+        let p3 = expand_com_forms(context, modern_opts, p2)?;
+        return classic_codegen(opts, p3);
+    }
+
     let p3 = context.post_desugar_optimization(opts.clone(), p2)?;
 
     // generate code from AST, optionally with optimization
@@ -168,12 +285,70 @@ pub fn finish_compilation(
     Ok(g2)
 }
 
+/// Generate code from a desugared modern CompileForm with classic stage 2.
+///
+/// The classic compiler's normal final optimization is part of its code
+/// generation contract. No modern optimization hooks run on this path.
+fn classic_codegen(opts: Rc<dyn CompilerOpts>, program: CompileForm) -> Result<SExp, CompileErr> {
+    let language_flags = if opts.dialect().extra_numeric_constants {
+        NEW_BIT_CONSTANTS
+    } else {
+        0
+    };
+    let runner = run_program_for_search_paths(
+        &opts.filename(),
+        &opts.get_search_paths(),
+        false,
+        language_flags,
+    );
+    runner.set_compiler_opts(Some(opts.clone()));
+
+    let mut allocator = SExpClassicAllocator::new();
+    let macro_lookup = default_macro_lookup(&mut allocator, runner.clone());
+    let nil = allocator
+        .import(program.loc(), clvm_rs::allocator::NodePtr::NIL)
+        .map_err(|e| CompileErr(e.0, e.1.to_string()))?;
+    let args = allocator
+        .from_sexp(program.to_sexp())
+        .map_err(|e| CompileErr(e.0, e.1.to_string()))?;
+    let generated = compile_mod(
+        &mut allocator,
+        &args,
+        &macro_lookup,
+        &nil,
+        runner.clone(),
+        0,
+    )
+    .map_err(|e| CompileErr(e.0, e.1.to_string()))?;
+    let optimized = optimize_sexp(&mut allocator, &generated, runner)
+        .map_err(|e| CompileErr(e.0, e.1.to_string()))?;
+
+    // compile_mod produces a compiler program. Optimizing the primary module
+    // evaluates that program and quotes the resulting CLVM as constant data.
+    // Included modules still need the quote while they are being compiled.
+    if opts.module_phase().is_none() && program.loc.file.as_str() == opts.filename() {
+        if let ASExp::Pair(operator, compiled) = allocator.sexp(&optimized) {
+            if matches!(allocator.sexp(&operator), ASExp::Atom)
+                && allocator.atom(&operator).as_ref() == [1]
+            {
+                return Ok(compiled.sexp.as_ref().clone());
+            }
+        }
+    }
+
+    Ok(optimized.sexp.as_ref().clone())
+}
+
 pub fn compile_from_compileform(
     context: &mut BasicCompileContext,
     opts: Rc<dyn CompilerOpts>,
     p0: CompileForm,
 ) -> Result<SExp, CompileErr> {
-    let p1 = context.frontend_optimization(opts.clone(), p0)?;
+    let p1 = if opts.dialect().classic_codegen {
+        p0
+    } else {
+        context.frontend_optimization(opts.clone(), p0)?
+    };
 
     // Resolve includes, convert program source to lexemes
     let p2 = do_desugar(opts.clone(), &p1)?;
@@ -747,7 +922,14 @@ pub fn compile_pre_forms(
         opts = opts.set_stdenv(dialect.strict).set_dialect(dialect);
     }
 
-    let p0 = frontend(opts.clone(), pre_forms)?;
+    let frontend_opts = if opts.dialect().classic_codegen {
+        let mut modern_dialect = opts.dialect();
+        modern_dialect.classic_codegen = false;
+        opts.set_dialect(modern_dialect)
+    } else {
+        opts.clone()
+    };
+    let p0 = frontend(frontend_opts, pre_forms)?;
 
     match p0 {
         FrontendOutput::CompileForm(p0) => Ok(CompilerOutput::Program(
