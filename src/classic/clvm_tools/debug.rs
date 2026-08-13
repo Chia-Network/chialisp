@@ -8,9 +8,9 @@ use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, Stream}
 use crate::classic::clvm::serialize::sexp_to_stream;
 use crate::classic::clvm::sexp::{enlist, proper_list, rest, First, SelectNode, ThisNode};
 
-use crate::classic::clvm_tools::binutils::disassemble;
 use crate::classic::clvm_tools::sha256tree::sha256tree;
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
+use crate::classic::clvm_tools::stages::stage_2::abstraction::{ClError, ClassicAllocator};
 
 use crate::compiler::comptypes::{CompileErr, CompilerOpts};
 use crate::compiler::frontend::frontend;
@@ -49,13 +49,27 @@ use crate::compiler::usecheck::check_parameters_used_compileform;
 
 /// Contains additional info beside the compiled form for chialisp functions/
 /// These can be passed on and used by debuggers and such.
-#[derive(Clone)]
-pub struct FunctionExtraInfo {
+pub struct FunctionExtraInfo<A: ClassicAllocator>
+where
+    A::NodePtr: Clone,
+{
     /// The form of the original arguments from the source code.
-    pub args: NodePtr,
+    pub args: A::NodePtr,
     /// Whether this function requires the constants and functions of the program
     /// as an additional hidden parameter.
     pub has_constants_tree: bool,
+}
+
+impl<A: ClassicAllocator> Clone for FunctionExtraInfo<A>
+where
+    A::NodePtr: Clone,
+{
+    fn clone(&self) -> Self {
+        FunctionExtraInfo {
+            args: self.args.clone(),
+            has_constants_tree: self.has_constants_tree,
+        }
+    }
 }
 
 // // The function below is broken as of 2021/06/22.
@@ -92,23 +106,30 @@ pub struct FunctionExtraInfo {
 //     // @todo Implement here if original python code is fixed.
 // }
 // */
-pub fn build_symbol_dump(
-    allocator: &mut Allocator,
-    constants_lookup: &HashMap<Vec<u8>, NodePtr>,
-    extra_function_data: &HashMap<Vec<u8>, FunctionExtraInfo>,
+pub fn build_symbol_dump<A: ClassicAllocator>(
+    allocator: &mut A,
+    constants_lookup: &HashMap<Vec<u8>, A::NodePtr>,
+    extra_function_data: &HashMap<Vec<u8>, FunctionExtraInfo<A>>,
     run_program: Rc<dyn TRunProgram>,
     extra_info: bool,
-) -> Result<NodePtr, EvalErr> {
-    let mut map_result: Vec<NodePtr> = Vec::new();
+) -> Result<A::NodePtr, ClError>
+where
+    A::NodePtr: Clone,
+{
+    let mut map_result: Vec<A::NodePtr> = Vec::new();
 
     for (k, v) in constants_lookup.iter() {
-        let run_result = run_program.run_program(allocator, *v, NodePtr::NIL, None)?;
+        let v_export = allocator.export(v);
+        let vloc = allocator.loc(v);
+        let run_result = run_program
+            .run_program(allocator.allocator(), v_export, NodePtr::NIL, None)
+            .map_err(|e| allocator.map_err(vloc.clone(), e))?;
 
-        let sha256 = sha256tree(allocator, run_result.1).hex();
-        let sha_atom = allocator.new_atom(sha256.as_bytes())?;
-        let name_atom = allocator.new_atom(&k.clone())?;
+        let sha256 = sha256tree(allocator.allocator(), run_result.1).hex();
+        let sha_atom = allocator.new_atom(vloc.clone(), sha256.as_bytes())?;
+        let name_atom = allocator.new_atom(vloc.clone(), &k.clone())?;
 
-        map_result.push(allocator.new_pair(sha_atom, name_atom)?);
+        map_result.push(allocator.new_pair(vloc.clone(), &sha_atom, &name_atom)?);
 
         if !extra_info {
             continue;
@@ -123,16 +144,26 @@ pub fn build_symbol_dump(
             left_env_atom.append(&mut sha256.as_bytes().to_vec());
             left_env_atom.append(&mut "_left_env".as_bytes().to_vec());
 
-            let args_name_atom = allocator.new_atom(&args_atom)?;
-            let left_env_name_atom = allocator.new_atom(&left_env_atom)?;
+            let args_name_atom = allocator.new_atom(vloc.clone(), &args_atom)?;
+            let left_env_name_atom = allocator.new_atom(vloc.clone(), &left_env_atom)?;
 
-            let serialized_args = disassemble(allocator, extra.args, Some(0));
-            let serialized_args_atom = allocator.new_atom(serialized_args.as_bytes())?;
+            let serialized_args = allocator.disassemble(&extra.args, Some(0));
+            let serialized_args_atom =
+                allocator.new_atom(vloc.clone(), serialized_args.as_bytes())?;
 
-            let left_env_value = allocator.new_atom(&[extra.has_constants_tree as u8])?;
+            let left_env_value =
+                allocator.new_atom(vloc.clone(), &[extra.has_constants_tree as u8])?;
 
-            map_result.push(allocator.new_pair(args_name_atom, serialized_args_atom)?);
-            map_result.push(allocator.new_pair(left_env_name_atom, left_env_value)?);
+            map_result.push(allocator.new_pair(
+                vloc.clone(),
+                &args_name_atom,
+                &serialized_args_atom,
+            )?);
+            map_result.push(allocator.new_pair(
+                vloc.clone(),
+                &left_env_name_atom,
+                &left_env_value,
+            )?);
         }
     }
 
@@ -152,7 +183,7 @@ fn text_trace(
     let mut env = env_;
     match symbol {
         Some(sym) => {
-            env = rest(allocator, env).unwrap_or(NodePtr::NIL);
+            env = rest(allocator, &env).unwrap_or(NodePtr::NIL);
             let symbol_atom = allocator.new_atom(sym.as_bytes()).unwrap();
             let symbol_list = allocator.new_pair(symbol_atom, env).unwrap();
             symbol_val = disassemble_f(allocator, symbol_list);
@@ -219,7 +250,7 @@ fn display_trace(
     display_fun: &DisplayTraceFun,
 ) {
     for item in trace {
-        let item_vec = proper_list(allocator, *item, true).unwrap();
+        let item_vec = proper_list(allocator, item, true).unwrap();
         let form = item_vec[0];
         let env = item_vec[1];
         let not_exn = item_vec.len() > 2;
@@ -294,11 +325,9 @@ pub fn trace_pre_eval(
     if recognized.is_none() && symbol_table.is_some() {
         Ok(None)
     } else {
-        m! {
-            log_entry <- enlist(allocator, &[sexp, args]);
-            let _ = append_log(allocator, log_entry);
-            Ok(Some(log_entry))
-        }
+        let log_entry = enlist(allocator, &[sexp, args])?;
+        append_log(allocator, log_entry);
+        Ok(Some(log_entry))
     }
 }
 

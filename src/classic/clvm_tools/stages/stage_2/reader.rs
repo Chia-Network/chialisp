@@ -2,13 +2,16 @@ use std::fs;
 use std::rc::Rc;
 
 use clvm_rs::error::EvalErr;
-use clvmr::allocator::{Allocator, NodePtr, SExp};
+use clvmr::allocator::NodePtr;
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, Stream, UnvalidatedBytesFromType};
 use crate::classic::clvm::serialize::{sexp_from_stream, SimpleCreateCLVMObject};
 use crate::classic::clvm::sexp::{proper_list, rest};
 use crate::classic::clvm_tools::stages::assemble;
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
+use crate::classic::clvm_tools::stages::stage_2::abstraction::{
+    ASExp, BufCarrier, ClError, ClassicAllocator,
+};
 use crate::classic::clvm_tools::stages::stage_2::compile::get_search_paths;
 use crate::classic::clvm_tools::stages::stage_2::helpers::quote;
 use crate::classic::clvm_tools::stages::stage_2::operators::full_path_for_filename;
@@ -25,21 +28,32 @@ pub struct PresentFile {
 
 /// Given u8 data from a hex file, build an sexp from it.
 /// This is used for the compile-file and embed-file feature.
-pub fn convert_hex_to_sexp(
-    allocator: &mut Allocator,
+pub fn convert_hex_to_sexp<A: ClassicAllocator>(
+    allocator: &mut A,
+    parent_sexp: &A::NodePtr,
     file_data: &[u8],
-) -> Result<NodePtr, EvalErr> {
+) -> Result<A::NodePtr, ClError>
+where
+    A::NodePtr: Clone,
+{
+    let loc = allocator.loc(parent_sexp);
     let content_bytes = Bytes::new_validated(Some(UnvalidatedBytesFromType::Hex(decode_string(
         file_data,
     ))))
-    .map_err(|e| EvalErr::InternalError(NodePtr::NIL, e.to_string()))?;
+    .map_err(|e| {
+        ClError(
+            loc.clone(),
+            EvalErr::InternalError(NodePtr::NIL, e.to_string()),
+        )
+    })?;
     let mut reader_stream = Stream::new(Some(content_bytes));
-    Ok(sexp_from_stream(
-        allocator,
+    let incoming_data = sexp_from_stream(
+        allocator.allocator(),
         &mut reader_stream,
         Box::new(SimpleCreateCLVMObject {}),
-    )?
-    .1)
+    )
+    .map_err(|e| ClError(loc.clone(), e))?;
+    allocator.import(loc, incoming_data.1)
 }
 
 /// Given a runner (which in the case of classic, contains the search paths as
@@ -47,18 +61,26 @@ pub fn convert_hex_to_sexp(
 /// time runner), try to find a file to embed given its name.  Try to report an
 /// error nicely by using the form the user gave (parent_sexp) in the error
 /// report.
-pub fn read_file(
+pub fn read_file<A: ClassicAllocator>(
     runner: Rc<dyn TRunProgram>,
-    allocator: &mut Allocator,
-    parent_sexp: NodePtr,
+    allocator: &mut A,
+    parent_sexp: &A::NodePtr,
     filename: &str,
-) -> Result<PresentFile, EvalErr> {
-    let search_paths = get_search_paths(runner, allocator)?;
-    let full_path = full_path_for_filename(parent_sexp, filename, &search_paths)?;
+) -> Result<PresentFile, ClError>
+where
+    A::NodePtr: Clone,
+{
+    let loc = allocator.loc(parent_sexp);
+    let search_paths = get_search_paths(runner, loc.clone(), allocator)?;
+    let full_path = full_path_for_filename(allocator, parent_sexp, filename, &search_paths)?;
 
+    let export = allocator.export(parent_sexp);
     fs::read(full_path.clone())
         .map_err(|x| {
-            EvalErr::InternalError(parent_sexp, format!("error reading {full_path}: {x:?}"))
+            ClError(
+                loc,
+                EvalErr::InternalError(export, format!("error reading {full_path}: {x:?}")),
+            )
         })
         .map(|data| PresentFile {
             data,
@@ -72,11 +94,14 @@ pub fn read_file(
 /// or (compile-file constant-name filename)
 /// Return the resulting constant name and a quoted expression suitable for use
 /// as a constant or an error if the file wasn't found.
-pub fn process_embed_file(
-    allocator: &mut Allocator,
+pub fn process_embed_file<A: ClassicAllocator>(
+    allocator: &mut A,
     runner: Rc<dyn TRunProgram>,
-    declaration_sexp: NodePtr,
-) -> Result<(Vec<u8>, NodePtr), EvalErr> {
+    declaration_sexp: &A::NodePtr,
+) -> Result<(Vec<u8>, A::NodePtr), ClError>
+where
+    A::NodePtr: Clone,
+{
     // Include the file's contents in the constant pool.
     // The user can specify the format to read:
     //
@@ -84,24 +109,28 @@ pub fn process_embed_file(
     // hex
     // sexp
     let rest_of_decl = rest(allocator, declaration_sexp)?;
-    if let Some(l) = proper_list(allocator, rest_of_decl, true) {
+    let loc = allocator.loc(declaration_sexp);
+    let export = allocator.export(declaration_sexp);
+    if let Some(l) = proper_list(allocator, &rest_of_decl, true) {
         if l.len() != 3 {
-            return Err(EvalErr::InternalError(
-                declaration_sexp,
-                "must have a type and a name".to_string(),
+            let loc = allocator.loc(declaration_sexp);
+            let dec_export = allocator.export(declaration_sexp);
+            return Err(ClError(
+                loc,
+                EvalErr::InternalError(dec_export, "must have a type and a name".to_string()),
             ));
         }
 
-        if let (SExp::Atom, SExp::Atom, SExp::Atom) = (
-            allocator.sexp(l[0]),
-            allocator.sexp(l[1]),
-            allocator.sexp(l[2]),
+        if let (ASExp::Atom, ASExp::Atom, ASExp::Atom) = (
+            allocator.sexp(&l[0]),
+            allocator.sexp(&l[1]),
+            allocator.sexp(&l[2]),
         ) {
             // Note: we don't want to keep borrowing here because we
             // need the mutable borrow below.
-            let name_atom = allocator.atom(l[0]);
-            let kind_atom = allocator.atom(l[1]);
-            let filename_atom = allocator.atom(l[2]);
+            let name_atom = allocator.atom(&l[0]);
+            let kind_atom = allocator.atom(&l[1]);
+            let filename_atom = allocator.atom(&l[2]);
             let name_buf = name_atom.as_ref().to_vec();
             let kind_buf = kind_atom.as_ref().to_vec();
             let filename_buf = filename_atom.as_ref().to_vec();
@@ -112,7 +141,7 @@ pub fn process_embed_file(
                     declaration_sexp,
                     &decode_string(&filename_buf),
                 )?;
-                allocator.new_atom(&file.data)?
+                allocator.new_atom(loc, &file.data)?
             } else if kind_buf == b"hex" {
                 let file = read_file(
                     runner,
@@ -120,7 +149,7 @@ pub fn process_embed_file(
                     declaration_sexp,
                     &decode_string(&filename_buf),
                 )?;
-                convert_hex_to_sexp(allocator, &file.data)?
+                convert_hex_to_sexp(allocator, declaration_sexp, &file.data)?
             } else if kind_buf == b"sexp" {
                 let file = read_file(
                     runner,
@@ -128,25 +157,27 @@ pub fn process_embed_file(
                     declaration_sexp,
                     &decode_string(&filename_buf),
                 )?;
-                assemble(allocator, &decode_string(&file.data))?
+                let assembled = assemble(allocator.allocator(), &decode_string(&file.data))
+                    .map_err(|e| ClError(loc.clone(), e))?;
+                allocator.import(loc, assembled)?
             } else {
-                return Err(EvalErr::InternalError(
-                    declaration_sexp,
-                    "no such embed kind".to_string(),
+                return Err(ClError(
+                    loc,
+                    EvalErr::InternalError(export, "no such embed kind".to_string()),
                 ));
             };
 
-            Ok((name_buf.to_vec(), quote(allocator, file_data)?))
+            Ok((name_buf.to_vec(), quote(allocator, &file_data)?))
         } else {
-            Err(EvalErr::InternalError(
-                declaration_sexp,
-                "malformed embed-file".to_string(),
+            Err(ClError(
+                loc,
+                EvalErr::InternalError(export, "malformed embed-file".to_string()),
             ))
         }
     } else {
-        Err(EvalErr::InternalError(
-            declaration_sexp,
-            "must be a proper list".to_string(),
+        Err(ClError(
+            loc,
+            EvalErr::InternalError(export, "must be a proper list".to_string()),
         ))
     }
 }
