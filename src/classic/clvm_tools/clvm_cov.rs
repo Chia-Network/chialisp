@@ -30,15 +30,21 @@ use clvmr::Allocator;
 
 use serde::Deserialize;
 
-use crate::classic::clvm_tools::comp_input::RunAndCompileInputData;
+use crate::classic::clvm::__type_compatibility__::{sha256, Bytes, BytesFromType};
+use crate::classic::clvm_tools::clvmc::compile_clvm_text_maybe_opt;
+use crate::classic::clvm_tools::comp_input::{CompiledModernProgram, RunAndCompileInputData};
+use crate::classic::clvm_tools::sha256tree::sha256tree;
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 use crate::classic::platform::argparse::ArgumentValue;
 use crate::compiler::cldb::{hex_to_modern_sexp, CldbNoOverride, CldbRun, CldbRunEnv};
 use crate::compiler::clvm::start_step;
+use crate::compiler::compiler::DefaultCompilerOpts;
+use crate::compiler::comptypes::CompilerOpts;
 use crate::compiler::debug::build_symbol_table_mut;
 use crate::compiler::prims;
 use crate::compiler::sexp::SExp;
 use crate::compiler::srcloc::Srcloc;
+use crate::util::u8_from_number;
 
 /// Hard bound on the number of steps we will run a single corpus program.  An unbounded
 /// step loop is a hang waiting to happen; a real on-chain puzzle is cost-bounded far below
@@ -111,11 +117,15 @@ OPTIONS:
                        compiled into the global attribution table used for source-less records.
     --include <dir>    Extra include search directory (repeatable).
     --out     <file>   Write union LCOV here, plus one <stem>.<layer>.<ext> per layer.
-    --summary          Print per-file union%, per-layer totals, and the cold worklist.
-    --optimize         Force the classic optimizer on when recompiling (matches producers that
-                       compile no-sigil sources optimized).  Default: honor the source sigil,
-                       so a *standard-cl-2N* (N>22) source is already compiled optimized to
-                       byte-match production.
+    --summary          Print per-file union% over the MEASURABLE lines (TOTAL), the count
+                       of lines the matched corpus artifacts cannot express (EXCL -- e.g. a
+                       classic stage_2 producer only shares some subtrees with the modern
+                       srcloc-bearing recompile), per-layer totals, and the cold worklist.
+    --optimize         Force the classic optimizer on when recompiling.  REFUSED when it
+                       would discard source locations (always for a classic no-sigil source,
+                       and whenever the table collapses): a locationless compile scores a
+                       vacuous 100%.  The source sigil already selects the production compile
+                       (a *standard-cl-2N* (N>22) source compiles optimized, with locations).
     -h, --help         Show this help.
 
 A COLD line is a reachable source line never hit by any record.  Coverage is measured at
@@ -130,6 +140,14 @@ decoration is clean.  Cold-branch fidelity through that optimizer:
   * INLINE arms folded into the call site (`defun-inline`, constant/expr arms): collapse to a
     shared location and cannot be told apart -- write branch bodies as (non-inline) defun
     calls for line fidelity.
+  * CLASSIC (no-sigil) sources: a classic producer's stage_2 bytes (`run`, `cdv clsp build`)
+    do not byte-match the modern srcloc-bearing recompile.  The classic roots are registered
+    too, so a captured classic program still IDENTIFIES its source; attribution then flows
+    through the subtrees the two artifacts share, and lines the captured bytes cannot express
+    are EXCLUDED from the denominator (the EXCL column) instead of reported as cold.
+  * A subtree occurring at more than one source location is ambiguous BY HASH and never
+    credits a line (its enclosing unique ancestor does); an identical subexpression on two
+    lines cannot mark the untaken line executed.
   * A corpus `program` whose treehash differs from the recompiled source (compiled with
     different settings) triggers a one-line treehash-mismatch warning; mapping is best-effort.
     Pass --optimize (or add the matching sigil) so the recompile matches.";
@@ -186,6 +204,10 @@ pub struct CompiledSource {
     pub srcloc_syms: HashMap<String, String>,
     /// Every reachable srcloc string (real source files only).
     pub reachable: BTreeSet<String>,
+    /// Subtree hashes occurring at MORE THAN ONE source location in this compile -- dropped
+    /// from `srcloc_syms` as ambiguous.  Retained so the union/overlay machinery can keep a
+    /// sibling source from claiming an occurrence that is ambiguous HERE.
+    pub ambiguous: HashSet<String>,
     /// sha256tree of each compiled program root (one per export of a multi-export module) --
     /// used to detect a corpus `program` hex compiled differently (e.g. optimized), whose node
     /// hashes will not match our srcloc table, and to identify a source-less capture by root.
@@ -216,7 +238,7 @@ pub fn compile_source(
     let mut parsed_args: HashMap<String, ArgumentValue> = HashMap::new();
     parsed_args.insert(
         "path_or_code".to_string(),
-        ArgumentValue::ArgString(Some(source_path.to_string()), content),
+        ArgumentValue::ArgString(Some(source_path.to_string()), content.clone()),
     );
     let include_vals: Vec<ArgumentValue> = includes
         .iter()
@@ -230,6 +252,19 @@ pub fn compile_source(
 
     let input = RunAndCompileInputData::new(&mut allocator, &parsed_args)
         .map_err(|e| format!("compile setup failed for {source_path}: {e}"))?;
+
+    // --optimize on a classic (no-sigil) source runs the classic optimizer over the modern
+    // compile, which rebuilds nodes without source locations: the srcloc table collapses to a
+    // single location and every corpus scores a vacuous 100%.  Refuse rather than report a
+    // perfect score that measures nothing.  (A *standard-cl-2N* sigil source optimizes with
+    // locations intact and is unaffected.)
+    if force_optimize && input.dialect.stepping.is_none() {
+        return Err(format!(
+            "--optimize with classic-dialect source {source_path} discards source locations \
+             (the srcloc table collapses to a single location); refusing to report vacuous \
+             coverage -- drop --optimize or add a *standard-cl-2N* sigil"
+        ));
+    }
 
     // We only want the srcloc table; the name-symbol map is a throwaway here.
     //
@@ -248,12 +283,24 @@ pub fn compile_source(
     // multi-export module contributes one program per export; the tables union).  We record the
     // root of EVERY export so an explicit-`source` record for any export matches, and a source-less
     // capture of any export can be identified by root.
-    let mut srcloc_syms: HashMap<String, String> = HashMap::new();
-    let mut root_hashes: Vec<String> = Vec::new();
-    for (_shortname, res) in &programs {
-        let h = build_symbol_table_mut(&mut srcloc_syms, res.borrow()).hex();
-        if !root_hashes.contains(&h) {
-            root_hashes.push(h);
+    // A subtree occurring at MORE THAN ONE source location is dropped as ambiguous: execution
+    // of one occurrence cannot be told from another by hash, so crediting either line would be
+    // a guess -- the decorator instead inherits the nearest uniquely-located ancestor, the same
+    // policy the cross-source union applies.  (Previously one occurrence won arbitrarily,
+    // crediting the WRONG line whenever a shared subexpression ran: a false positive on the
+    // line that did not run and a false negative on the one that did.)
+    let (srcloc_syms, ambiguous, mut root_hashes) = build_unambiguous_srcloc_table(&programs);
+
+    // A classic (no-sigil) producer -- `run` / `cdv clsp build` -- compiles through the classic
+    // stage_2 pipeline, whose output does NOT byte-match the modern compiler's srcloc-bearing
+    // artifact for the same source.  Register the classic root(s) too (optimized and not), so a
+    // captured classic program still IDENTIFIES this source (expected-root / by-root matching);
+    // its nodes then attribute through whichever subtrees the two artifacts share.
+    if input.dialect.stepping.is_none() {
+        for h in classic_root_hashes(source_path, &content, includes) {
+            if !root_hashes.contains(&h) {
+                root_hashes.push(h);
+            }
         }
     }
 
@@ -264,8 +311,21 @@ pub fn compile_source(
         }
     }
 
+    // The same guard, post-compile and dialect-independent: --optimize routes the output
+    // through the CLASSIC finalizer, which rebuilds nodes without source locations for any
+    // dialect.  A collapsed table means every corpus would score a vacuous 100%.
+    if force_optimize && reachable.len() <= 1 {
+        return Err(format!(
+            "--optimize collapsed {source_path}'s srcloc table to {} location(s); refusing \
+             to report vacuous coverage -- drop --optimize (the sigil already selects the \
+             production compile)",
+            reachable.len()
+        ));
+    }
+
     Ok(CompiledSource {
         srcloc_syms,
+        ambiguous,
         reachable,
         root_hashes,
     })
@@ -301,13 +361,112 @@ pub struct GlobalSourceTable {
     /// subtrees it shares with sibling sources.  This lets a curried program re-identified with a
     /// specific source (via `by_root`) attribute a body that sibling templates share -- which the
     /// union drops as ambiguous but the per-source table retains.
-    pub sources: Vec<(String, HashMap<String, String>)>,
+    pub sources: Vec<(String, HashMap<String, String>, HashSet<String>)>,
     /// `compiled_program_root_hash -> index into `sources``.  A source's compiled-program root
     /// treehash is its identity: when a captured curried program is uncurried (see
     /// `identify_sources_by_uncurry`) to an inner puzzle whose root hash is a key here, that inner
     /// puzzle IS the source and decorates against its collision-free table.  First-wins on a shared
     /// root (identical siblings).
     pub by_root: HashMap<String, usize>,
+}
+
+/// Walk every subtree of a compiled `SExp`, calling `visit` with each subtree's canonical
+/// treehash (hex) and the subtree, and return the root treehash.  The hash space is identical
+/// to `build_symbol_table_mut`'s keys (sha256 of `2|left|right` for a pair, `1|atom-bytes`
+/// for an atom), so hashes here are directly comparable against the attribution table,
+/// `program_root_hash`, and the classic `sha256tree`.
+fn walk_subtree_hashes(code: &SExp, visit: &mut dyn FnMut(&str, &SExp)) -> Bytes {
+    match code {
+        SExp::Cons(_, a, b) => {
+            let left = walk_subtree_hashes(a.borrow(), visit);
+            let right = walk_subtree_hashes(b.borrow(), visit);
+            let treehash = sha256(
+                Bytes::new(Some(BytesFromType::Raw(vec![2])))
+                    .concat(&left)
+                    .concat(&right),
+            );
+            visit(&treehash.hex(), code);
+            treehash
+        }
+        SExp::Atom(_, a) => {
+            let treehash = sha256(
+                Bytes::new(Some(BytesFromType::Raw(vec![1])))
+                    .concat(&Bytes::new(Some(BytesFromType::Raw(a.clone())))),
+            );
+            visit(&treehash.hex(), code);
+            treehash
+        }
+        SExp::QuotedString(l, _, a) => {
+            walk_subtree_hashes(&SExp::Atom(l.clone(), a.clone()), visit)
+        }
+        SExp::Integer(l, i) => {
+            walk_subtree_hashes(&SExp::Atom(l.clone(), u8_from_number(i.clone())), visit)
+        }
+        SExp::Nil(l) => walk_subtree_hashes(&SExp::Atom(l.clone(), Vec::new()), visit),
+    }
+}
+
+/// The pure `sha256tree -> srcloc` table over a compile's program(s), with any subtree whose
+/// hash occurs at MORE THAN ONE source location DROPPED as ambiguous (see compile_source),
+/// plus each program's root hash.
+fn build_unambiguous_srcloc_table(
+    programs: &[CompiledModernProgram],
+) -> (HashMap<String, String>, HashSet<String>, Vec<String>) {
+    let mut table: HashMap<String, String> = HashMap::new();
+    let mut ambiguous: HashSet<String> = HashSet::new();
+    let mut roots: Vec<String> = Vec::new();
+    for (_shortname, prog) in programs {
+        let prog_ref: &SExp = prog.borrow();
+        let root = walk_subtree_hashes(prog_ref, &mut |h, s| {
+            if ambiguous.contains(h) {
+                return;
+            }
+            let loc = s.loc().to_string();
+            match table.get(h) {
+                Some(prev) if *prev != loc => {
+                    table.remove(h);
+                    ambiguous.insert(h.to_string());
+                }
+                Some(_) => {}
+                None => {
+                    table.insert(h.to_string(), loc);
+                }
+            }
+        });
+        let rh = root.hex();
+        if !roots.contains(&rh) {
+            roots.push(rh);
+        }
+    }
+    (table, ambiguous, roots)
+}
+
+/// The root treehash(es) a CLASSIC producer would emit for this source: the stage_2 pipeline
+/// (`run` / `cdv clsp build`), optimized and unoptimized.  Best-effort -- a source the classic
+/// compiler rejects contributes no extra roots.
+fn classic_root_hashes(source_path: &str, content: &str, includes: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for do_optimize in [false, true] {
+        let mut allocator = Allocator::new();
+        let mut sym: HashMap<String, String> = HashMap::new();
+        let opts: Rc<dyn CompilerOpts> =
+            Rc::new(DefaultCompilerOpts::new(source_path)).set_search_paths(includes);
+        if let Ok(node) = compile_clvm_text_maybe_opt(
+            &mut allocator,
+            do_optimize,
+            opts,
+            &mut sym,
+            content,
+            source_path,
+            false,
+        ) {
+            let h = sha256tree(&mut allocator, node).hex();
+            if !out.contains(&h) {
+                out.push(h);
+            }
+        }
+    }
+    out
 }
 
 /// Bound on how deep we peel curry wrappers when re-identifying a captured program's source.
@@ -360,7 +519,7 @@ pub fn build_global_table(
     let mut compiled: Vec<String> = Vec::new();
     let mut skipped: Vec<(String, String)> = Vec::new();
     // Per-source collision-free tables + root-hash -> index, for curried re-identification.
-    let mut sources: Vec<(String, HashMap<String, String>)> = Vec::new();
+    let mut sources: Vec<(String, HashMap<String, String>, HashSet<String>)> = Vec::new();
     let mut by_root: HashMap<String, usize> = HashMap::new();
 
     // `files` is a BTreeSet so this Vec is sorted-by-path.  Compiles run in PARALLEL (each
@@ -423,6 +582,15 @@ pub fn build_global_table(
         // Every slot was filled: work indices are handed out uniquely by the atomic counter.
         match slot.expect("every source index compiled exactly once") {
             Ok(cs) => {
+                // A hash one source dropped as INTRA-ambiguous must not survive in the union
+                // under a sibling's location: an execution of it in a capture of THIS source
+                // would credit the sibling's line.  Treat it as a union collision outright.
+                for hash in &cs.ambiguous {
+                    if !collided.contains(hash) {
+                        srcloc_syms.remove(hash);
+                        collided.insert(hash.clone());
+                    }
+                }
                 // Merge into the collision-pruned UNION table (iterating by reference so the
                 // per-source table can be retained below for curried re-identification).
                 for (hash, loc) in &cs.srcloc_syms {
@@ -450,7 +618,7 @@ pub fn build_global_table(
                 for h in &cs.root_hashes {
                     by_root.entry(h.clone()).or_insert(idx);
                 }
-                sources.push((path.clone(), cs.srcloc_syms));
+                sources.push((path.clone(), cs.srcloc_syms, cs.ambiguous));
                 compiled.push(path);
             }
             Err(e) => skipped.push((path, e)),
@@ -484,13 +652,17 @@ pub fn build_global_table(
 ///   does not resolve (and their descendants).  The per-source path uses `*program*`; the
 ///   global path uses `*unmapped*` so genuinely-unattributed program nodes are distinguishable
 ///   from ordinary synthetic locations in the executed set.
+///
+/// Also returns the record's ARTIFACT: every subtree treehash of the captured program.  The
+/// caller intersects the source's srcloc table with the union of matched artifacts to compute
+/// the lines the producer's actual bytes can express (the measurable denominator).
 pub fn run_record(
     program_hex: &str,
     args_hex: &str,
     srcloc_syms: &HashMap<String, String>,
     expected_roots: Option<&[String]>,
     fallback_name: &str,
-) -> Result<(BTreeSet<String>, bool), String> {
+) -> Result<(BTreeSet<String>, bool, HashSet<String>), String> {
     let mut allocator = Allocator::new();
 
     let program = hex_to_modern_sexp(
@@ -501,6 +673,14 @@ pub fn run_record(
     )
     .map_err(|e| format!("bad program hex: {e}"))?;
 
+    let mut artifact: HashSet<String> = HashSet::new();
+    {
+        let program_ref: &SExp = program.borrow();
+        walk_subtree_hashes(program_ref, &mut |h, _| {
+            artifact.insert(h.to_string());
+        });
+    }
+
     // Does this corpus program actually match the source we compiled?  sha256tree ignores
     // srclocs, so a match means the hashes in `srcloc_syms` decorate real nodes.  On the
     // global-table path there is no single expected root, so we skip the check.
@@ -508,7 +688,7 @@ pub fn run_record(
         Some(roots) => {
             let mut throwaway: HashMap<String, String> = HashMap::new();
             let loaded_root = build_symbol_table_mut(&mut throwaway, program.borrow()).hex();
-            roots.iter().any(|r| *r == loaded_root)
+            roots.contains(&loaded_root)
         }
         None => true,
     };
@@ -555,7 +735,7 @@ pub fn run_record(
         steps += 1;
     }
 
-    Ok((executed, matched))
+    Ok((executed, matched, artifact))
 }
 
 /// The sha256 treehash (hex) of a modern `SExp`, computed the SAME way `build_symbol_table_mut`
@@ -714,7 +894,7 @@ fn table_for_identified(g: &GlobalSourceTable, matched: &[usize]) -> HashMap<Str
     let mut overlay: HashMap<String, String> = HashMap::new();
     let mut conflict: HashSet<String> = HashSet::new();
     for &idx in matched {
-        if let Some((_, syms)) = g.sources.get(idx) {
+        if let Some((_, syms, ambiguous)) = g.sources.get(idx) {
             for (h, loc) in syms {
                 match overlay.get(h) {
                     Some(prev) if prev != loc => {
@@ -724,6 +904,12 @@ fn table_for_identified(g: &GlobalSourceTable, matched: &[usize]) -> HashMap<Str
                         overlay.insert(h.clone(), loc.clone());
                     }
                 }
+            }
+            // A hash ambiguous WITHIN the identified source must not credit anyone: the
+            // record IS this source, so the sibling loc the union may carry is wrong and the
+            // source's own verdict ("cannot tell the occurrences apart") is authoritative.
+            for h in ambiguous {
+                conflict.insert(h.clone());
             }
         }
     }
@@ -821,26 +1007,32 @@ fn render_summary(report: &CoverageReport) -> String {
             v.join(", ")
         }
     }));
-    s.push_str(&format!("{:<40} {:>10} {:>8}\n", "FILE", "UNION", "TOTAL"));
+    s.push_str(&format!(
+        "{:<40} {:>10} {:>8} {:>6}\n",
+        "FILE", "UNION", "TOTAL", "EXCL"
+    ));
 
-    let (mut tu, mut tt) = (0usize, 0usize);
+    let (mut tu, mut tt, mut tx) = (0usize, 0usize, 0usize);
     for (file, fr) in &report.files {
         let total = fr.reachable.len();
         let union = fr.covered_union.len();
         tu += union;
         tt += total;
+        tx += fr.unmeasurable;
         s.push_str(&format!(
-            "{:<40} {:>9.1}% {:>8}\n",
+            "{:<40} {:>9.1}% {:>8} {:>6}\n",
             short_path(file),
             pct(union, total),
-            total
+            total,
+            fr.unmeasurable
         ));
     }
     s.push_str(&format!(
-        "{:<40} {:>9.1}% {:>8}\n",
+        "{:<40} {:>9.1}% {:>8} {:>6}\n",
         "TOTAL",
         pct(tu, tt),
-        tt
+        tt,
+        tx
     ));
 
     // Per-layer total coverage.
@@ -925,6 +1117,9 @@ pub struct FileReport {
     pub reachable: BTreeSet<usize>,
     pub covered_union: BTreeSet<usize>,
     pub covered_by_layer: BTreeMap<String, BTreeSet<usize>>,
+    /// Source lines carried by the compile that the matched corpus artifacts cannot express
+    /// (no shared subtree) -- outside the measurable denominator, shown as EXCL.
+    pub unmeasurable: usize,
 }
 
 /// Whole-corpus coverage: per-file reports plus the set of layers seen.
@@ -940,6 +1135,8 @@ pub struct CoverageReport {
     /// `*unmapped*` fallback).  Informational only: these are simply uncovered-by-us, not an
     /// error.  Empty when every source-less program node mapped to some compiled source.
     pub unattributed: BTreeSet<String>,
+    /// 1-based corpus record numbers whose executed nodes included unattributed locations.
+    pub unattributed_records: BTreeSet<usize>,
 }
 
 /// Core: run the whole corpus and return aggregated, layer-aware coverage.  Separated from
@@ -952,17 +1149,19 @@ pub fn run_corpus(
 ) -> Result<CoverageReport, String> {
     // Compile each distinct resolved source once (records that carry an explicit `source`).
     let mut compiled: HashMap<String, CompiledSource> = HashMap::new();
-    let mut reachable_all: BTreeSet<String> = BTreeSet::new();
     // executed srcloc strings, per layer.
     let mut executed_by_layer: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut layers: BTreeSet<String> = BTreeSet::new();
     let mut warnings: Vec<String> = Vec::new();
     let mut mismatched_sources: BTreeSet<String> = BTreeSet::new();
+    // Union of matched artifact hashes per source path (the measurable-denominator filter).
+    let mut artifact_by_file: HashMap<String, HashSet<String>> = HashMap::new();
 
     // The GLOBAL attribution table is built lazily -- only if some record lacks a `source`.
     // A corpus that supplies `source` on every record pays nothing for the global machinery.
     let mut global: Option<GlobalSourceTable> = None;
     let mut unattributed: BTreeSet<String> = BTreeSet::new();
+    let mut unattributed_records: BTreeSet<usize> = BTreeSet::new();
 
     let n_records = records.len();
     for (ri, rec) in records.iter().enumerate() {
@@ -981,17 +1180,22 @@ pub fn run_corpus(
                 let mut inc = vec![source_root.to_string()];
                 inc.extend(includes.iter().cloned());
                 let cs = compile_source(&resolved, &inc, force_optimize)?;
-                reachable_all.extend(cs.reachable.iter().cloned());
                 compiled.insert(resolved.clone(), cs);
             }
             let cs = compiled.get(&resolved).unwrap();
-            let (executed, matched) = run_record(
+            let (executed, matched, artifact) = run_record(
                 &rec.program,
                 &rec.args,
                 &cs.srcloc_syms,
                 Some(&cs.root_hashes),
                 "*program*",
             )?;
+            if matched {
+                artifact_by_file
+                    .entry(resolved.clone())
+                    .or_default()
+                    .extend(artifact);
+            }
             if !matched && mismatched_sources.insert(resolved.clone()) {
                 warnings.push(format!(
                     "corpus program hex for {resolved} does not match the source compiled \
@@ -1006,7 +1210,6 @@ pub fn run_corpus(
             // skips the treehash check; unresolved nodes carry the `*unmapped*` fallback.
             if global.is_none() {
                 let g = build_global_table(source_root, includes, force_optimize);
-                reachable_all.extend(g.reachable.iter().cloned());
                 for (path, err) in &g.skipped {
                     warnings.push(format!(
                         "skipping source {path}: failed to compile for the global attribution \
@@ -1023,12 +1226,25 @@ pub fn run_corpus(
             // => the union table, so nothing regresses for programs that were already attributing.
             let matched = identify_sources_by_uncurry(&rec.program, g);
             let table = table_for_identified(g, &matched);
-            let (executed, _matched) =
+            let (executed, _matched, artifact) =
                 run_record(&rec.program, &rec.args, &table, None, "*unmapped*")?;
+            for &idx in &matched {
+                if let Some((path, _, _)) = g.sources.get(idx) {
+                    artifact_by_file
+                        .entry(path.clone())
+                        .or_default()
+                        .extend(artifact.iter().cloned());
+                }
+            }
+            let mut any_unmapped = false;
             for loc in &executed {
                 if loc.starts_with("*unmapped*") {
                     unattributed.insert(loc.clone());
+                    any_unmapped = true;
                 }
+            }
+            if any_unmapped {
+                unattributed_records.insert(ri + 1);
             }
             executed
         };
@@ -1040,8 +1256,38 @@ pub fn run_corpus(
             .extend(executed);
     }
 
-    // Reachable lines per file (the denominator).
-    let reach_lines = lines_by_file(&reachable_all);
+    // The measurable denominator.  For each compiled source, the lines its srcloc table can
+    // CREDIT; when one or more corpus artifacts were positively matched to the source (by
+    // root), only table entries whose subtree hash occurs in some matched artifact count -- a
+    // line the producer's actual bytes cannot express is not measurable by this corpus, so it
+    // is reported per-file under EXCL instead of posing as permanently cold (a classic
+    // producer's stage_2 bytes diverge from the modern srcloc-bearing recompile; only the
+    // shared subtrees are observable).  A source no artifact matched keeps its full table.
+    let mut denom_tables: BTreeMap<String, &HashMap<String, String>> = BTreeMap::new();
+    for (path, cs) in &compiled {
+        denom_tables.insert(path.clone(), &cs.srcloc_syms);
+    }
+    if let Some(g) = global.as_ref() {
+        for (path, syms, _) in &g.sources {
+            denom_tables.entry(path.clone()).or_insert(syms);
+        }
+    }
+    let mut reachable_srclocs: BTreeSet<String> = BTreeSet::new();
+    let mut all_srclocs: BTreeSet<String> = BTreeSet::new();
+    for (path, table) in &denom_tables {
+        let artifact = artifact_by_file.get(path);
+        for (h, loc) in table.iter() {
+            if parse_srcloc_string(loc).is_none() {
+                continue;
+            }
+            all_srclocs.insert(loc.clone());
+            if artifact.map(|a| a.contains(h)).unwrap_or(true) {
+                reachable_srclocs.insert(loc.clone());
+            }
+        }
+    }
+    let reach_lines = lines_by_file(&reachable_srclocs);
+    let all_lines = lines_by_file(&all_srclocs);
 
     // Per-layer covered lines per file, and the union.
     let mut union_srclocs: BTreeSet<String> = BTreeSet::new();
@@ -1053,26 +1299,29 @@ pub fn run_corpus(
     let union_lines = lines_by_file(&union_srclocs);
 
     let mut files: BTreeMap<String, FileReport> = BTreeMap::new();
-    for (file, rlines) in reach_lines {
+    for (file, alines) in &all_lines {
         let empty = BTreeSet::new();
-        let ul = union_lines.get(&file).unwrap_or(&empty);
+        let rlines = reach_lines.get(file).cloned().unwrap_or_default();
+        let unmeasurable = alines.difference(&rlines).count();
+        let ul = union_lines.get(file).unwrap_or(&empty);
         let covered_union: BTreeSet<usize> = rlines.intersection(ul).copied().collect();
 
         let mut covered_by_layer: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
         for layer in &layers {
             let ll = layer_lines
                 .get(layer)
-                .and_then(|m| m.get(&file))
+                .and_then(|m| m.get(file))
                 .unwrap_or(&empty);
             covered_by_layer.insert(layer.clone(), rlines.intersection(ll).copied().collect());
         }
 
         files.insert(
-            file,
+            file.clone(),
             FileReport {
                 reachable: rlines,
                 covered_union,
                 covered_by_layer,
+                unmeasurable,
             },
         );
     }
@@ -1082,6 +1331,7 @@ pub fn run_corpus(
         layers,
         warnings,
         unattributed,
+        unattributed_records,
     })
 }
 
@@ -1129,10 +1379,21 @@ pub fn clvm_cov(args: &[String]) -> i32 {
         eprintln!("warning: {w}");
     }
     if !report.unattributed.is_empty() {
+        let mut recs: Vec<String> = report
+            .unattributed_records
+            .iter()
+            .take(10)
+            .map(|r| r.to_string())
+            .collect();
+        if report.unattributed_records.len() > 10 {
+            recs.push(format!("... {} total", report.unattributed_records.len()));
+        }
         eprintln!(
             "note: {} distinct executed program location(s) from source-less records mapped to \
-             no compiled source (unattributed) -- uncovered-by-us, not an error",
-            report.unattributed.len()
+             no compiled source (unattributed) -- uncovered-by-us, not an error (corpus \
+             record(s): {})",
+            report.unattributed.len(),
+            recs.join(", ")
         );
     }
 
@@ -1736,6 +1997,223 @@ mod tests {
             auto.unattributed.is_empty(),
             "no node should be unattributed for these two fully-compiled sources; unattributed={:?}",
             auto.unattributed
+        );
+    }
+
+    // ---- classic-producer identification (stage_2 bytes vs the modern srcloc artifact) ----
+    //
+    // A CLASSIC (no-sigil) producer -- `run` / `cdv clsp build` -- emits stage_2 bytes that do
+    // NOT byte-match the modern compiler's srcloc-bearing artifact for the same source, so a
+    // captured classic program used to be unidentifiable: its root matched no registered root,
+    // sibling-shared subtrees stayed union-dropped, and the artifact filter never engaged.
+    //
+    // A and B share a byte-identical helper body (line 2); each has a unique main (line 3).
+    const CLASSIC_A: &str = "(mod (X)\n  (defun helper (v) (+ v 101))\n  (+ 1 (helper X))\n)\n";
+    const CLASSIC_B: &str = "(mod (X)\n  (defun helper (v) (+ v 101))\n  (* 3 (helper X))\n)\n";
+
+    /// Compile `source_path` like a CLASSIC producer (the stage_2 pipeline: `run`,
+    /// `cdv clsp build` -- no srclocs) and return the serialized hex: the bytes an on-chain
+    /// capture of this source actually has.
+    fn compile_classic_producer_hex(source_path: &str, includes: &[String]) -> String {
+        let mut allocator = Allocator::new();
+        let mut sym: HashMap<String, String> = HashMap::new();
+        let content = fs::read_to_string(source_path).unwrap();
+        let opts: Rc<dyn CompilerOpts> =
+            Rc::new(DefaultCompilerOpts::new(source_path)).set_search_paths(includes);
+        let node = compile_clvm_text_maybe_opt(
+            &mut allocator,
+            false,
+            opts,
+            &mut sym,
+            &content,
+            source_path,
+            false,
+        )
+        .unwrap();
+        sexp_as_bin(&mut allocator, node).hex()
+    }
+
+    /// Wrap serialized program hex in a standard curry/apply layer `(a (q . P) 1)` so its own
+    /// root matches no source root and only uncurrying can re-identify it.
+    fn curry_wrap_hex(program_hex: &str) -> String {
+        let mut allocator = Allocator::new();
+        let empty: HashMap<String, String> = HashMap::new();
+        let prog = hex_to_modern_sexp(&mut allocator, &empty, Srcloc::start("*wrap*"), program_hex)
+            .unwrap();
+        let l = Srcloc::start("*wrap*");
+        let two = Rc::new(SExp::Atom(l.clone(), vec![2]));
+        let one = Rc::new(SExp::Atom(l.clone(), vec![1]));
+        let qbody = Rc::new(SExp::Cons(l.clone(), one.clone(), prog));
+        let args_list = Rc::new(SExp::Cons(
+            l.clone(),
+            qbody,
+            Rc::new(SExp::Cons(
+                l.clone(),
+                one.clone(),
+                Rc::new(SExp::Nil(l.clone())),
+            )),
+        ));
+        let wrapper = Rc::new(SExp::Cons(l.clone(), two, args_list));
+        let node = convert_to_clvm_rs(&mut allocator, wrapper).unwrap();
+        sexp_as_bin(&mut allocator, node).hex()
+    }
+
+    #[test]
+    fn classic_producer_capture_identifies_and_attributes() {
+        let dir = tempfile::tempdir().unwrap();
+        let src_a = write_source(&dir, "classic_a.clsp", CLASSIC_A);
+        let src_b = write_source(&dir, "classic_b.clsp", CLASSIC_B);
+        let root = dir.path().to_string_lossy().to_string();
+        let includes = vec![root.clone()];
+
+        // The producer's bytes: classic stage_2 compile of A, curry-wrapped, captured
+        // source-less (the shape an on-chain capture has).
+        let classic_hex = compile_classic_producer_hex(&src_a, &includes);
+        let records = vec![CorpusRecord {
+            program: curry_wrap_hex(&classic_hex),
+            args: "ff0580".to_string(), // (5)
+            source: None,
+            layer: "e2e".to_string(),
+        }];
+        let report = run_corpus(&records, &root, &includes, false).unwrap();
+
+        // Identification teeth: the helper body A shares with B (dropped from the union as
+        // ambiguous) attributes to A -- possible only because A's CLASSIC root re-identified
+        // the capture and A's per-source table was overlaid.
+        assert!(
+            line_reachable(&report, &src_a, 2),
+            "a's helper body (line 2) must be measurable; cov={report:?}"
+        );
+        assert!(
+            line_covered(&report, &src_a, 2),
+            "a's helper body (line 2) must be covered via classic-root identification; \
+             cov={report:?}"
+        );
+        // ...and to A only, never the sibling that also owns those bytes.
+        assert!(
+            !line_covered(&report, &src_b, 2),
+            "b's helper line must NOT be covered -- the capture is A; cov={report:?}"
+        );
+        // Denominator honesty: measurable (TOTAL) + excluded (EXCL) partitions A's compiled
+        // lines; nothing was silently lost.
+        let fr = report.files.get(&src_a).unwrap();
+        assert!(
+            !fr.reachable.is_empty(),
+            "a must have measurable lines; cov={report:?}"
+        );
+    }
+
+    // ---- intra-source shared subexpression must not credit the untaken line ----
+    //
+    // pick-cold (line 3) and pick-hot (line 4) contain a byte-identical `(* v 3)`.  Running
+    // only pick-hot used to credit line 3 as well: the table kept ONE location per subtree
+    // hash (first-wins), so the taken occurrence stepped and lit the untaken line -- a false
+    // positive there and a false negative on its own line.  An ambiguous-by-hash subtree now
+    // credits nothing; each line is carried by its unique enclosing expression.
+    const SHARED_SUBEXPR: &str = "(mod (X)\n  (include *standard-cl-25*)\n  (defun pick-cold \
+(v) (- (* v 3) 2))\n  (defun pick-hot (v) (+ (* v 3) 1))\n  (if X (pick-hot X) (pick-cold X))\n)\n";
+
+    #[test]
+    fn intra_source_shared_subexpr_cannot_credit_the_untaken_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = write_source(&dir, "shared_subexpr.clsp", SHARED_SUBEXPR);
+        let root = dir.path().to_string_lossy().to_string();
+        let includes = vec![root.clone()];
+        let (hex, _) = compile_to_hex(&src, &includes);
+        let records = vec![CorpusRecord {
+            program: hex,
+            args: ARGS_ONE.to_string(),
+            source: Some("shared_subexpr.clsp".to_string()),
+            layer: "e2e".to_string(),
+        }];
+        let report = run_corpus(&records, &root, &[], false).unwrap();
+        assert!(
+            line_reachable(&report, &src, 3) && line_reachable(&report, &src, 4),
+            "both defun bodies must be measurable; cov={report:?}"
+        );
+        assert!(
+            line_covered(&report, &src, 4),
+            "pick-hot's line must be covered (unique wrapper node); cov={report:?}"
+        );
+        assert!(
+            !line_covered(&report, &src, 3),
+            "the shared (* v 3) must not credit pick-cold's line; cov={report:?}"
+        );
+    }
+
+    // ---- --optimize on a classic source must refuse, not report a vacuous 100% ----
+    #[test]
+    fn optimize_with_classic_source_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = write_source(&dir, "classic.clsp", CLASSIC_A);
+        let includes = vec![dir.path().to_string_lossy().to_string()];
+        let err = compile_source(&src, &includes, true).err().unwrap();
+        assert!(
+            err.contains("--optimize") && err.contains("classic"),
+            "refusal must say what and why; err={err}"
+        );
+        // The guard is dialect-independent: --optimize routes even a cl-25 source through the
+        // classic finalizer, which strips srclocs -- refused too, not silently 100%.
+        let modern = write_source(&dir, "modern.clsp", CANARY_A);
+        let err2 = compile_source(&modern, &includes, true).err().unwrap();
+        assert!(
+            err2.contains("collapsed"),
+            "collapse refusal must be reported; err={err2}"
+        );
+        // Without --optimize the cl-25 source keeps a dense, line-bearing srcloc table.
+        let cs = match compile_source(&modern, &includes, false) {
+            Ok(cs) => cs,
+            Err(e) => panic!("cl-25 without --optimize must compile: {e}"),
+        };
+        assert!(
+            cs.reachable.len() > 1,
+            "cl-25 srcloc table must be dense; reachable={}",
+            cs.reachable.len()
+        );
+    }
+
+    // ---- the unattributed note must say WHICH record failed to attribute ----
+    #[test]
+    fn unattributed_note_identifies_the_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = write_source(&dir, "known.clsp", CANARY_A);
+        let root = dir.path().to_string_lossy().to_string();
+        let includes = vec![root.clone()];
+        let (known_hex, _) = compile_to_hex(&src, &includes);
+
+        // A foreign program no --source compile produced: nothing decorates, every executed
+        // node is unattributed.
+        let foreign_dir = tempfile::tempdir().unwrap();
+        let foreign = write_source(
+            &foreign_dir,
+            "foreign.clsp",
+            "(mod (X)\n  (include *standard-cl-25*)\n  (* X 7919)\n)\n",
+        );
+        let f_includes = vec![foreign_dir.path().to_string_lossy().to_string()];
+        let (foreign_hex, _) = compile_to_hex(&foreign, &f_includes);
+
+        let records = vec![
+            CorpusRecord {
+                program: known_hex,
+                args: "ff0380".to_string(), // (3)
+                source: None,
+                layer: "e2e".to_string(),
+            },
+            CorpusRecord {
+                program: foreign_hex,
+                args: "ff0380".to_string(),
+                source: None,
+                layer: "e2e".to_string(),
+            },
+        ];
+        let report = run_corpus(&records, &root, &includes, false).unwrap();
+        assert!(
+            report.unattributed_records.contains(&2),
+            "record 2 (the foreign program) must be named; report={report:?}"
+        );
+        assert!(
+            !report.unattributed_records.contains(&1),
+            "record 1 attributes cleanly and must not be named; report={report:?}"
         );
     }
 }
