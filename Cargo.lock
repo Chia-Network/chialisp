@@ -184,7 +184,6 @@ dependencies = [
  "chia-bls",
  "clvmr",
  "do-notation",
- "getrandom 0.3.4",
  "hashlink",
  "hex",
  "indoc",
