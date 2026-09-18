@@ -23,6 +23,7 @@ use crate::classic::clvm_tools::sha256tree::TreeHash;
 use crate::classic::clvm_tools::stages::stage_0::{
     choose_run_flags, DefaultProgramRunner, OriginalDialect, RunProgramOption, TRunProgram,
 };
+use crate::classic::clvm_tools::stages::stage_2::abstraction::{ClError, ClassicAllocator};
 use crate::classic::clvm_tools::stages::stage_2::compile::do_com_prog_for_dialect;
 use crate::classic::clvm_tools::stages::stage_2::optimize::do_optimize;
 
@@ -67,11 +68,14 @@ pub struct CompilerOperatorsInternal {
 /// is given.  If the file can't be found in any search path, use the expression
 /// the user gave to cause the file to be searched for in the error result.
 /// They're searched in order so repetition doesn't do anything. (suggested Q+A)
-pub fn full_path_for_filename(
-    parent_sexp: NodePtr,
+pub fn full_path_for_filename<A: ClassicAllocator>(
+    allocator: &A,
+    parent_sexp: &A::NodePtr,
     filename: &str,
     search_paths: &[String],
-) -> Result<String, EvalErr> {
+) -> Result<String, ClError> {
+    let loc = allocator.loc(parent_sexp);
+    let exported = allocator.export(parent_sexp);
     if filename.starts_with("*") {
         return Ok(filename.to_string());
     };
@@ -86,17 +90,22 @@ pub fn full_path_for_filename(
                 .map(|x| x.to_owned())
                 .map(Ok)
                 .unwrap_or_else(|| {
-                    Err(EvalErr::InternalError(
-                        parent_sexp,
-                        format!("could not compute absolute path for the combination of search path {path} and file name {filename} during text conversion from path_buf")
-                    ))
+                    Err(
+                        ClError(
+                            loc,
+                            EvalErr::InternalError(
+                                exported,
+                                format!("could not compute absolute path for the combination of search path {path} and file name {filename} during text conversion from path_buf")
+                            )
+                        )
+                    )
                 });
         }
     }
 
-    Err(EvalErr::InternalError(
-        parent_sexp,
-        "can't open file".to_string(),
+    Err(ClError(
+        loc,
+        EvalErr::InternalError(exported, "can't open file".to_string()),
     ))
 }
 
@@ -296,7 +305,8 @@ impl CompilerOperatorsInternal {
                     return convert_filename(allocator, &filename);
                 }
 
-                let full_name = full_path_for_filename(sexp, &filename, &self.search_paths)?;
+                let full_name =
+                    full_path_for_filename(allocator, &sexp, &filename, &self.search_paths)?;
                 return convert_filename(allocator, &full_name);
             }
         }
@@ -316,7 +326,7 @@ impl CompilerOperatorsInternal {
         table: NodePtr,
     ) -> Result<Reduction, EvalErr> {
         if let Some(symtable) =
-            proper_list(allocator, table, true).and_then(|t| proper_list(allocator, t[0], true))
+            proper_list(allocator, &table, true).and_then(|t| proper_list(allocator, &t[0], true))
         {
             for kv in symtable.iter() {
                 if let SExp::Pair(hash, name) = allocator.sexp(*kv) {
@@ -409,9 +419,11 @@ impl Dialect for CompilerOperatorsInternal {
                 if opbuf == b"_read" {
                     self.read(allocator, sexp)
                 } else if opbuf == b"com" {
-                    do_com_prog_for_dialect(self.get_runner(), allocator, sexp)
+                    let result = do_com_prog_for_dialect(self.get_runner(), allocator, &sexp)?;
+                    Ok(Reduction(1, result))
                 } else if opbuf == b"opt" {
-                    do_optimize(self.get_runner(), allocator, &self.opt_memo, sexp)
+                    let result = do_optimize(self.get_runner(), allocator, &self.opt_memo, &sexp)?;
+                    Ok(Reduction(1, result))
                 } else if opbuf == b"_set_symbol_table" {
                     self.set_symbol_table(allocator, sexp)
                 } else if opbuf == b"_get_compile_filename" {
