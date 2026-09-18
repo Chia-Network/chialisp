@@ -62,8 +62,8 @@ default = []
 preserved_043 = ["dep:subprocess"]
 
 [target.'cfg(target_family="wasm")'.dependencies]
-js-sys = "0.3.80"
-wasm-bindgen = { version = "^0.2.103", features = ["serde-serialize"] }
+js-sys = "0.3.78"
+wasm-bindgen = { version = "^0.2.101", features = ["serde-serialize"] }
 
 [target.'cfg(not(target_family="wasm"))'.dependencies]
 getrandom = { version = "0.3.4" }
