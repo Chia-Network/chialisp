@@ -1,4 +1,5 @@
 pub mod binutils;
+pub mod clvm_cov;
 pub mod clvmc;
 pub mod cmds;
 pub mod comp_input;
