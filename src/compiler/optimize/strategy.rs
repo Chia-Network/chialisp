@@ -43,7 +43,7 @@ impl Optimization for ExistingStrategy {
                 Box::new(self.clone()),
             );
             // Front end optimization
-            fe_opt(wrapper.context(), opts.clone(), p0)
+            fe_opt(wrapper.context(), opts.clone(), p0, true, false)
         } else {
             Ok(p0)
         }

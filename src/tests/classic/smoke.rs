@@ -25,6 +25,7 @@ use crate::classic::clvm_tools::node_path::NodePath;
 use crate::classic::clvm_tools::pattern_match::match_sexp;
 use crate::classic::clvm_tools::stages;
 use crate::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
+use crate::classic::clvm_tools::stages::stage_2::abstraction::ClError;
 use crate::classic::clvm_tools::stages::stage_2::operators::run_program_for_search_paths;
 use crate::classic::clvm_tools::stages::stage_2::optimize::sub_args;
 use crate::classic::platform::argparse::{
@@ -699,10 +700,10 @@ fn test_check_simple_arg_path_0() {
     assert_eq!(cp.as_path().raw(), &[4]);
 }
 
-fn assert_node_find_error<X>(r: Result<X, EvalErr>) {
+fn assert_node_find_error<X>(r: Result<X, ClError>) {
     assert!(r.is_err());
 }
-fn assert_node_not_error<X>(r: Result<X, EvalErr>) -> X {
+fn assert_node_not_error<X>(r: Result<X, ClError>) -> X {
     r.unwrap()
 }
 
@@ -806,7 +807,7 @@ fn test_pattern_match_dollar_for_dollar() {
     let pattern = assemble(&mut allocator, "($ . $)").expect("should assemble");
     let target_expr = assemble(&mut allocator, "$").expect("should assemble");
     let empty_map = HashMap::new();
-    let matched = match_sexp(&mut allocator, pattern, target_expr, empty_map.clone());
+    let matched = match_sexp(&mut allocator, &pattern, &target_expr, empty_map.clone());
     // Returns empty map.
     assert_eq!(Some(empty_map), matched);
 }
@@ -817,7 +818,7 @@ fn test_pattern_match_colon_for_colon() {
     let pattern = assemble(&mut allocator, "(: . :)").expect("should assemble");
     let target_expr = assemble(&mut allocator, ":").expect("should assemble");
     let empty_map = HashMap::new();
-    let matched = match_sexp(&mut allocator, pattern, target_expr, empty_map.clone());
+    let matched = match_sexp(&mut allocator, &pattern, &target_expr, empty_map.clone());
     // Returns empty map.
     assert_eq!(Some(empty_map), matched);
 }
@@ -827,7 +828,7 @@ fn test_sub_args() {
     let mut allocator = Allocator::new();
     let expr_sexp = assemble(&mut allocator, "(body 2 5)").expect("should assemble");
     let new_args = assemble(&mut allocator, "(test1 test2)").expect("should assemble");
-    let result = sub_args(&mut allocator, expr_sexp, new_args).expect("should run");
+    let result = sub_args(&mut allocator, &expr_sexp, &new_args).expect("should run");
     assert_eq!(
         disassemble(&mut allocator, result, None),
         "(\"body\" (f (\"test1\" \"test2\")) (f (r (\"test1\" \"test2\"))))"

@@ -529,6 +529,7 @@ fn test_preprocess_basic_list() {
             int_fix: false,
             extra_numeric_constants: false,
             cse_dominance: false,
+            classic_codegen: false,
         });
     let mut includes = Vec::new();
     let parsed_lst: Vec<Rc<SExp>> = parsed_forms[0]
@@ -578,6 +579,7 @@ fn test_preprocessor_tours_includes_properly() {
             int_fix: false,
             extra_numeric_constants: false,
             cse_dominance: false,
+            classic_codegen: false,
         });
     let parsed = parse_sexp(Srcloc::start(pname), prog.bytes()).expect("should parse");
     let parsed_lst: Vec<Rc<SExp>> = parsed[0]

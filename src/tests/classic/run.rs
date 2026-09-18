@@ -2840,3 +2840,81 @@ fn test_big_env_program_overflow_and_fix() {
         program_from_earlier_chialisp_hex.trim()
     );
 }
+
+#[test]
+fn test_equivalence_smoke_modern_neoclassic() {
+    let program_neo = indoc! {"
+(mod (A)
+  (include *standard-cl-26-classic*)
+
+  (let ((B (+ A 1))) (* B A))
+  )
+    "}
+    .to_string();
+
+    let program_modern = program_neo.replace("cl-26-classic", "cl-26").to_string();
+    let clvm_modern = do_basic_run(&vec!["run".to_string(), program_modern.to_string()]);
+    let clvm_neo = do_basic_run(&vec!["run".to_string(), program_neo.to_string()]);
+
+    for a in 0..12 {
+        let brun_arg = format!("({a})");
+        let output_modern = do_basic_brun(&vec![
+            "brun".to_string(),
+            clvm_modern.to_string(),
+            brun_arg.to_string(),
+        ]);
+        let b = a + 1;
+        let expected = if a == 0 {
+            "()".to_string()
+        } else {
+            (a * b).to_string()
+        };
+        assert_eq!(output_modern.trim(), expected);
+
+        let output_neo = do_basic_brun(&vec!["brun".to_string(), clvm_neo.to_string(), brun_arg]);
+        assert_eq!(output_neo.trim(), output_modern.trim());
+    }
+}
+
+#[test]
+fn test_equivalence_smoke_if_macro_modern_neoclassic() {
+    let program_neo = indoc! {"
+(mod (A)
+  (include *standard-cl-26-classic*)
+
+  (if A (* A 2) (+ A 1))
+  )
+    "}
+    .to_string();
+
+    let program_modern = program_neo.replace("cl-26-classic", "cl-26").to_string();
+    let clvm_modern = do_basic_run(&vec!["run".to_string(), program_modern.to_string()]);
+    let clvm_neo = do_basic_run(&vec!["run".to_string(), program_neo.to_string()]);
+
+    for a in 0..2 {
+        let brun_arg = format!("({a})");
+        let output_modern = do_basic_brun(&vec![
+            "brun".to_string(),
+            clvm_modern.to_string(),
+            brun_arg.to_string(),
+        ]);
+        let expected = if a == 0 { 1 } else { a * 2 }.to_string();
+        assert_eq!(output_modern.trim(), expected);
+
+        let output_neo = do_basic_brun(&vec!["brun".to_string(), clvm_neo.to_string(), brun_arg]);
+        assert_eq!(output_neo.trim(), output_modern.trim());
+    }
+}
+
+#[test]
+fn test_equivalence_mandelbrot_classic() {
+    let program = fs::read_to_string("resources/tests/mandelbrot/mandelbrot.clsp").unwrap();
+    let classic = program.replace("cl-21", "cl-26-classic").to_string();
+    let mandelbrot_clvm = do_basic_run(&vec!["run".to_string(), classic.to_string()]);
+    let mandelbrot_smoke_run = do_basic_brun(&vec![
+        "brun".to_string(),
+        mandelbrot_clvm,
+        "(16 16 32 32 16)".to_string(),
+    ]);
+    assert_eq!(mandelbrot_smoke_run.trim(), "\"||E\"");
+}

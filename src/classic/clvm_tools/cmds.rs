@@ -909,7 +909,7 @@ fn fix_log(
 
     for (i, entry) in log_result.to_vec().iter().enumerate() {
         update_map.get(entry).and_then(|v| *v).map(|v| {
-            proper_list(allocator, *entry, true).map(|list| {
+            proper_list(allocator, entry, true).map(|list| {
                 let mut updated = list.to_vec();
                 updated.push(v);
                 log_result[i] = enlist(allocator, &updated).unwrap();

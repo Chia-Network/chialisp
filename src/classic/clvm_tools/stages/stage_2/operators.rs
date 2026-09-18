@@ -16,12 +16,16 @@ use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType};
 use crate::classic::clvm::OPERATORS_LATEST_VERSION;
 
 use crate::classic::clvm::sexp::proper_list;
+use crate::classic::clvm::keyword_to_atom;
 
 use crate::classic::clvm_tools::binutils::assemble_from_ir;
 use crate::classic::clvm_tools::ir::reader::read_ir;
 use crate::classic::clvm_tools::sha256tree::TreeHash;
 use crate::classic::clvm_tools::stages::stage_0::{
     choose_run_flags, DefaultProgramRunner, OriginalDialect, RunProgramOption, TRunProgram,
+};
+use crate::classic::clvm_tools::stages::stage_2::abstraction::{
+    ASExp, BufCarrier, ClError, ClassicAllocator,
 };
 use crate::classic::clvm_tools::stages::stage_2::compile::do_com_prog_for_dialect;
 use crate::classic::clvm_tools::stages::stage_2::optimize::do_optimize;
@@ -67,11 +71,14 @@ pub struct CompilerOperatorsInternal {
 /// is given.  If the file can't be found in any search path, use the expression
 /// the user gave to cause the file to be searched for in the error result.
 /// They're searched in order so repetition doesn't do anything. (suggested Q+A)
-pub fn full_path_for_filename(
-    parent_sexp: NodePtr,
+pub fn full_path_for_filename<A: ClassicAllocator>(
+    allocator: &A,
+    parent_sexp: &A::NodePtr,
     filename: &str,
     search_paths: &[String],
-) -> Result<String, EvalErr> {
+) -> Result<String, ClError> {
+    let loc = allocator.loc(parent_sexp);
+    let exported = allocator.export(parent_sexp);
     if filename.starts_with("*") {
         return Ok(filename.to_string());
     };
@@ -86,17 +93,22 @@ pub fn full_path_for_filename(
                 .map(|x| x.to_owned())
                 .map(Ok)
                 .unwrap_or_else(|| {
-                    Err(EvalErr::InternalError(
-                        parent_sexp,
-                        format!("could not compute absolute path for the combination of search path {path} and file name {filename} during text conversion from path_buf")
-                    ))
+                    Err(
+                        ClError(
+                            loc,
+                            EvalErr::InternalError(
+                                exported,
+                                format!("could not compute absolute path for the combination of search path {path} and file name {filename} during text conversion from path_buf")
+                            )
+                        )
+                    )
                 });
         }
     }
 
-    Err(EvalErr::InternalError(
-        parent_sexp,
-        "can't open file".to_string(),
+    Err(ClError(
+        loc,
+        EvalErr::InternalError(exported, "can't open file".to_string()),
     ))
 }
 
@@ -296,7 +308,8 @@ impl CompilerOperatorsInternal {
                     return convert_filename(allocator, &filename);
                 }
 
-                let full_name = full_path_for_filename(sexp, &filename, &self.search_paths)?;
+                let full_name =
+                    full_path_for_filename(allocator, &sexp, &filename, &self.search_paths)?;
                 return convert_filename(allocator, &full_name);
             }
         }
@@ -316,7 +329,7 @@ impl CompilerOperatorsInternal {
         table: NodePtr,
     ) -> Result<Reduction, EvalErr> {
         if let Some(symtable) =
-            proper_list(allocator, table, true).and_then(|t| proper_list(allocator, t[0], true))
+            proper_list(allocator, &table, true).and_then(|t| proper_list(allocator, &t[0], true))
         {
             for kv in symtable.iter() {
                 if let SExp::Pair(hash, name) = allocator.sexp(*kv) {
@@ -342,6 +355,67 @@ impl CompilerOperatorsInternal {
         }
 
         Ok(Reduction(1, NodePtr::NIL))
+    }
+
+    fn is_modern(&self) -> bool {
+        self.get_compiler_opts()
+            .map(|o| o.dialect().strict)
+            .unwrap_or(false)
+    }
+}
+
+fn assemble_operator_heads<A: ClassicAllocator>(
+    allocator: &mut A,
+    sexp: &A::NodePtr,
+    operator_position: bool,
+) -> Result<A::NodePtr, ClError>
+where
+    A::NodePtr: Clone,
+{
+    match allocator.sexp(sexp) {
+        ASExp::Pair(first, rest) => {
+            // A pair in the head of an argument list starts a nested expression.
+            let first_is_expression = matches!(allocator.sexp(&first), ASExp::Pair(_, _));
+            let first = assemble_operator_heads(
+                allocator,
+                &first,
+                operator_position || first_is_expression,
+            )?;
+            let rest = assemble_operator_heads(allocator, &rest, false)?;
+            allocator.new_pair(allocator.loc(sexp), &first, &rest)
+        }
+        ASExp::Atom => {
+            if !operator_position {
+                return Ok(sexp.clone());
+            }
+            let replacement = {
+                let atom = allocator.atom(sexp);
+                std::str::from_utf8(atom.as_ref())
+                    .ok()
+                    .and_then(|name| keyword_to_atom(OPERATORS_LATEST_VERSION).get(name))
+                    .cloned()
+            };
+            replacement.map_or_else(
+                || Ok(sexp.clone()),
+                |value| allocator.new_atom(allocator.loc(sexp), &value),
+            )
+        }
+    }
+}
+
+fn assemble_com_program<A: ClassicAllocator>(
+    allocator: &mut A,
+    sexp: &A::NodePtr,
+) -> Result<A::NodePtr, ClError>
+where
+    A::NodePtr: Clone,
+{
+    match allocator.sexp(sexp) {
+        ASExp::Pair(program, extras) => {
+            let program = assemble_operator_heads(allocator, &program, true)?;
+            allocator.new_pair(allocator.loc(sexp), &program, &extras)
+        }
+        ASExp::Atom => Ok(sexp.clone()),
     }
 }
 
@@ -409,9 +483,18 @@ impl Dialect for CompilerOperatorsInternal {
                 if opbuf == b"_read" {
                     self.read(allocator, sexp)
                 } else if opbuf == b"com" {
-                    do_com_prog_for_dialect(self.get_runner(), allocator, sexp)
+                    let assembled;
+                    let sexp = if self.is_modern() {
+                        assembled = assemble_com_program(allocator, &sexp)?;
+                        &assembled
+                    } else {
+                        &sexp
+                    };
+                    let result = do_com_prog_for_dialect(self.get_runner(), allocator, sexp)?;
+                    Ok(Reduction(1, result))
                 } else if opbuf == b"opt" {
-                    do_optimize(self.get_runner(), allocator, &self.opt_memo, sexp)
+                    let result = do_optimize(self.get_runner(), allocator, &self.opt_memo, &sexp)?;
+                    Ok(Reduction(1, result))
                 } else if opbuf == b"_set_symbol_table" {
                     self.set_symbol_table(allocator, sexp)
                 } else if opbuf == b"_get_compile_filename" {
@@ -528,4 +611,67 @@ pub fn run_program_for_search_paths(
     ));
     ops.parent.set_runner(ops.parent.clone());
     ops
+}
+
+#[cfg(test)]
+mod tests {
+    use super::assemble_com_program;
+    use crate::classic::clvm_tools::stages::stage_2::abstraction::{
+        ASExp, BufCarrier, ClassicAllocator, SExpClassicAllocator,
+    };
+    use crate::compiler::sexp::{enlist, SExp};
+    use crate::compiler::srcloc::Srcloc;
+    use std::rc::Rc;
+
+    #[test]
+    fn modern_com_program_assembles_operator_heads_with_their_source_locations() {
+        let filename = Rc::new("*assemble-operator-test*".to_string());
+        let program_loc = Srcloc::new(filename.clone(), 1, 1);
+        let quote_loc = Srcloc::new(filename.clone(), 1, 2);
+        let argument_loc = Srcloc::new(filename.clone(), 1, 4);
+        let nested_loc = Srcloc::new(filename.clone(), 1, 6);
+        let nested_quote_loc = Srcloc::new(filename, 1, 7);
+
+        let nested = Rc::new(enlist(
+            nested_loc,
+            &[Rc::new(SExp::Atom(nested_quote_loc.clone(), b"q".to_vec()))],
+        ));
+        let program = Rc::new(enlist(
+            program_loc.clone(),
+            &[
+                Rc::new(SExp::Atom(quote_loc.clone(), b"q".to_vec())),
+                Rc::new(SExp::Atom(argument_loc.clone(), b"q".to_vec())),
+                nested,
+            ],
+        ));
+        let com_arguments = Rc::new(enlist(program_loc, &[program]));
+
+        let mut allocator = SExpClassicAllocator::new();
+        let com_arguments = allocator.from_sexp(com_arguments).unwrap();
+        let assembled = assemble_com_program(&mut allocator, &com_arguments).unwrap();
+
+        let ASExp::Pair(program, _) = allocator.sexp(&assembled) else {
+            panic!("com arguments must be a pair");
+        };
+        let ASExp::Pair(operator, arguments) = allocator.sexp(&program) else {
+            panic!("program must be a pair");
+        };
+        assert_eq!(allocator.atom(&operator).as_ref(), &[1]);
+        assert_eq!(allocator.loc(&operator), quote_loc);
+
+        let ASExp::Pair(argument, remaining) = allocator.sexp(&arguments) else {
+            panic!("program arguments must be a pair");
+        };
+        assert_eq!(allocator.atom(&argument).as_ref(), b"q");
+        assert_eq!(allocator.loc(&argument), argument_loc);
+
+        let ASExp::Pair(nested, _) = allocator.sexp(&remaining) else {
+            panic!("nested expression must be present");
+        };
+        let ASExp::Pair(nested_operator, _) = allocator.sexp(&nested) else {
+            panic!("nested expression must be a pair");
+        };
+        assert_eq!(allocator.atom(&nested_operator).as_ref(), &[1]);
+        assert_eq!(allocator.loc(&nested_operator), nested_quote_loc);
+    }
 }

@@ -23,6 +23,8 @@ pub struct AcceptedDialect {
     pub extra_numeric_constants: bool,
     // Include fix for downstream cse dominance
     pub cse_dominance: bool,
+    // Use the modern frontend and desugaring with classic stage-2 code generation.
+    pub classic_codegen: bool,
 }
 
 /// A package containing the content we should insert when a dialect include is
@@ -59,6 +61,7 @@ lazy_static! {
                         int_fix: false,
                         extra_numeric_constants: false,
                         cse_dominance: false,
+                        classic_codegen: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 22)
@@ -75,6 +78,7 @@ lazy_static! {
                         int_fix: false,
                         extra_numeric_constants: false,
                         cse_dominance: false,
+                        classic_codegen: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 22)
@@ -91,6 +95,7 @@ lazy_static! {
                         int_fix: false,
                         extra_numeric_constants: false,
                         cse_dominance: false,
+                        classic_codegen: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 23)
@@ -107,6 +112,7 @@ lazy_static! {
                         int_fix: true,
                         extra_numeric_constants: false,
                         cse_dominance: false,
+                        classic_codegen: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 23)
@@ -123,6 +129,7 @@ lazy_static! {
                         int_fix: true,
                         extra_numeric_constants: false,
                         cse_dominance: false,
+                        classic_codegen: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 24)
@@ -139,6 +146,7 @@ lazy_static! {
                         int_fix: true,
                         extra_numeric_constants: false,
                         cse_dominance: false,
+                        classic_codegen: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 25)
@@ -155,6 +163,7 @@ lazy_static! {
                         int_fix: true,
                         extra_numeric_constants: true,
                         cse_dominance: false,
+                        classic_codegen: false,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 25)
@@ -171,6 +180,7 @@ lazy_static! {
                         int_fix: true,
                         extra_numeric_constants: true,
                         cse_dominance: false,
+                        classic_codegen: false,
                     },
                     content: indoc! {"()"}.to_string(),
                 },
@@ -184,6 +194,24 @@ lazy_static! {
                         int_fix: true,
                         extra_numeric_constants: false,
                         cse_dominance: false,
+                        classic_codegen: false,
+                    },
+                    content: indoc! {"(
+                    (defconstant *chialisp-version* 26)
+                )"}
+                    .to_string(),
+                },
+            ),
+            (
+                "*standard-cl-26-classic*",
+                DialectDescription {
+                    accepted: AcceptedDialect {
+                        stepping: Some(26),
+                        strict: true,
+                        int_fix: true,
+                        extra_numeric_constants: false,
+                        cse_dominance: false,
+                        classic_codegen: true,
                     },
                     content: indoc! {"(
                     (defconstant *chialisp-version* 26)
@@ -228,7 +256,7 @@ fn include_dialect(allocator: &Allocator, e: &[NodePtr]) -> Option<AcceptedDiale
 pub fn detect_modern(allocator: &mut Allocator, sexp: NodePtr) -> AcceptedDialect {
     let mut result = AcceptedDialect::default();
 
-    if let Some(l) = proper_list(allocator, sexp, true) {
+    if let Some(l) = proper_list(allocator, &sexp, true) {
         if l.len() == 2 {
             if let Some(dialect) = include_dialect(allocator, &l) {
                 return dialect;
