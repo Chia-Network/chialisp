@@ -27,6 +27,7 @@ use crate::compiler::comptypes::{
 };
 use crate::compiler::dialect::{AcceptedDialect, KNOWN_DIALECTS};
 use crate::compiler::frontend::frontend;
+use crate::compiler::gensym::GensymUnit;
 use crate::compiler::optimize::depgraph::{DepgraphOptions, FunctionDependencyGraph};
 use crate::compiler::optimize::get_optimizer;
 use crate::compiler::preprocessor::detect_chialisp_module;
@@ -743,6 +744,9 @@ pub fn compile_pre_forms(
     mut opts: Rc<dyn CompilerOpts>,
     pre_forms: &[Rc<SExp>],
 ) -> Result<CompilerOutput, CompileErr> {
+    // Every unit, top-level or imported, numbers the names it makes up from
+    // zero, so what it compiles to depends on its own source alone.
+    let _unit = GensymUnit::begin();
     if let Some(dialect) = detect_chialisp_module(Srcloc::start(&opts.filename()), pre_forms)? {
         opts = opts.set_stdenv(dialect.strict).set_dialect(dialect);
     }
