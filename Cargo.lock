@@ -211,9 +211,9 @@ dependencies = [
 
 [[package]]
 name = "clvmr"
-version = "0.17.7"
+version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3060bcd64cb8cf2b32fe6ee3a82698835c03361c8e1da446d2e9d058fbfffd5f"
+checksum = "7e5ddf0ce9041ab659c17915bca362a2d1e9e78052809bf17975e07748df7ab2"
 dependencies = [
  "bitflags",
  "bitvec",
