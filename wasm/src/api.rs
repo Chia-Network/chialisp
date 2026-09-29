@@ -370,6 +370,22 @@ pub fn compile_debug(
                         js_sys::Uint8Array::from(artifact.metadata.as_slice()).into(),
                     ),
                 );
+                let symbol_entries = js_sys::Array::new();
+                for (symbol_index, (key, value)) in artifact.symbols.iter().enumerate() {
+                    symbol_entries.set(
+                        symbol_index as u32,
+                        js_pair(JsValue::from_str(key), JsValue::from_str(value)),
+                    );
+                }
+                fields.set(
+                    3,
+                    js_pair(
+                        JsValue::from_str("symbols"),
+                        object_to_value(
+                            &js_sys::Object::from_entries(&symbol_entries).unwrap(),
+                        ),
+                    ),
+                );
                 result.set(
                     index as u32,
                     object_to_value(&js_sys::Object::from_entries(&fields).unwrap()),

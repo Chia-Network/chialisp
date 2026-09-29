@@ -7,14 +7,17 @@
 //!   ((PATH FULL_UTF8_SOURCE) ...)
 //!   (STRING ...)
 //!   ((FILE START_LINE START_COLUMN END_LINE END_COLUMN) ...)
+//!   ((FUNCTION_NAME LEFT_ENV PARAMETER_TREE) ...)
 //!   SHADOW_TREE)
 //! ```
 //!
 //! Coordinates are one-based display columns. Tabs advance to the next
 //! one-based 8-column tab stop, matching [`Srcloc::advance`]. Span ends are
-//! exclusive. The shadow tree uses `(0 SPAN STRING ATOM)` for atoms and
-//! `(1 SPAN STRING LEFT RIGHT)` for pairs. Table references are encoded as
-//! `index + 1`; zero means absent.
+//! exclusive. Parameter trees use `(0)` for nil, `(1 NAME PATH CONSTRAINT)` for
+//! names, and `(2 LEFT RIGHT)` for destructuring. The shadow tree uses
+//! `(0 SPAN STRING FUNCTION ATOM)` for atoms and
+//! `(1 SPAN STRING FUNCTION LEFT RIGHT)` for pairs. Table references are
+//! encoded as `index + 1`; zero means absent.
 
 use std::collections::HashMap;
 use std::fs;
@@ -22,6 +25,7 @@ use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr};
 use clvm_rs::serde::node_to_bytes;
+use num_bigint::ToBigInt;
 use sha2::{Digest, Sha256};
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, Stream};
@@ -34,7 +38,7 @@ use crate::compiler::compiler::{compile_file, ADVANCED_MACROS, STANDARD_MACROS};
 use crate::compiler::comptypes::{CompileErr, CompilerOpts, CompilerOutput};
 use crate::compiler::debug::build_symbol_table_mut;
 use crate::compiler::dialect::KNOWN_DIALECTS;
-use crate::compiler::sexp::SExp;
+use crate::compiler::sexp::{parse_sexp, SExp};
 use crate::compiler::srcloc::{src_location_max, Srcloc};
 use crate::util::u8_from_number;
 
@@ -62,14 +66,34 @@ pub enum DebugNode {
     Atom {
         span: Option<usize>,
         label: Option<usize>,
+        function: Option<usize>,
         value: Vec<u8>,
     },
     Pair {
         span: Option<usize>,
         label: Option<usize>,
+        function: Option<usize>,
         left: Box<DebugNode>,
         right: Box<DebugNode>,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DebugParameter {
+    Nil,
+    Name {
+        name: usize,
+        path: Vec<u8>,
+        constraint: ParameterConstraint,
+    },
+    Pair(Box<DebugParameter>, Box<DebugParameter>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DebugFunction {
+    pub name: usize,
+    pub left_env: bool,
+    pub parameters: DebugParameter,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,6 +102,7 @@ pub struct DebugMetadata {
     pub files: Vec<DebugSourceFile>,
     pub strings: Vec<String>,
     pub spans: Vec<DebugSourceSpan>,
+    pub functions: Vec<DebugFunction>,
     pub tree: DebugNode,
 }
 
@@ -103,6 +128,7 @@ pub enum FrameMatch {
 pub struct SymbolizedFrame {
     pub matched: FrameMatch,
     pub function: Option<String>,
+    pub function_index: Option<usize>,
     pub source_span: Option<usize>,
     /// CLVM tree hash of the executable frame, retained even when unknown.
     pub program_hash: [u8; 32],
@@ -110,6 +136,8 @@ pub struct SymbolizedFrame {
     pub bound_arguments: Vec<Vec<u8>>,
     /// Canonical CLVM serialization of arguments supplied by the caller.
     pub runtime_arguments: Vec<Vec<u8>>,
+    /// Fully named and constrained arguments derived from the sidecar.
+    pub arguments: Vec<StackFrameArgument>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -246,27 +274,245 @@ impl InternState {
 fn build_tree(
     program: &SExp,
     symbols: &HashMap<String, String>,
+    functions_by_hash: &HashMap<String, usize>,
     sources: &HashMap<String, String>,
     state: &mut InternState,
 ) -> Result<DebugNode, String> {
     let span = Some(state.intern_span(&program.loc(), sources)?);
+    let hash = tree_hash_hex(program);
     let label = symbols
-        .get(&tree_hash_hex(program))
+        .get(&hash)
         .filter(|name| !name.contains('('))
         .map(|name| state.intern_string(name));
+    let function = functions_by_hash.get(&hash).copied();
     match program {
         SExp::Cons(_, left, right) => Ok(DebugNode::Pair {
             span,
             label,
-            left: Box::new(build_tree(left, symbols, sources, state)?),
-            right: Box::new(build_tree(right, symbols, sources, state)?),
+            function,
+            left: Box::new(build_tree(
+                left,
+                symbols,
+                functions_by_hash,
+                sources,
+                state,
+            )?),
+            right: Box::new(build_tree(
+                right,
+                symbols,
+                functions_by_hash,
+                sources,
+                state,
+            )?),
         }),
         _ => Ok(DebugNode::Atom {
             span,
             label,
+            function,
             value: atom_bytes(program),
         }),
     }
+}
+
+fn find_subtree_by_hash<'a>(program: &'a SExp, hash: &str) -> Option<&'a SExp> {
+    if tree_hash_hex(program) == hash {
+        return Some(program);
+    }
+    if let SExp::Cons(_, left, right) = program {
+        find_subtree_by_hash(left, hash).or_else(|| find_subtree_by_hash(right, hash))
+    } else {
+        None
+    }
+}
+
+fn quoted_apply_body(program: &SExp) -> Option<&SExp> {
+    let SExp::Cons(_, operator, arguments) = program else {
+        return None;
+    };
+    let SExp::Cons(_, quoted_program, environment_tail) = arguments.as_ref() else {
+        return None;
+    };
+    let SExp::Cons(_, _, final_tail) = environment_tail.as_ref() else {
+        return None;
+    };
+    let SExp::Nil(_) = final_tail.as_ref() else {
+        return None;
+    };
+    let SExp::Cons(_, quote_operator, body) = quoted_program.as_ref() else {
+        return None;
+    };
+    (atom_bytes(operator) == [2] && atom_bytes(quote_operator) == [1]).then_some(body.as_ref())
+}
+
+fn build_parameter_shape(
+    formal: &SExp,
+    directions: &mut Vec<bool>,
+    state: &mut InternState,
+) -> DebugParameter {
+    match formal.atomize() {
+        SExp::Nil(_) => DebugParameter::Nil,
+        SExp::Cons(_, left, right) => {
+            directions.push(false);
+            let left = build_parameter_shape(left.as_ref(), directions, state);
+            directions.pop();
+            directions.push(true);
+            let right = build_parameter_shape(right.as_ref(), directions, state);
+            directions.pop();
+            DebugParameter::Pair(Box::new(left), Box::new(right))
+        }
+        SExp::Atom(_, name) => DebugParameter::Name {
+            name: state.intern_string(&String::from_utf8_lossy(&name)),
+            path: parameter_path(directions),
+            constraint: ParameterConstraint::Unknown,
+        },
+        other => DebugParameter::Name {
+            name: state.intern_string(&other.to_string()),
+            path: parameter_path(directions),
+            constraint: ParameterConstraint::Unknown,
+        },
+    }
+}
+
+fn parameter_path(directions: &[bool]) -> Vec<u8> {
+    let mut path = 1_u8.to_bigint().unwrap() << directions.len();
+    for (index, rest) in directions.iter().enumerate() {
+        if *rest {
+            path += 1_u8.to_bigint().unwrap() << index;
+        }
+    }
+    u8_from_number(path)
+}
+
+fn parameter_paths(
+    parameter: &DebugParameter,
+    strings: &[String],
+    result: &mut Vec<(String, Vec<u8>)>,
+) {
+    match parameter {
+        DebugParameter::Nil => {}
+        DebugParameter::Name { name, path, .. } => {
+            result.push((strings[*name].clone(), path.clone()));
+        }
+        DebugParameter::Pair(left, right) => {
+            parameter_paths(left, strings, result);
+            parameter_paths(right, strings, result);
+        }
+    }
+}
+
+fn apply_parameter_constraints(
+    parameter: &mut DebugParameter,
+    constraints: &mut impl Iterator<Item = ParameterConstraint>,
+) {
+    match parameter {
+        DebugParameter::Nil => {}
+        DebugParameter::Name { constraint, .. } => {
+            *constraint = constraints.next().unwrap_or(ParameterConstraint::Unknown);
+        }
+        DebugParameter::Pair(left, right) => {
+            apply_parameter_constraints(left, constraints);
+            apply_parameter_constraints(right, constraints);
+        }
+    }
+}
+
+fn parse_formal_parameters(text: &str) -> Result<SExp, String> {
+    parse_sexp(Srcloc::compiler_internal_srcloc(), text.bytes())
+        .map_err(|error| format!("invalid compiler formal parameter metadata: {error:?}"))?
+        .into_iter()
+        .next()
+        .map(|value| value.atomize())
+        .ok_or_else(|| "empty compiler formal parameter metadata".to_string())
+}
+
+fn add_function_record(
+    program: &SExp,
+    hash: &str,
+    name: &str,
+    arguments: &str,
+    left_env: bool,
+    state: &mut InternState,
+    functions: &mut Vec<DebugFunction>,
+    functions_by_hash: &mut HashMap<String, usize>,
+) -> Result<(), String> {
+    let Some(function_program) = find_subtree_by_hash(program, hash) else {
+        return Ok(());
+    };
+    let formal = parse_formal_parameters(arguments)?;
+    let mut directions = if left_env { vec![true] } else { Vec::new() };
+    let mut parameters = build_parameter_shape(&formal, &mut directions, state);
+    let mut paths = Vec::new();
+    parameter_paths(&parameters, &state.strings, &mut paths);
+    let inference_program = quoted_apply_body(function_program).unwrap_or(function_program);
+    let serialized = serialize_program(inference_program)?;
+    let inferred = infer_parameter_constraints(&serialized, &paths)?;
+    apply_parameter_constraints(
+        &mut parameters,
+        &mut inferred.into_iter().map(|(_, constraint)| constraint),
+    );
+    let index = functions.len();
+    functions.push(DebugFunction {
+        name: state.intern_string(name),
+        left_env,
+        parameters,
+    });
+    functions_by_hash.insert(hash.to_string(), index);
+    Ok(())
+}
+
+fn build_functions(
+    program: &SExp,
+    symbols: &HashMap<String, String>,
+    state: &mut InternState,
+) -> Result<(Vec<DebugFunction>, HashMap<String, usize>), String> {
+    let mut hashes = symbols
+        .keys()
+        .filter(|key| {
+            key.len() == 64
+                && key.bytes().all(|byte| byte.is_ascii_hexdigit())
+                && symbols.get(*key).is_some_and(|value| !value.contains('('))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    hashes.sort();
+    hashes.dedup();
+
+    let mut functions = Vec::new();
+    let mut functions_by_hash = HashMap::new();
+    for hash in hashes {
+        add_function_record(
+            program,
+            &hash,
+            &symbols[&hash],
+            symbols
+                .get(&format!("{hash}_arguments"))
+                .map(String::as_str)
+                .unwrap_or("()"),
+            symbols
+                .get(&format!("{hash}_left_env"))
+                .is_some_and(|value| value != "0" && value != "()"),
+            state,
+            &mut functions,
+            &mut functions_by_hash,
+        )?;
+    }
+
+    if let Some(arguments) = symbols.get("__chia__main_arguments") {
+        let hash = tree_hash_hex(program);
+        if !functions_by_hash.contains_key(&hash) {
+            add_function_record(
+                program,
+                &hash,
+                "<main>",
+                arguments,
+                false,
+                state,
+                &mut functions,
+                &mut functions_by_hash,
+            )?;
+        }
+    }
+    Ok((functions, functions_by_hash))
 }
 
 impl DebugMetadata {
@@ -289,12 +535,14 @@ impl DebugMetadata {
             return Err("debug metadata program does not match exact serialized bytes".to_string());
         }
         let mut state = InternState::default();
-        let tree = build_tree(program, symbols, sources, &mut state)?;
+        let (functions, functions_by_hash) = build_functions(program, symbols, &mut state)?;
+        let tree = build_tree(program, symbols, &functions_by_hash, sources, &mut state)?;
         Ok(DebugMetadata {
             program_sha256: Sha256::digest(program_bytes).into(),
             files: state.files,
             strings: state.strings,
             spans: state.spans,
+            functions,
             tree,
         })
     }
@@ -346,8 +594,10 @@ impl DebugMetadata {
     }
 
     /// Symbolize by exact structure, then by recursively peeling canonical
-    /// curry wrappers. Caller-supplied runtime arguments remain distinct from
-    /// values quoted into curry.
+    /// curry wrappers. `runtime_arguments` are the top-level values from the
+    /// CLVM environment; compiler-internal left environments are removed using
+    /// the function record. Runtime values remain distinct from values quoted
+    /// into curry.
     pub fn symbolize_frame(
         &self,
         program_bytes: &[u8],
@@ -356,13 +606,24 @@ impl DebugMetadata {
         let mut allocator = Allocator::new();
         let program = decode_clvm(&mut allocator, program_bytes, "frame program")?;
         let mut bound_arguments = Vec::new();
-        let (matched, function, source_span) = symbolize_node(
+        let (matched, fallback_function, source_span, function_index) = symbolize_node(
             &allocator,
             program,
             &self.tree,
             &self.strings,
             &mut bound_arguments,
         );
+        let function = function_index
+            .and_then(|index| self.functions.get(index))
+            .and_then(|function| self.strings.get(function.name))
+            .cloned()
+            .or(fallback_function);
+        let arguments = function_index
+            .map(|index| {
+                materialize_frame_arguments(self, index, &bound_arguments, runtime_arguments)
+            })
+            .transpose()?
+            .unwrap_or_default();
         let hash = crate::classic::clvm_tools::sha256tree::sha256tree(&mut allocator, program);
         let program_hash: [u8; 32] = hash
             .data()
@@ -372,10 +633,12 @@ impl DebugMetadata {
         Ok(SymbolizedFrame {
             matched,
             function,
+            function_index,
             source_span,
             program_hash,
             bound_arguments,
             runtime_arguments: runtime_arguments.to_vec(),
+            arguments,
         })
     }
 
@@ -409,12 +672,18 @@ impl DebugMetadata {
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let functions = self
+            .functions
+            .iter()
+            .map(|function| encode_function(allocator, function))
+            .collect::<Result<Vec<_>, _>>()?;
         let coordinate_base = uint(allocator, 1)?;
         let tab_width = uint(allocator, DEBUG_METADATA_TAB_WIDTH)?;
         let coordinates = list(allocator, &[coordinate_base, tab_width])?;
         let files = list(allocator, &files)?;
         let strings = list(allocator, &strings)?;
         let spans = list(allocator, &spans)?;
+        let functions = list(allocator, &functions)?;
         let tree = encode_tree(allocator, &self.tree)?;
         let magic = atom(allocator, MAGIC)?;
         let version = uint(allocator, DEBUG_METADATA_VERSION)?;
@@ -429,6 +698,7 @@ impl DebugMetadata {
                 files,
                 strings,
                 spans,
+                functions,
                 tree,
             ],
         )
@@ -436,7 +706,7 @@ impl DebugMetadata {
 
     fn from_clvm(allocator: &Allocator, root: NodePtr) -> Result<Self, String> {
         let root = proper_list(allocator, root)?;
-        if root.len() != 8 || atom_value(allocator, root[0])? != MAGIC {
+        if root.len() != 9 || atom_value(allocator, root[0])? != MAGIC {
             return Err("not Chialisp structural debug metadata".to_string());
         }
         let version = decode_uint(&atom_value(allocator, root[1])?)?;
@@ -497,12 +767,23 @@ impl DebugMetadata {
                 Ok(span)
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let tree = decode_tree(allocator, root[7], spans.len(), strings.len())?;
+        let functions = proper_list(allocator, root[7])?
+            .into_iter()
+            .map(|node| decode_function(allocator, node, strings.len()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let tree = decode_tree(
+            allocator,
+            root[8],
+            spans.len(),
+            strings.len(),
+            functions.len(),
+        )?;
         Ok(DebugMetadata {
             program_sha256,
             files,
             strings,
             spans,
+            functions,
             tree,
         })
     }
@@ -617,27 +898,204 @@ fn list(allocator: &mut Allocator, values: &[NodePtr]) -> Result<NodePtr, String
     Ok(result)
 }
 
+fn encode_constraint(
+    allocator: &mut Allocator,
+    constraint: &ParameterConstraint,
+) -> Result<NodePtr, String> {
+    let (tag_value, detail) = match constraint {
+        ParameterConstraint::Unknown => (0, None),
+        ParameterConstraint::Integer => (1, None),
+        ParameterConstraint::Atom => (2, None),
+        ParameterConstraint::Bytes(length) => (3, Some(uint(allocator, *length)?)),
+        ParameterConstraint::Pair => (4, None),
+        ParameterConstraint::ProperList => (5, None),
+        ParameterConstraint::Union(values) => {
+            if values.len() < 2
+                || values.windows(2).any(|pair| pair[0] >= pair[1])
+                || values.iter().any(|value| {
+                    matches!(
+                        value,
+                        ParameterConstraint::Unknown | ParameterConstraint::Union(_)
+                    )
+                })
+            {
+                return Err("non-canonical parameter constraint union".to_string());
+            }
+            let values = values
+                .iter()
+                .map(|value| encode_constraint(allocator, value))
+                .collect::<Result<Vec<_>, _>>()?;
+            (6, Some(list(allocator, &values)?))
+        }
+    };
+    let tag = uint(allocator, tag_value)?;
+    match detail {
+        Some(detail) => list(allocator, &[tag, detail]),
+        None => list(allocator, &[tag]),
+    }
+}
+
+fn decode_constraint(allocator: &Allocator, node: NodePtr) -> Result<ParameterConstraint, String> {
+    let fields = proper_list(allocator, node)?;
+    if fields.is_empty() {
+        return Err("empty parameter constraint".to_string());
+    }
+    let tag = decode_uint(&atom_value(allocator, fields[0])?)?;
+    match (tag, fields.as_slice()) {
+        (0, [_]) => Ok(ParameterConstraint::Unknown),
+        (1, [_]) => Ok(ParameterConstraint::Integer),
+        (2, [_]) => Ok(ParameterConstraint::Atom),
+        (3, [_, length]) => Ok(ParameterConstraint::Bytes(decode_uint(&atom_value(
+            allocator, *length,
+        )?)?)),
+        (4, [_]) => Ok(ParameterConstraint::Pair),
+        (5, [_]) => Ok(ParameterConstraint::ProperList),
+        (6, [_, values]) => {
+            let decoded = proper_list(allocator, *values)?
+                .into_iter()
+                .map(|value| decode_constraint(allocator, value))
+                .collect::<Result<Vec<_>, _>>()?;
+            if decoded.len() < 2
+                || decoded.windows(2).any(|pair| pair[0] >= pair[1])
+                || decoded.iter().any(|value| {
+                    matches!(
+                        value,
+                        ParameterConstraint::Unknown | ParameterConstraint::Union(_)
+                    )
+                })
+            {
+                return Err("non-canonical parameter constraint union".to_string());
+            }
+            Ok(ParameterConstraint::Union(decoded))
+        }
+        _ => Err("unknown or malformed parameter constraint".to_string()),
+    }
+}
+
+fn encode_parameter(
+    allocator: &mut Allocator,
+    parameter: &DebugParameter,
+) -> Result<NodePtr, String> {
+    match parameter {
+        DebugParameter::Nil => {
+            let tag = uint(allocator, 0)?;
+            list(allocator, &[tag])
+        }
+        DebugParameter::Name {
+            name,
+            path,
+            constraint,
+        } => {
+            let tag = uint(allocator, 1)?;
+            let name = uint(allocator, *name)?;
+            let path = atom(allocator, path)?;
+            let constraint = encode_constraint(allocator, constraint)?;
+            list(allocator, &[tag, name, path, constraint])
+        }
+        DebugParameter::Pair(left, right) => {
+            let tag = uint(allocator, 2)?;
+            let left = encode_parameter(allocator, left)?;
+            let right = encode_parameter(allocator, right)?;
+            list(allocator, &[tag, left, right])
+        }
+    }
+}
+
+fn decode_parameter(
+    allocator: &Allocator,
+    node: NodePtr,
+    string_count: usize,
+) -> Result<DebugParameter, String> {
+    let fields = proper_list(allocator, node)?;
+    if fields.is_empty() {
+        return Err("empty debug parameter".to_string());
+    }
+    let tag = decode_uint(&atom_value(allocator, fields[0])?)?;
+    match (tag, fields.as_slice()) {
+        (0, [_]) => Ok(DebugParameter::Nil),
+        (1, [_, name, path, constraint]) => {
+            let name = decode_uint(&atom_value(allocator, *name)?)?;
+            if name >= string_count {
+                return Err("debug parameter name index out of range".to_string());
+            }
+            let path = atom_value(allocator, *path)?;
+            if path.is_empty() {
+                return Err("debug parameter has empty environment path".to_string());
+            }
+            Ok(DebugParameter::Name {
+                name,
+                path,
+                constraint: decode_constraint(allocator, *constraint)?,
+            })
+        }
+        (2, [_, left, right]) => Ok(DebugParameter::Pair(
+            Box::new(decode_parameter(allocator, *left, string_count)?),
+            Box::new(decode_parameter(allocator, *right, string_count)?),
+        )),
+        _ => Err("unknown or malformed debug parameter".to_string()),
+    }
+}
+
+fn encode_function(allocator: &mut Allocator, function: &DebugFunction) -> Result<NodePtr, String> {
+    let name = uint(allocator, function.name)?;
+    let left_env = uint(allocator, usize::from(function.left_env))?;
+    let parameters = encode_parameter(allocator, &function.parameters)?;
+    list(allocator, &[name, left_env, parameters])
+}
+
+fn decode_function(
+    allocator: &Allocator,
+    node: NodePtr,
+    string_count: usize,
+) -> Result<DebugFunction, String> {
+    let fields = proper_list(allocator, node)?;
+    if fields.len() != 3 {
+        return Err("malformed debug function record".to_string());
+    }
+    let name = decode_uint(&atom_value(allocator, fields[0])?)?;
+    if name >= string_count {
+        return Err("debug function name index out of range".to_string());
+    }
+    let left_env = decode_uint(&atom_value(allocator, fields[1])?)?;
+    if left_env > 1 {
+        return Err("debug function left-env flag must be boolean".to_string());
+    }
+    Ok(DebugFunction {
+        name,
+        left_env: left_env == 1,
+        parameters: decode_parameter(allocator, fields[2], string_count)?,
+    })
+}
+
 fn encode_tree(allocator: &mut Allocator, tree: &DebugNode) -> Result<NodePtr, String> {
     match tree {
-        DebugNode::Atom { span, label, value } => {
+        DebugNode::Atom {
+            span,
+            label,
+            function,
+            value,
+        } => {
             let tag = uint(allocator, 0)?;
             let span = optional_index(allocator, *span)?;
             let label = optional_index(allocator, *label)?;
+            let function = optional_index(allocator, *function)?;
             let value = atom(allocator, value)?;
-            list(allocator, &[tag, span, label, value])
+            list(allocator, &[tag, span, label, function, value])
         }
         DebugNode::Pair {
             span,
             label,
+            function,
             left,
             right,
         } => {
             let tag = uint(allocator, 1)?;
             let span = optional_index(allocator, *span)?;
             let label = optional_index(allocator, *label)?;
+            let function = optional_index(allocator, *function)?;
             let left = encode_tree(allocator, left)?;
             let right = encode_tree(allocator, right)?;
-            list(allocator, &[tag, span, label, left, right])
+            list(allocator, &[tag, span, label, function, left, right])
         }
     }
 }
@@ -705,6 +1163,7 @@ fn decode_tree(
     node: NodePtr,
     span_count: usize,
     string_count: usize,
+    function_count: usize,
 ) -> Result<DebugNode, String> {
     let fields = proper_list(allocator, node)?;
     if fields.is_empty() {
@@ -712,16 +1171,30 @@ fn decode_tree(
     }
     let tag = decode_uint(&atom_value(allocator, fields[0])?)?;
     match tag {
-        0 if fields.len() == 4 => Ok(DebugNode::Atom {
+        0 if fields.len() == 5 => Ok(DebugNode::Atom {
             span: decode_optional_index(&atom_value(allocator, fields[1])?, span_count)?,
             label: decode_optional_index(&atom_value(allocator, fields[2])?, string_count)?,
-            value: atom_value(allocator, fields[3])?,
+            function: decode_optional_index(&atom_value(allocator, fields[3])?, function_count)?,
+            value: atom_value(allocator, fields[4])?,
         }),
-        1 if fields.len() == 5 => Ok(DebugNode::Pair {
+        1 if fields.len() == 6 => Ok(DebugNode::Pair {
             span: decode_optional_index(&atom_value(allocator, fields[1])?, span_count)?,
             label: decode_optional_index(&atom_value(allocator, fields[2])?, string_count)?,
-            left: Box::new(decode_tree(allocator, fields[3], span_count, string_count)?),
-            right: Box::new(decode_tree(allocator, fields[4], span_count, string_count)?),
+            function: decode_optional_index(&atom_value(allocator, fields[3])?, function_count)?,
+            left: Box::new(decode_tree(
+                allocator,
+                fields[4],
+                span_count,
+                string_count,
+                function_count,
+            )?),
+            right: Box::new(decode_tree(
+                allocator,
+                fields[5],
+                span_count,
+                string_count,
+                function_count,
+            )?),
         }),
         _ => Err("unknown or malformed debug shadow node".to_string()),
     }
@@ -816,6 +1289,12 @@ fn node_span(tree: &DebugNode) -> Option<usize> {
     }
 }
 
+fn node_function(tree: &DebugNode) -> Option<usize> {
+    match tree {
+        DebugNode::Atom { function, .. } | DebugNode::Pair { function, .. } => *function,
+    }
+}
+
 fn pair(allocator: &Allocator, node: NodePtr) -> Option<(NodePtr, NodePtr)> {
     match allocator.sexp(node) {
         clvm_rs::allocator::SExp::Pair(left, right) => Some((left, right)),
@@ -877,22 +1356,23 @@ fn symbolize_node(
     metadata_tree: &DebugNode,
     strings: &[String],
     bound_arguments: &mut Vec<Vec<u8>>,
-) -> (FrameMatch, Option<String>, Option<usize>) {
+) -> (FrameMatch, Option<String>, Option<usize>, Option<usize>) {
     if let Some(exact) = exact_tree_match(allocator, node, metadata_tree) {
         return (
             FrameMatch::Exact,
             node_label(exact, strings),
             node_span(exact),
+            node_function(exact),
         );
     }
     let Some((base, arguments)) = canonical_curry(allocator, node) else {
-        return (FrameMatch::Unknown, None, None);
+        return (FrameMatch::Unknown, None, None, None);
     };
-    let (matched, function, source_span) =
+    let (matched, function, source_span, function_index) =
         symbolize_node(allocator, base, metadata_tree, strings, bound_arguments);
     for argument in arguments {
         let Ok(bytes) = node_to_bytes(allocator, argument) else {
-            return (FrameMatch::Unknown, None, None);
+            return (FrameMatch::Unknown, None, None, None);
         };
         bound_arguments.push(bytes);
     }
@@ -904,7 +1384,120 @@ fn symbolize_node(
         },
         function,
         source_span,
+        function_index,
     )
+}
+
+fn top_level_parameters<'a>(
+    parameter: &'a DebugParameter,
+) -> (Vec<&'a DebugParameter>, Option<&'a DebugParameter>) {
+    let mut fixed = Vec::new();
+    let mut cursor = parameter;
+    loop {
+        match cursor {
+            DebugParameter::Pair(left, right) => {
+                fixed.push(left.as_ref());
+                cursor = right.as_ref();
+            }
+            DebugParameter::Nil => return (fixed, None),
+            DebugParameter::Name { .. } => return (fixed, Some(cursor)),
+        }
+    }
+}
+
+fn bind_parameter_value(
+    metadata: &DebugMetadata,
+    allocator: &Allocator,
+    parameter: &DebugParameter,
+    value: NodePtr,
+    binding: ArgumentBinding,
+    result: &mut Vec<StackFrameArgument>,
+) -> Result<(), String> {
+    match parameter {
+        DebugParameter::Nil => Ok(()),
+        DebugParameter::Name {
+            name, constraint, ..
+        } => {
+            let name = metadata
+                .strings
+                .get(*name)
+                .ok_or_else(|| "debug parameter name index out of range".to_string())?
+                .clone();
+            result.push(StackFrameArgument {
+                name,
+                binding,
+                constraint: constraint.clone(),
+                value: node_to_bytes(allocator, value)
+                    .map_err(|error| format!("cannot serialize frame argument: {error:?}"))?,
+            });
+            Ok(())
+        }
+        DebugParameter::Pair(left, right) => {
+            let (first, rest) = pair(allocator, value)
+                .ok_or_else(|| "frame value does not match destructured parameter".to_string())?;
+            bind_parameter_value(metadata, allocator, left, first, binding, result)?;
+            bind_parameter_value(metadata, allocator, right, rest, binding, result)
+        }
+    }
+}
+
+fn materialize_frame_arguments(
+    metadata: &DebugMetadata,
+    function_index: usize,
+    bound_arguments: &[Vec<u8>],
+    runtime_arguments: &[Vec<u8>],
+) -> Result<Vec<StackFrameArgument>, String> {
+    let function = metadata
+        .functions
+        .get(function_index)
+        .ok_or_else(|| "frame function index out of range".to_string())?;
+    let mut allocator = Allocator::new();
+    let actual = bound_arguments
+        .iter()
+        .map(|value| (ArgumentBinding::Bound, value))
+        .chain(
+            runtime_arguments
+                .iter()
+                .map(|value| (ArgumentBinding::Runtime, value)),
+        )
+        .map(|(binding, value)| {
+            decode_clvm(&mut allocator, value, "frame argument").map(|node| (binding, node))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    // A left-environment function receives its captured lexical environment
+    // before its declared parameters. It is compiler plumbing, not a formal.
+    let actual = &actual[usize::from(function.left_env).min(actual.len())..];
+    let (fixed, tail) = top_level_parameters(&function.parameters);
+    let mut result = Vec::new();
+    for (parameter, (binding, value)) in fixed.iter().zip(actual.iter()) {
+        bind_parameter_value(
+            metadata,
+            &allocator,
+            parameter,
+            *value,
+            *binding,
+            &mut result,
+        )?;
+    }
+    if let Some(tail) = tail {
+        let remaining = &actual[fixed.len().min(actual.len())..];
+        let mut value = NodePtr::NIL;
+        for (_, item) in remaining.iter().rev() {
+            value = allocator
+                .new_pair(*item, value)
+                .map_err(|error| format!("cannot construct rest argument: {error:?}"))?;
+        }
+        let binding = if remaining
+            .iter()
+            .all(|(binding, _)| *binding == ArgumentBinding::Bound)
+        {
+            ArgumentBinding::Bound
+        } else {
+            ArgumentBinding::Runtime
+        };
+        bind_parameter_value(metadata, &allocator, tail, value, binding, &mut result)?;
+    }
+    Ok(result)
 }
 
 impl ParameterConstraint {
@@ -1107,37 +1700,6 @@ pub fn render_clvm_value(serialized: &[u8]) -> Result<String, String> {
     ))
 }
 
-pub fn stack_frame_arguments(
-    frame: &SymbolizedFrame,
-    names: &[String],
-    constraints: &[ParameterConstraint],
-) -> Vec<StackFrameArgument> {
-    frame
-        .bound_arguments
-        .iter()
-        .map(|value| (ArgumentBinding::Bound, value))
-        .chain(
-            frame
-                .runtime_arguments
-                .iter()
-                .map(|value| (ArgumentBinding::Runtime, value)),
-        )
-        .enumerate()
-        .map(|(index, (binding, value))| StackFrameArgument {
-            name: names
-                .get(index)
-                .cloned()
-                .unwrap_or_else(|| format!("arg{index}")),
-            binding,
-            constraint: constraints
-                .get(index)
-                .cloned()
-                .unwrap_or(ParameterConstraint::Unknown),
-            value: value.clone(),
-        })
-        .collect()
-}
-
 fn expand_tabs(line: &str) -> String {
     let mut result = String::new();
     let mut column = 1usize;
@@ -1157,14 +1719,14 @@ fn expand_tabs(line: &str) -> String {
 pub fn format_stack_frame(
     metadata: &DebugMetadata,
     frame: &SymbolizedFrame,
-    arguments: &[StackFrameArgument],
     style: StackFrameStyle,
 ) -> Result<String, String> {
     let function = frame
         .function
         .clone()
         .unwrap_or_else(|| format!("<unknown:{}>", hex::encode(frame.program_hash)));
-    let rendered_arguments = arguments
+    let rendered_arguments = frame
+        .arguments
         .iter()
         .map(|argument| {
             render_clvm_value(&argument.value).map(|value| match style {
@@ -1187,7 +1749,8 @@ pub fn format_stack_frame(
         }
         StackFrameStyle::Python => format!("{function}({})", rendered_arguments.join(", ")),
     };
-    let bound_names = arguments
+    let bound_names = frame
+        .arguments
         .iter()
         .filter(|argument| argument.binding == ArgumentBinding::Bound)
         .map(|argument| argument.name.as_str())
@@ -1240,6 +1803,91 @@ mod tests {
     use super::*;
     use crate::compiler::sexp::parse_sexp;
 
+    fn shadow_to_node(allocator: &mut Allocator, tree: &DebugNode) -> NodePtr {
+        match tree {
+            DebugNode::Atom { value, .. } => allocator.new_atom(value).expect("shadow atom"),
+            DebugNode::Pair { left, right, .. } => {
+                let left = shadow_to_node(allocator, left);
+                let right = shadow_to_node(allocator, right);
+                allocator.new_pair(left, right).expect("shadow pair")
+            }
+        }
+    }
+
+    fn function_shadow(tree: &DebugNode, function: usize) -> Option<&DebugNode> {
+        let own_function = match tree {
+            DebugNode::Atom { function: own, .. } | DebugNode::Pair { function: own, .. } => *own,
+        };
+        if own_function == Some(function) {
+            return Some(tree);
+        }
+        if let DebugNode::Pair { left, right, .. } = tree {
+            function_shadow(left, function).or_else(|| function_shadow(right, function))
+        } else {
+            None
+        }
+    }
+
+    fn shadow_bytes(tree: &DebugNode) -> Vec<u8> {
+        let mut allocator = Allocator::new();
+        let node = shadow_to_node(&mut allocator, tree);
+        node_to_bytes(&allocator, node).expect("serialize shadow")
+    }
+
+    fn atom_serialization(value: &[u8]) -> Vec<u8> {
+        let mut allocator = Allocator::new();
+        let node = allocator.new_atom(value).expect("value atom");
+        node_to_bytes(&allocator, node).expect("serialize value atom")
+    }
+
+    fn canonical_curry_bytes(program: &[u8], bound: &[Vec<u8>]) -> Vec<u8> {
+        let mut allocator = Allocator::new();
+        let program = decode_clvm(&mut allocator, program, "test curry program").expect("program");
+        let mut environment = allocator.new_atom(&[1]).expect("runtime path");
+        for value in bound.iter().rev() {
+            let value = decode_clvm(&mut allocator, value, "test bound value").expect("value");
+            let quote = allocator.new_atom(&[1]).expect("quote");
+            let quoted = allocator.new_pair(quote, value).expect("quoted value");
+            let cons = allocator.new_atom(&[4]).expect("cons");
+            let nil = NodePtr::NIL;
+            let environment_tail = allocator
+                .new_pair(environment, nil)
+                .expect("environment tail");
+            let quoted_tail = allocator
+                .new_pair(quoted, environment_tail)
+                .expect("quoted tail");
+            environment = allocator.new_pair(cons, quoted_tail).expect("curry cons");
+        }
+        let quote = allocator.new_atom(&[1]).expect("quote");
+        let quoted_program = allocator.new_pair(quote, program).expect("quoted program");
+        let apply = allocator.new_atom(&[2]).expect("apply");
+        let nil = NodePtr::NIL;
+        let environment_tail = allocator
+            .new_pair(environment, nil)
+            .expect("environment list");
+        let program_tail = allocator
+            .new_pair(quoted_program, environment_tail)
+            .expect("program tail");
+        let curried = allocator.new_pair(apply, program_tail).expect("curried");
+        node_to_bytes(&allocator, curried).expect("serialize curry")
+    }
+
+    fn parameter_leaves<'a>(
+        parameter: &'a DebugParameter,
+        result: &mut Vec<(usize, &'a ParameterConstraint)>,
+    ) {
+        match parameter {
+            DebugParameter::Nil => {}
+            DebugParameter::Name {
+                name, constraint, ..
+            } => result.push((*name, constraint)),
+            DebugParameter::Pair(left, right) => {
+                parameter_leaves(left, result);
+                parameter_leaves(right, result);
+            }
+        }
+    }
+
     fn fixture() -> (SExp, HashMap<String, String>, HashMap<String, String>) {
         let source = "(+ X 1)";
         let program = parse_sexp(Srcloc::start("fixture.clsp"), source.bytes())
@@ -1247,7 +1895,9 @@ mod tests {
             .remove(0);
         let program = program.as_ref().clone();
         let mut symbols = HashMap::new();
-        symbols.insert(tree_hash_hex(&program), "fixture".to_string());
+        let hash = tree_hash_hex(&program);
+        symbols.insert(hash.clone(), "fixture".to_string());
+        symbols.insert(format!("{hash}_arguments"), "(X Y)".to_string());
         let mut sources = HashMap::new();
         sources.insert("fixture.clsp".to_string(), source.to_string());
         (program, symbols, sources)
@@ -1255,7 +1905,10 @@ mod tests {
 
     #[test]
     fn structural_metadata_round_trips_and_verifies_exact_program() {
-        let (program, symbols, sources) = fixture();
+        let (program, mut symbols, sources) = fixture();
+        let absent_hash = "00".repeat(32);
+        symbols.insert(absent_hash.clone(), "absent".to_string());
+        symbols.insert(format!("{absent_hash}_arguments"), "(Z)".to_string());
         let program_bytes = serialize_program(&program).expect("serialize program");
         let metadata =
             DebugMetadata::from_program_bytes(&program, &program_bytes, &symbols, &sources)
@@ -1269,7 +1922,8 @@ mod tests {
             .expect("verify exact program");
         assert_eq!(decoded.files.len(), 1);
         assert_eq!(decoded.files[0].source, "(+ X 1)");
-        assert_eq!(decoded.strings, vec!["fixture"]);
+        assert_eq!(decoded.strings, vec!["X", "Y", "fixture"]);
+        assert_eq!(decoded.functions.len(), 1);
         assert!(decoded.spans.len() < 8, "spans should be interned");
     }
 
@@ -1304,6 +1958,7 @@ mod tests {
                 version,
                 coordinates,
                 hash,
+                NodePtr::NIL,
                 NodePtr::NIL,
                 NodePtr::NIL,
                 NodePtr::NIL,
@@ -1423,6 +2078,22 @@ mod tests {
             ParameterConstraint::Integer.union(ParameterConstraint::Unknown),
             ParameterConstraint::Unknown
         );
+        let mut allocator = Allocator::new();
+        assert!(encode_constraint(
+            &mut allocator,
+            &ParameterConstraint::Union(
+                vec![ParameterConstraint::Pair, ParameterConstraint::Atom,]
+            ),
+        )
+        .is_err());
+        let pair =
+            encode_constraint(&mut allocator, &ParameterConstraint::Pair).expect("pair constraint");
+        let atom =
+            encode_constraint(&mut allocator, &ParameterConstraint::Atom).expect("atom constraint");
+        let values = list(&mut allocator, &[pair, atom]).expect("union values");
+        let union_tag = uint(&mut allocator, 6).expect("union tag");
+        let union = list(&mut allocator, &[union_tag, values]).expect("union constraint");
+        assert!(decode_constraint(&allocator, union).is_err());
 
         let program = parse_sexp(Srcloc::start("*constraints*"), "(+ 2 (f 5))".bytes())
             .expect("parse constraint program")
@@ -1454,7 +2125,9 @@ mod tests {
             .remove(0);
         let program = program.as_ref().clone();
         let mut symbols = HashMap::new();
-        symbols.insert(tree_hash_hex(&program), "tabbed".to_string());
+        let hash = tree_hash_hex(&program);
+        symbols.insert(hash.clone(), "tabbed".to_string());
+        symbols.insert(format!("{hash}_arguments"), "(X)".to_string());
         let mut sources = HashMap::new();
         sources.insert("tabs.clsp".to_string(), source.to_string());
         let metadata = DebugMetadata::from_program(&program, &symbols, &sources).expect("metadata");
@@ -1462,18 +2135,16 @@ mod tests {
         let frame = metadata
             .symbolize_frame(&program_bytes, &[vec![5]])
             .expect("frame");
-        let arguments =
-            stack_frame_arguments(&frame, &["X".to_string()], &[ParameterConstraint::Integer]);
-        let python = format_stack_frame(&metadata, &frame, &arguments, StackFrameStyle::Python)
-            .expect("python frame");
-        assert!(python.starts_with("tabbed(X: integer = 5)"));
+        let python =
+            format_stack_frame(&metadata, &frame, StackFrameStyle::Python).expect("python frame");
+        assert!(python.starts_with("tabbed(X: unknown = 5)"));
         assert!(python.contains("--> tabs.clsp:1:8"), "{python}");
         assert!(python.contains("        (+ X 1)"));
         assert!(python.contains("        ^"));
 
-        let lisp = format_stack_frame(&metadata, &frame, &arguments, StackFrameStyle::Lisp)
-            .expect("lisp frame");
-        assert!(lisp.starts_with("(tabbed (X integer 5))"));
+        let lisp =
+            format_stack_frame(&metadata, &frame, StackFrameStyle::Lisp).expect("lisp frame");
+        assert!(lisp.starts_with("(tabbed (X unknown 5))"));
 
         let value = parse_sexp(Srcloc::start("*value*"), "(hello . 5)".bytes())
             .expect("parse value")
@@ -1483,5 +2154,118 @@ mod tests {
                 .expect("render value"),
             "(\"hello\" . 5)"
         );
+    }
+
+    #[test]
+    fn compiled_sidecar_owns_typed_exact_and_curried_frame_arguments() {
+        let source = indoc! {"
+            (mod (MAIN)
+              (include *standard-cl-23*)
+              (defun typed (N P B U)
+                (c (+ N 1) (c (f P) (c (coinid B B N) (c U ())))))
+              (defun wrapper (N P B U) (typed N P B U))
+              (wrapper MAIN MAIN MAIN MAIN))
+        "};
+        let opts: Rc<dyn CompilerOpts> = Rc::new(
+            crate::compiler::compiler::DefaultCompilerOpts::new("typed.clsp"),
+        );
+        let artifact = compile_with_debug(opts, source)
+            .expect("compile typed debug metadata")
+            .remove(0);
+        let metadata = DebugMetadata::decode(&artifact.metadata).expect("decode typed metadata");
+        metadata
+            .verify_program(&artifact.program)
+            .expect("verify typed program");
+
+        let typed_index = metadata
+            .functions
+            .iter()
+            .position(|function| metadata.strings[function.name] == "typed")
+            .expect("typed function record");
+        let typed = &metadata.functions[typed_index];
+        assert!(typed.left_env);
+        let mut leaves = Vec::new();
+        parameter_leaves(&typed.parameters, &mut leaves);
+        let typed_program = shadow_bytes(
+            function_shadow(&metadata.tree, typed_index).expect("typed structural node"),
+        );
+        assert_eq!(
+            leaves
+                .iter()
+                .map(|(name, constraint)| (metadata.strings[*name].as_str(), (*constraint).clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("N", ParameterConstraint::Integer),
+                ("P", ParameterConstraint::Pair),
+                ("B", ParameterConstraint::Bytes(32)),
+                ("U", ParameterConstraint::Unknown),
+            ]
+        );
+
+        let pair_value = serialize_program(
+            parse_sexp(Srcloc::start("*value*"), "(7 . 8)".bytes())
+                .expect("pair value")
+                .remove(0)
+                .as_ref(),
+        )
+        .expect("serialize pair");
+        let bytes32 = atom_serialization(&[0x11; 32]);
+        let unknown = atom_serialization(b"opaque");
+        let left_env = atom_serialization(b"captured");
+        let exact = metadata
+            .symbolize_frame(
+                &typed_program,
+                &[
+                    left_env.clone(),
+                    vec![5],
+                    pair_value.clone(),
+                    bytes32.clone(),
+                    unknown.clone(),
+                ],
+            )
+            .expect("symbolize exact typed function");
+        assert_eq!(exact.matched, FrameMatch::Exact);
+        assert_eq!(exact.function.as_deref(), Some("typed"));
+        assert_eq!(
+            exact
+                .arguments
+                .iter()
+                .map(|argument| (
+                    argument.name.as_str(),
+                    argument.binding,
+                    argument.constraint.clone()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("N", ArgumentBinding::Runtime, ParameterConstraint::Integer),
+                ("P", ArgumentBinding::Runtime, ParameterConstraint::Pair),
+                (
+                    "B",
+                    ArgumentBinding::Runtime,
+                    ParameterConstraint::Bytes(32)
+                ),
+                ("U", ArgumentBinding::Runtime, ParameterConstraint::Unknown),
+            ]
+        );
+
+        let curried_program = canonical_curry_bytes(&typed_program, &[left_env, vec![5]]);
+        let curried = metadata
+            .symbolize_frame(&curried_program, &[pair_value, bytes32, unknown])
+            .expect("symbolize curried typed function");
+        assert_eq!(curried.matched, FrameMatch::Curried);
+        assert_eq!(curried.arguments[0].name, "N");
+        assert_eq!(curried.arguments[0].binding, ArgumentBinding::Bound);
+        assert!(curried.arguments[1..]
+            .iter()
+            .all(|argument| argument.binding == ArgumentBinding::Runtime));
+        let rendered =
+            format_stack_frame(&metadata, &curried, StackFrameStyle::Python).expect("render");
+        assert!(
+            rendered.starts_with("typed(N: integer = 5, P: pair = (l . 8), B: bytes[32] = "),
+            "{rendered}"
+        );
+        assert!(rendered.contains("U: unknown = \"opaque\""));
+        assert!(rendered.contains("# bound: N"));
+        assert!(rendered.contains("--> typed.clsp:"));
     }
 }
