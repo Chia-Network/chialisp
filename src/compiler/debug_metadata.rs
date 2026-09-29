@@ -21,6 +21,7 @@ use std::fs;
 use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr};
+use clvm_rs::serde::node_to_bytes;
 use sha2::{Digest, Sha256};
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, Stream};
@@ -87,6 +88,25 @@ pub struct DebugCompileArtifact {
     pub metadata: Vec<u8>,
     /// The legacy hash symbol map remains available and unchanged in shape.
     pub symbols: HashMap<String, String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameMatch {
+    Exact,
+    Curried,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SymbolizedFrame {
+    pub matched: FrameMatch,
+    pub function: Option<String>,
+    /// CLVM tree hash of the executable frame, retained even when unknown.
+    pub program_hash: [u8; 32],
+    /// Canonical CLVM serialization of values quoted into curry wrappers.
+    pub bound_arguments: Vec<Vec<u8>>,
+    /// Canonical CLVM serialization of arguments supplied by the caller.
+    pub runtime_arguments: Vec<Vec<u8>>,
 }
 
 #[derive(Default)]
@@ -289,6 +309,39 @@ impl DebugMetadata {
             return Err("trailing bytes after program".to_string());
         }
         verify_tree(&allocator, program, &self.tree)
+    }
+
+    /// Symbolize by exact structure, then by recursively peeling canonical
+    /// curry wrappers. Caller-supplied runtime arguments remain distinct from
+    /// values quoted into curry.
+    pub fn symbolize_frame(
+        &self,
+        program_bytes: &[u8],
+        runtime_arguments: &[Vec<u8>],
+    ) -> Result<SymbolizedFrame, String> {
+        let mut allocator = Allocator::new();
+        let program = decode_clvm(&mut allocator, program_bytes, "frame program")?;
+        let mut bound_arguments = Vec::new();
+        let (matched, function) = symbolize_node(
+            &allocator,
+            program,
+            &self.tree,
+            &self.strings,
+            &mut bound_arguments,
+        );
+        let hash = crate::classic::clvm_tools::sha256tree::sha256tree(&mut allocator, program);
+        let program_hash: [u8; 32] = hash
+            .data()
+            .as_slice()
+            .try_into()
+            .map_err(|_| "CLVM tree hash was not 32 bytes".to_string())?;
+        Ok(SymbolizedFrame {
+            matched,
+            function,
+            program_hash,
+            bound_arguments,
+            runtime_arguments: runtime_arguments.to_vec(),
+        })
     }
 
     fn to_clvm(&self, allocator: &mut Allocator) -> Result<NodePtr, String> {
@@ -662,6 +715,152 @@ fn verify_tree(allocator: &Allocator, program: NodePtr, tree: &DebugNode) -> Res
     }
 }
 
+fn decode_clvm(
+    allocator: &mut Allocator,
+    bytes: &[u8],
+    description: &str,
+) -> Result<NodePtr, String> {
+    let mut stream = Stream::new(Some(Bytes::new(Some(BytesFromType::Raw(bytes.to_vec())))));
+    let node = sexp_from_stream(allocator, &mut stream, Box::new(SimpleCreateCLVMObject {}))
+        .map_err(|error| format!("invalid {description} CLVM: {error:?}"))?
+        .1;
+    if stream.get_seek() != stream.get_length() {
+        return Err(format!("trailing bytes after {description}"));
+    }
+    Ok(node)
+}
+
+fn node_matches_tree(allocator: &Allocator, node: NodePtr, tree: &DebugNode) -> bool {
+    match (allocator.sexp(node), tree) {
+        (
+            clvm_rs::allocator::SExp::Atom,
+            DebugNode::Atom {
+                value: expected, ..
+            },
+        ) => allocator.atom(node).as_ref() == expected,
+        (
+            clvm_rs::allocator::SExp::Pair(left, right),
+            DebugNode::Pair {
+                left: expected_left,
+                right: expected_right,
+                ..
+            },
+        ) => {
+            node_matches_tree(allocator, left, expected_left)
+                && node_matches_tree(allocator, right, expected_right)
+        }
+        _ => false,
+    }
+}
+
+fn exact_tree_match<'a>(
+    allocator: &Allocator,
+    node: NodePtr,
+    tree: &'a DebugNode,
+) -> Option<&'a DebugNode> {
+    if node_matches_tree(allocator, node, tree) {
+        return Some(tree);
+    }
+    if let DebugNode::Pair { left, right, .. } = tree {
+        exact_tree_match(allocator, node, left).or_else(|| exact_tree_match(allocator, node, right))
+    } else {
+        None
+    }
+}
+
+fn node_label(tree: &DebugNode, strings: &[String]) -> Option<String> {
+    let label = match tree {
+        DebugNode::Atom { label, .. } | DebugNode::Pair { label, .. } => *label,
+    };
+    label.and_then(|index| strings.get(index).cloned())
+}
+
+fn pair(allocator: &Allocator, node: NodePtr) -> Option<(NodePtr, NodePtr)> {
+    match allocator.sexp(node) {
+        clvm_rs::allocator::SExp::Pair(left, right) => Some((left, right)),
+        clvm_rs::allocator::SExp::Atom => None,
+    }
+}
+
+fn atom_is(allocator: &Allocator, node: NodePtr, expected: &[u8]) -> bool {
+    matches!(allocator.sexp(node), clvm_rs::allocator::SExp::Atom)
+        && allocator.atom(node).as_ref() == expected
+}
+
+fn quoted_value(allocator: &Allocator, node: NodePtr) -> Option<NodePtr> {
+    pair(allocator, node).and_then(|(quote, value)| {
+        if atom_is(allocator, quote, &[1]) {
+            Some(value)
+        } else {
+            None
+        }
+    })
+}
+
+/// Recognize only `(a (q . MOD) (c (q . ARG) ... 1))`.
+fn canonical_curry(allocator: &Allocator, node: NodePtr) -> Option<(NodePtr, Vec<NodePtr>)> {
+    let (apply, tail) = pair(allocator, node)?;
+    if !atom_is(allocator, apply, &[2]) {
+        return None;
+    }
+    let (quoted_program, tail) = pair(allocator, tail)?;
+    let base = quoted_value(allocator, quoted_program)?;
+    let (environment, end) = pair(allocator, tail)?;
+    if !atom_is(allocator, end, &[]) {
+        return None;
+    }
+
+    let mut cursor = environment;
+    let mut arguments = Vec::new();
+    loop {
+        if atom_is(allocator, cursor, &[1]) {
+            return Some((base, arguments));
+        }
+        let (cons, tail) = pair(allocator, cursor)?;
+        if !atom_is(allocator, cons, &[4]) {
+            return None;
+        }
+        let (quoted_argument, tail) = pair(allocator, tail)?;
+        arguments.push(quoted_value(allocator, quoted_argument)?);
+        let (next, end) = pair(allocator, tail)?;
+        if !atom_is(allocator, end, &[]) {
+            return None;
+        }
+        cursor = next;
+    }
+}
+
+fn symbolize_node(
+    allocator: &Allocator,
+    node: NodePtr,
+    metadata_tree: &DebugNode,
+    strings: &[String],
+    bound_arguments: &mut Vec<Vec<u8>>,
+) -> (FrameMatch, Option<String>) {
+    if let Some(exact) = exact_tree_match(allocator, node, metadata_tree) {
+        return (FrameMatch::Exact, node_label(exact, strings));
+    }
+    let Some((base, arguments)) = canonical_curry(allocator, node) else {
+        return (FrameMatch::Unknown, None);
+    };
+    let (matched, function) =
+        symbolize_node(allocator, base, metadata_tree, strings, bound_arguments);
+    for argument in arguments {
+        let Ok(bytes) = node_to_bytes(allocator, argument) else {
+            return (FrameMatch::Unknown, None);
+        };
+        bound_arguments.push(bytes);
+    }
+    (
+        if matched == FrameMatch::Unknown {
+            FrameMatch::Unknown
+        } else {
+            FrameMatch::Curried
+        },
+        function,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -770,5 +969,57 @@ mod tests {
             .expect("decode compiler metadata")
             .verify_program(&artifacts[0].program)
             .expect("verify compiler program");
+    }
+
+    #[test]
+    fn symbolizes_exact_and_recursive_curry_frames() {
+        let (program, symbols, sources) = fixture();
+        let metadata =
+            DebugMetadata::from_program(&program, &symbols, &sources).expect("build metadata");
+        let exact_bytes = serialize_program(&program).expect("serialize exact frame");
+        let runtime = vec![vec![0x80]];
+        let exact = metadata
+            .symbolize_frame(&exact_bytes, &runtime)
+            .expect("symbolize exact");
+        assert_eq!(exact.matched, FrameMatch::Exact);
+        assert_eq!(exact.function.as_deref(), Some("fixture"));
+        assert!(exact.bound_arguments.is_empty());
+        assert_eq!(exact.runtime_arguments, runtime);
+
+        let inner_text = format!("(2 (1 . {program}) (4 (1 . 42) 1))");
+        let inner = parse_sexp(Srcloc::start("curry.clvm"), inner_text.bytes())
+            .expect("parse inner curry")
+            .remove(0);
+        let outer_text = format!("(2 (1 . {inner}) (4 (1 . 99) 1))");
+        let outer = parse_sexp(Srcloc::start("curry.clvm"), outer_text.bytes())
+            .expect("parse outer curry")
+            .remove(0);
+        let outer_bytes = serialize_program(outer.as_ref()).expect("serialize curry");
+        let curried = metadata
+            .symbolize_frame(&outer_bytes, &[])
+            .expect("symbolize curry");
+        assert_eq!(curried.matched, FrameMatch::Curried);
+        assert_eq!(curried.function.as_deref(), Some("fixture"));
+        assert_eq!(curried.bound_arguments, vec![vec![42], vec![99]]);
+    }
+
+    #[test]
+    fn rejects_noncanonical_curry_and_retains_unknown_hash() {
+        let (program, symbols, sources) = fixture();
+        let metadata =
+            DebugMetadata::from_program(&program, &symbols, &sources).expect("build metadata");
+        // The environment terminates in nil rather than runtime path 1.
+        let text = format!("(2 (1 . {program}) (4 (1 . 42) ()))");
+        let unknown = parse_sexp(Srcloc::start("unknown.clvm"), text.bytes())
+            .expect("parse unknown")
+            .remove(0);
+        let unknown_bytes = serialize_program(unknown.as_ref()).expect("serialize unknown");
+        let frame = metadata
+            .symbolize_frame(&unknown_bytes, &[])
+            .expect("symbolize unknown");
+        assert_eq!(frame.matched, FrameMatch::Unknown);
+        assert_eq!(frame.function, None);
+        assert_ne!(frame.program_hash, [0; 32]);
+        assert!(frame.bound_arguments.is_empty());
     }
 }
