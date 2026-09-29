@@ -30,6 +30,7 @@ use chialisp::compiler::compiler::{
     extract_program_and_env, path_to_function, rewrite_in_program, DefaultCompilerOpts,
 };
 use chialisp::compiler::comptypes::{CompileErr, CompilerOpts};
+use chialisp::compiler::debug_metadata::compile_with_debug;
 use chialisp::compiler::optimize::get_optimizer;
 use chialisp::compiler::prims;
 use chialisp::compiler::repl::Repl;
@@ -321,6 +322,61 @@ pub fn compile(input_js: JsValue, filename_js: JsValue, search_paths_js: Vec<JsV
     ) {
         Ok(_) => make_compile_output(&result_stream, &symbol_table),
         Err(e) => create_clvm_runner_err(e),
+    }
+}
+
+/// Compile to exact binary CLVM and canonical structural debug metadata.
+#[wasm_bindgen]
+pub fn compile_debug(
+    input_js: JsValue,
+    filename_js: JsValue,
+    search_paths_js: Vec<JsValue>,
+) -> JsValue {
+    let input = input_js.as_string().unwrap();
+    let filename = filename_js.as_string().unwrap();
+    let search_paths: Vec<String> = search_paths_js
+        .iter()
+        .map(|value| value.as_string().unwrap())
+        .collect();
+    let opts = Rc::new(DefaultCompilerOpts::new(&filename)).set_search_paths(&search_paths);
+    match compile_with_debug(opts, &input) {
+        Err(error) => create_clvm_compile_failure(&error),
+        Ok(artifacts) => {
+            let result = js_sys::Array::new();
+            for (index, artifact) in artifacts.iter().enumerate() {
+                let fields = js_sys::Array::new();
+                fields.set(
+                    0,
+                    js_pair(
+                        JsValue::from_str("exportName"),
+                        artifact
+                            .export_name
+                            .as_deref()
+                            .map(JsValue::from_str)
+                            .unwrap_or(JsValue::NULL),
+                    ),
+                );
+                fields.set(
+                    1,
+                    js_pair(
+                        JsValue::from_str("program"),
+                        js_sys::Uint8Array::from(artifact.program.as_slice()).into(),
+                    ),
+                );
+                fields.set(
+                    2,
+                    js_pair(
+                        JsValue::from_str("debug"),
+                        js_sys::Uint8Array::from(artifact.metadata.as_slice()).into(),
+                    ),
+                );
+                result.set(
+                    index as u32,
+                    object_to_value(&js_sys::Object::from_entries(&fields).unwrap()),
+                );
+            }
+            result.into()
+        }
     }
 }
 

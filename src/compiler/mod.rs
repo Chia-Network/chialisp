@@ -41,6 +41,7 @@ pub mod compiler;
 /// - HelperForm - The type of declarations like macros, constants and functions.
 pub mod comptypes;
 pub mod debug;
+pub mod debug_metadata;
 /// Utilities for chialisp dialect choice
 pub mod dialect;
 /// Evaluate and partially evaluate chialisp expressions

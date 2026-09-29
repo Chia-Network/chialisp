@@ -56,8 +56,9 @@ use crate::compiler::cldb::{
 };
 use crate::compiler::cldb_hierarchy::{HierarchialRunner, HierarchialStepResult, RunPurpose};
 use crate::compiler::clvm::start_step;
-use crate::compiler::compiler::DefaultCompilerOpts;
+use crate::compiler::compiler::{DefaultCompilerOpts, ADVANCED_MACROS, STANDARD_MACROS};
 use crate::compiler::comptypes::{CompileErr, CompilerOpts};
+use crate::compiler::debug_metadata::DebugMetadata;
 use crate::compiler::frontend::frontend;
 use crate::compiler::preprocessor::gather_dependencies;
 use crate::compiler::prims;
@@ -1134,6 +1135,12 @@ pub fn launch_tool(
             .set_default(ArgumentValue::ArgString(None, "main.sym".to_string())),
     );
     parser.add_argument(
+        vec!["--debug-output-file".to_string()],
+        Argument::new()
+            .set_type(Rc::new(PathJoin {}))
+            .set_help("Write canonical structural debug metadata as CLVM binary".to_string()),
+    );
+    parser.add_argument(
         vec!["--strict".to_string()],
         Argument::new()
             .set_action(TArgOptionAction::StoreTrue)
@@ -1341,6 +1348,34 @@ pub fn launch_tool(
                         format!("writing symbols: {e:?}"),
                     )
                 })?;
+                if let Some(ArgumentValue::ArgString(_, debug_path)) =
+                    parsed_args.get("debug_output_file")
+                {
+                    let mut sources = HashMap::new();
+                    sources.insert(parsed.use_filename(), parsed.program.content.clone());
+                    sources.insert(
+                        "*macros*".to_string(),
+                        if parsed.dialect.strict {
+                            ADVANCED_MACROS.to_string()
+                        } else {
+                            STANDARD_MACROS.to_string()
+                        },
+                    );
+                    let metadata = DebugMetadata::from_program(&r, &symbol_table, &sources)
+                        .and_then(|metadata| metadata.encode())
+                        .map_err(|e| {
+                            CompileErr(
+                                Srcloc::start(&parsed.use_filename()),
+                                format!("building debug metadata: {e}"),
+                            )
+                        })?;
+                    fs::write(debug_path, metadata).map_err(|e| {
+                        CompileErr(
+                            Srcloc::start(&parsed.use_filename()),
+                            format!("writing debug metadata {debug_path}: {e}"),
+                        )
+                    })?;
+                }
 
                 Ok(r)
             });

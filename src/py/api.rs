@@ -3,7 +3,7 @@
 // Eventually this can be downgraded and applied just to compile_clvm
 // re: https://github.com/rust-lang/rust-clippy/issues/8971
 use pyo3::exceptions::PyException;
-use pyo3::types::{PyBool, PyDict, PyString, PyTuple};
+use pyo3::types::{PyBool, PyBytes, PyDict, PyString, PyTuple};
 use pyo3::CastError;
 use pyo3::{create_exception, prelude::*, IntoPyObjectExt};
 
@@ -34,6 +34,7 @@ use crate::compiler::compiler::{
     extract_program_and_env, path_to_function, rewrite_in_program, DefaultCompilerOpts,
 };
 use crate::compiler::comptypes::{CompileErr, CompilerOpts};
+use crate::compiler::debug_metadata::compile_with_debug;
 use crate::compiler::preprocessor::gather_dependencies;
 use crate::compiler::prims;
 use crate::compiler::runtypes::RunFailure;
@@ -202,6 +203,37 @@ fn compile(
         search_paths,
         export_symbols,
     )
+}
+
+/// Compile modern Chialisp to exact binary CLVM and canonical structural debug
+/// metadata. No hexadecimal deploy-artifact round trip is performed.
+#[pyfunction]
+#[pyo3(signature = (source, filename = "*inline*".to_string(), search_paths = Vec::new()))]
+fn compile_debug(
+    source: String,
+    filename: String,
+    search_paths: Vec<String>,
+) -> PyResult<Py<PyAny>> {
+    let opts: Rc<dyn CompilerOpts> =
+        Rc::new(DefaultCompilerOpts::new(&filename)).set_search_paths(&search_paths);
+    let artifacts = compile_with_debug(opts, &source)
+        .map_err(|e| CompError::new_err(format!("{}: {}", e.0, e.1)))?;
+    Python::attach(|py| {
+        let result = PyDict::new(py);
+        let values = artifacts
+            .iter()
+            .map(|artifact| {
+                let value = PyDict::new(py);
+                value.set_item("export_name", artifact.export_name.as_deref())?;
+                value.set_item("program", PyBytes::new(py, &artifact.program))?;
+                value.set_item("debug", PyBytes::new(py, &artifact.metadata))?;
+                value.set_item("symbols", &artifact.symbols)?;
+                Ok(value)
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        result.set_item("artifacts", values)?;
+        result.into_py_any(py)
+    })
 }
 
 #[pyfunction]
@@ -516,6 +548,7 @@ fn _chialisp(py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_function(wrap_pyfunction!(compile_clvm, &m)?)?;
     m.add_function(wrap_pyfunction!(compile, &m)?)?;
+    m.add_function(wrap_pyfunction!(compile_debug, &m)?)?;
     m.add_function(wrap_pyfunction!(get_version, &m)?)?;
     m.add_function(wrap_pyfunction!(start_clvm_program, &m)?)?;
     m.add_function(wrap_pyfunction!(launch_tool, &m)?)?;
