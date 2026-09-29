@@ -25,7 +25,9 @@ use clvm_rs::serde::node_to_bytes;
 use sha2::{Digest, Sha256};
 
 use crate::classic::clvm::__type_compatibility__::{Bytes, BytesFromType, Stream};
+use crate::classic::clvm::keyword_from_atom;
 use crate::classic::clvm::serialize::{sexp_from_stream, sexp_to_stream, SimpleCreateCLVMObject};
+use crate::classic::clvm_tools::binutils::disassemble_with_kw;
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 use crate::compiler::clvm::convert_to_clvm_rs;
 use crate::compiler::compiler::{compile_file, ADVANCED_MACROS, STANDARD_MACROS};
@@ -101,12 +103,44 @@ pub enum FrameMatch {
 pub struct SymbolizedFrame {
     pub matched: FrameMatch,
     pub function: Option<String>,
+    pub source_span: Option<usize>,
     /// CLVM tree hash of the executable frame, retained even when unknown.
     pub program_hash: [u8; 32],
     /// Canonical CLVM serialization of values quoted into curry wrappers.
     pub bound_arguments: Vec<Vec<u8>>,
     /// Canonical CLVM serialization of arguments supplied by the caller.
     pub runtime_arguments: Vec<Vec<u8>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ParameterConstraint {
+    Integer,
+    Atom,
+    Bytes(usize),
+    Pair,
+    ProperList,
+    Unknown,
+    Union(Vec<ParameterConstraint>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArgumentBinding {
+    Bound,
+    Runtime,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StackFrameArgument {
+    pub name: String,
+    pub binding: ArgumentBinding,
+    pub constraint: ParameterConstraint,
+    pub value: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StackFrameStyle {
+    Lisp,
+    Python,
 }
 
 #[derive(Default)]
@@ -322,7 +356,7 @@ impl DebugMetadata {
         let mut allocator = Allocator::new();
         let program = decode_clvm(&mut allocator, program_bytes, "frame program")?;
         let mut bound_arguments = Vec::new();
-        let (matched, function) = symbolize_node(
+        let (matched, function, source_span) = symbolize_node(
             &allocator,
             program,
             &self.tree,
@@ -338,6 +372,7 @@ impl DebugMetadata {
         Ok(SymbolizedFrame {
             matched,
             function,
+            source_span,
             program_hash,
             bound_arguments,
             runtime_arguments: runtime_arguments.to_vec(),
@@ -775,6 +810,12 @@ fn node_label(tree: &DebugNode, strings: &[String]) -> Option<String> {
     label.and_then(|index| strings.get(index).cloned())
 }
 
+fn node_span(tree: &DebugNode) -> Option<usize> {
+    match tree {
+        DebugNode::Atom { span, .. } | DebugNode::Pair { span, .. } => *span,
+    }
+}
+
 fn pair(allocator: &Allocator, node: NodePtr) -> Option<(NodePtr, NodePtr)> {
     match allocator.sexp(node) {
         clvm_rs::allocator::SExp::Pair(left, right) => Some((left, right)),
@@ -836,18 +877,22 @@ fn symbolize_node(
     metadata_tree: &DebugNode,
     strings: &[String],
     bound_arguments: &mut Vec<Vec<u8>>,
-) -> (FrameMatch, Option<String>) {
+) -> (FrameMatch, Option<String>, Option<usize>) {
     if let Some(exact) = exact_tree_match(allocator, node, metadata_tree) {
-        return (FrameMatch::Exact, node_label(exact, strings));
+        return (
+            FrameMatch::Exact,
+            node_label(exact, strings),
+            node_span(exact),
+        );
     }
     let Some((base, arguments)) = canonical_curry(allocator, node) else {
-        return (FrameMatch::Unknown, None);
+        return (FrameMatch::Unknown, None, None);
     };
-    let (matched, function) =
+    let (matched, function, source_span) =
         symbolize_node(allocator, base, metadata_tree, strings, bound_arguments);
     for argument in arguments {
         let Ok(bytes) = node_to_bytes(allocator, argument) else {
-            return (FrameMatch::Unknown, None);
+            return (FrameMatch::Unknown, None, None);
         };
         bound_arguments.push(bytes);
     }
@@ -858,7 +903,336 @@ fn symbolize_node(
             FrameMatch::Curried
         },
         function,
+        source_span,
     )
+}
+
+impl ParameterConstraint {
+    pub fn union(self, other: ParameterConstraint) -> ParameterConstraint {
+        if self == other {
+            return self;
+        }
+        if self == ParameterConstraint::Unknown || other == ParameterConstraint::Unknown {
+            return ParameterConstraint::Unknown;
+        }
+        let mut members = Vec::new();
+        for constraint in [self, other] {
+            match constraint {
+                ParameterConstraint::Union(values) => members.extend(values),
+                value => members.push(value),
+            }
+        }
+        members.sort();
+        members.dedup();
+        ParameterConstraint::Union(members)
+    }
+}
+
+impl std::fmt::Display for ParameterConstraint {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParameterConstraint::Integer => formatter.write_str("integer"),
+            ParameterConstraint::Atom => formatter.write_str("atom"),
+            ParameterConstraint::Bytes(length) => write!(formatter, "bytes[{length}]"),
+            ParameterConstraint::Pair => formatter.write_str("pair"),
+            ParameterConstraint::ProperList => formatter.write_str("proper-list"),
+            ParameterConstraint::Unknown => formatter.write_str("unknown"),
+            ParameterConstraint::Union(values) => {
+                for (index, value) in values.iter().enumerate() {
+                    if index != 0 {
+                        formatter.write_str("|")?;
+                    }
+                    value.fmt(formatter)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+fn primitive_name(primitive: &[u8]) -> &[u8] {
+    match primitive {
+        [1] => b"q",
+        [5] => b"f",
+        [6] => b"r",
+        [9] => b"=",
+        [10] => b">s",
+        [11] => b"sha256",
+        [12] => b"substr",
+        [13] => b"strlen",
+        [14] => b"concat",
+        [16] => b"+",
+        [17] => b"-",
+        [18] => b"*",
+        [19] => b"/",
+        [20] => b"divmod",
+        [21] => b">",
+        [22] => b"ash",
+        [23] => b"lsh",
+        [24] => b"logand",
+        [25] => b"logior",
+        [26] => b"logxor",
+        [27] => b"lognot",
+        [29] => b"point_add",
+        [30] => b"pubkey_for_exp",
+        [48] => b"coinid",
+        [49] => b"g1_subtract",
+        [50] => b"g1_multiply",
+        [51] => b"g1_negate",
+        [52] => b"g2_add",
+        [53] => b"g2_subtract",
+        [54] => b"g2_multiply",
+        [55] => b"g2_negate",
+        [58] => b"bls_pairing_identity",
+        [59] => b"bls_verify",
+        [60] => b"modpow",
+        [61] => b"%",
+        [62] => b"keccak256",
+        name => name,
+    }
+}
+
+/// Return only constraints guaranteed by a primitive use. Argument indices are
+/// zero-based. Unsupported or semantically polymorphic positions are unknown.
+pub fn primitive_parameter_constraint(
+    primitive: &[u8],
+    argument_index: usize,
+) -> ParameterConstraint {
+    let primitive = primitive_name(primitive);
+    match primitive {
+        b"f" | b"r" if argument_index == 0 => ParameterConstraint::Pair,
+        b"=" | b">s" | b"sha256" | b"strlen" | b"concat" | b"keccak256" => {
+            ParameterConstraint::Atom
+        }
+        b"substr" if argument_index == 0 => ParameterConstraint::Atom,
+        b"substr" => ParameterConstraint::Integer,
+        b"+" | b"-" | b"*" | b"/" | b"divmod" | b">" | b"ash" | b"lsh" | b"logand" | b"logior"
+        | b"logxor" | b"lognot" | b"modpow" | b"%" => ParameterConstraint::Integer,
+        b"pubkey_for_exp" if argument_index == 0 => ParameterConstraint::Integer,
+        b"point_add" | b"g1_subtract" | b"g1_negate" => ParameterConstraint::Bytes(48),
+        b"g1_multiply" if argument_index == 0 => ParameterConstraint::Bytes(48),
+        b"g1_multiply" => ParameterConstraint::Integer,
+        b"g2_add" | b"g2_subtract" | b"g2_negate" => ParameterConstraint::Bytes(96),
+        b"g2_multiply" if argument_index == 0 => ParameterConstraint::Bytes(96),
+        b"g2_multiply" => ParameterConstraint::Integer,
+        b"coinid" if argument_index < 2 => ParameterConstraint::Bytes(32),
+        b"coinid" if argument_index == 2 => ParameterConstraint::Integer,
+        b"bls_pairing_identity" | b"bls_verify" if argument_index.is_multiple_of(2) => {
+            ParameterConstraint::Bytes(48)
+        }
+        b"bls_pairing_identity" | b"bls_verify" => ParameterConstraint::Bytes(96),
+        _ => ParameterConstraint::Unknown,
+    }
+}
+
+/// Infer constraints when a parameter path is passed directly to a primitive.
+/// Indirect flows and polymorphic primitive positions remain unknown.
+pub fn infer_parameter_constraints(
+    program: &[u8],
+    parameters: &[(String, Vec<u8>)],
+) -> Result<Vec<(String, ParameterConstraint)>, String> {
+    let mut allocator = Allocator::new();
+    let program = decode_clvm(&mut allocator, program, "constraint program")?;
+    let mut inferred = vec![None; parameters.len()];
+    infer_constraints_node(&allocator, program, parameters, &mut inferred);
+    Ok(parameters
+        .iter()
+        .enumerate()
+        .map(|(index, (name, _))| {
+            (
+                name.clone(),
+                inferred[index]
+                    .clone()
+                    .unwrap_or(ParameterConstraint::Unknown),
+            )
+        })
+        .collect())
+}
+
+fn infer_constraints_node(
+    allocator: &Allocator,
+    node: NodePtr,
+    parameters: &[(String, Vec<u8>)],
+    inferred: &mut [Option<ParameterConstraint>],
+) {
+    let Some((operator, mut arguments)) = pair(allocator, node) else {
+        return;
+    };
+    let operator_value = match allocator.sexp(operator) {
+        clvm_rs::allocator::SExp::Atom => allocator.atom(operator).as_ref().to_vec(),
+        clvm_rs::allocator::SExp::Pair(_, _) => {
+            infer_constraints_node(allocator, operator, parameters, inferred);
+            Vec::new()
+        }
+    };
+    // Do not interpret quoted data as executable primitive use.
+    if primitive_name(&operator_value) == b"q" {
+        return;
+    }
+    let mut argument_index = 0usize;
+    while let Some((argument, rest)) = pair(allocator, arguments) {
+        if let clvm_rs::allocator::SExp::Atom = allocator.sexp(argument) {
+            let argument_value = allocator.atom(argument);
+            for (parameter_index, (_, path)) in parameters.iter().enumerate() {
+                if argument_value.as_ref() == path {
+                    let constraint =
+                        primitive_parameter_constraint(&operator_value, argument_index);
+                    if constraint != ParameterConstraint::Unknown {
+                        inferred[parameter_index] = Some(
+                            inferred[parameter_index]
+                                .clone()
+                                .map(|current| current.union(constraint.clone()))
+                                .unwrap_or(constraint),
+                        );
+                    }
+                }
+            }
+        } else {
+            infer_constraints_node(allocator, argument, parameters, inferred);
+        }
+        arguments = rest;
+        argument_index += 1;
+    }
+}
+
+/// Render canonical CLVM serialization using the same disassembly convention
+/// used for `brun` values.
+pub fn render_clvm_value(serialized: &[u8]) -> Result<String, String> {
+    let mut allocator = Allocator::new();
+    let value = decode_clvm(&mut allocator, serialized, "frame value")?;
+    Ok(disassemble_with_kw(
+        &allocator,
+        value,
+        keyword_from_atom(crate::classic::clvm::OPERATORS_LATEST_VERSION),
+    ))
+}
+
+pub fn stack_frame_arguments(
+    frame: &SymbolizedFrame,
+    names: &[String],
+    constraints: &[ParameterConstraint],
+) -> Vec<StackFrameArgument> {
+    frame
+        .bound_arguments
+        .iter()
+        .map(|value| (ArgumentBinding::Bound, value))
+        .chain(
+            frame
+                .runtime_arguments
+                .iter()
+                .map(|value| (ArgumentBinding::Runtime, value)),
+        )
+        .enumerate()
+        .map(|(index, (binding, value))| StackFrameArgument {
+            name: names
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| format!("arg{index}")),
+            binding,
+            constraint: constraints
+                .get(index)
+                .cloned()
+                .unwrap_or(ParameterConstraint::Unknown),
+            value: value.clone(),
+        })
+        .collect()
+}
+
+fn expand_tabs(line: &str) -> String {
+    let mut result = String::new();
+    let mut column = 1usize;
+    for character in line.chars() {
+        if character == '\t' {
+            let next = (column + DEBUG_METADATA_TAB_WIDTH) & !(DEBUG_METADATA_TAB_WIDTH - 1);
+            result.extend(std::iter::repeat_n(' ', next - column));
+            column = next;
+        } else {
+            result.push(character);
+            column += 1;
+        }
+    }
+    result
+}
+
+pub fn format_stack_frame(
+    metadata: &DebugMetadata,
+    frame: &SymbolizedFrame,
+    arguments: &[StackFrameArgument],
+    style: StackFrameStyle,
+) -> Result<String, String> {
+    let function = frame
+        .function
+        .clone()
+        .unwrap_or_else(|| format!("<unknown:{}>", hex::encode(frame.program_hash)));
+    let rendered_arguments = arguments
+        .iter()
+        .map(|argument| {
+            render_clvm_value(&argument.value).map(|value| match style {
+                StackFrameStyle::Lisp => {
+                    format!("({} {} {})", argument.name, argument.constraint, value)
+                }
+                StackFrameStyle::Python => {
+                    format!("{}: {} = {}", argument.name, argument.constraint, value)
+                }
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut output = match style {
+        StackFrameStyle::Lisp => {
+            if rendered_arguments.is_empty() {
+                format!("({function})")
+            } else {
+                format!("({function} {})", rendered_arguments.join(" "))
+            }
+        }
+        StackFrameStyle::Python => format!("{function}({})", rendered_arguments.join(", ")),
+    };
+    let bound_names = arguments
+        .iter()
+        .filter(|argument| argument.binding == ArgumentBinding::Bound)
+        .map(|argument| argument.name.as_str())
+        .collect::<Vec<_>>();
+    if !bound_names.is_empty() {
+        output.push_str(match style {
+            StackFrameStyle::Lisp => " ; bound: ",
+            StackFrameStyle::Python => "  # bound: ",
+        });
+        output.push_str(&bound_names.join(", "));
+    }
+
+    if let Some(span_index) = frame.source_span {
+        let span = metadata
+            .spans
+            .get(span_index)
+            .ok_or_else(|| "frame source span index out of range".to_string())?;
+        let file = metadata
+            .files
+            .get(span.file)
+            .ok_or_else(|| "frame source file index out of range".to_string())?;
+        if let Some(line) = file.source.lines().nth(span.start_line - 1) {
+            let expanded = expand_tabs(line);
+            let width = if span.end_line == span.start_line {
+                span.end_column.saturating_sub(span.start_column).max(1)
+            } else {
+                expanded
+                    .chars()
+                    .count()
+                    .saturating_sub(span.start_column - 1)
+                    .max(1)
+            };
+            output.push_str(&format!(
+                "\n  --> {}:{}:{}\n   |\n{:>3}| {}\n   | {}{}",
+                file.path,
+                span.start_line,
+                span.start_column,
+                span.start_line,
+                expanded,
+                " ".repeat(span.start_column - 1),
+                "^".repeat(width)
+            ));
+        }
+    }
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -1021,5 +1395,93 @@ mod tests {
         assert_eq!(frame.function, None);
         assert_ne!(frame.program_hash, [0; 32]);
         assert!(frame.bound_arguments.is_empty());
+    }
+
+    #[test]
+    fn primitive_constraints_are_conservative_and_union_canonically() {
+        assert_eq!(
+            primitive_parameter_constraint(b"+", 0),
+            ParameterConstraint::Integer
+        );
+        assert_eq!(
+            primitive_parameter_constraint(&[5], 0),
+            ParameterConstraint::Pair
+        );
+        assert_eq!(
+            primitive_parameter_constraint(b"coinid", 1),
+            ParameterConstraint::Bytes(32)
+        );
+        assert_eq!(
+            primitive_parameter_constraint(b"c", 0),
+            ParameterConstraint::Unknown
+        );
+        assert_eq!(
+            ParameterConstraint::Pair.union(ParameterConstraint::Atom),
+            ParameterConstraint::Union(vec![ParameterConstraint::Atom, ParameterConstraint::Pair])
+        );
+        assert_eq!(
+            ParameterConstraint::Integer.union(ParameterConstraint::Unknown),
+            ParameterConstraint::Unknown
+        );
+
+        let program = parse_sexp(Srcloc::start("*constraints*"), "(+ 2 (f 5))".bytes())
+            .expect("parse constraint program")
+            .remove(0);
+        let inferred = infer_parameter_constraints(
+            &serialize_program(program.as_ref()).expect("serialize constraints"),
+            &[
+                ("X".to_string(), vec![2]),
+                ("Y".to_string(), vec![5]),
+                ("Z".to_string(), vec![11]),
+            ],
+        )
+        .expect("infer constraints");
+        assert_eq!(
+            inferred,
+            vec![
+                ("X".to_string(), ParameterConstraint::Integer),
+                ("Y".to_string(), ParameterConstraint::Pair),
+                ("Z".to_string(), ParameterConstraint::Unknown),
+            ]
+        );
+    }
+
+    #[test]
+    fn renders_brun_values_and_conventional_frames_with_source() {
+        let source = "\t(+ X 1)";
+        let program = parse_sexp(Srcloc::start("tabs.clsp"), source.bytes())
+            .expect("parse tab fixture")
+            .remove(0);
+        let program = program.as_ref().clone();
+        let mut symbols = HashMap::new();
+        symbols.insert(tree_hash_hex(&program), "tabbed".to_string());
+        let mut sources = HashMap::new();
+        sources.insert("tabs.clsp".to_string(), source.to_string());
+        let metadata = DebugMetadata::from_program(&program, &symbols, &sources).expect("metadata");
+        let program_bytes = serialize_program(&program).expect("program bytes");
+        let frame = metadata
+            .symbolize_frame(&program_bytes, &[vec![5]])
+            .expect("frame");
+        let arguments =
+            stack_frame_arguments(&frame, &["X".to_string()], &[ParameterConstraint::Integer]);
+        let python = format_stack_frame(&metadata, &frame, &arguments, StackFrameStyle::Python)
+            .expect("python frame");
+        assert!(python.starts_with("tabbed(X: integer = 5)"));
+        assert!(python.contains("--> tabs.clsp:1:8"), "{python}");
+        assert!(python.contains("        (+ X 1)"));
+        assert!(python.contains("        ^"));
+
+        let lisp = format_stack_frame(&metadata, &frame, &arguments, StackFrameStyle::Lisp)
+            .expect("lisp frame");
+        assert!(lisp.starts_with("(tabbed (X integer 5))"));
+
+        let value = parse_sexp(Srcloc::start("*value*"), "(hello . 5)".bytes())
+            .expect("parse value")
+            .remove(0);
+        assert_eq!(
+            render_clvm_value(&serialize_program(value.as_ref()).expect("serialize value"))
+                .expect("render value"),
+            "(\"hello\" . 5)"
+        );
     }
 }
