@@ -22,6 +22,7 @@ use crate::classic::clvm_tools::cmds::{cldb, launch_tool, ToolRunStatus};
 use crate::classic::clvm_tools::node_path::NodePath;
 
 use crate::compiler::clvm::convert_to_clvm_rs;
+use crate::compiler::debug_metadata::DebugMetadata;
 use crate::compiler::sexp;
 use crate::compiler::sexp::decode_string;
 use crate::util::{number_from_u8, Number};
@@ -54,6 +55,35 @@ fn basic_run_test() {
         do_basic_run(&vec!("run".to_string(), "(mod (A B) (+ A B))".to_string())).trim(),
         "(+ 2 5)".to_string()
     );
+}
+
+#[test]
+fn run_writes_verifiable_structural_debug_sidecar() {
+    let output = tempfile::NamedTempFile::new().expect("debug output file");
+    let args = vec![
+        "run".to_string(),
+        "(mod (X) (include *standard-cl-23*) (+ X 1))".to_string(),
+        "--debug-output-file".to_string(),
+        output.path().to_string_lossy().into_owned(),
+    ];
+    let (compiled, status) = launch_tool_output(&args, "run", 2);
+    assert!(!status.error_encountered, "{compiled}");
+
+    let program = sexp::parse_sexp(
+        crate::compiler::srcloc::Srcloc::start("*compiled*"),
+        compiled.bytes(),
+    )
+    .expect("parse compiled output")
+    .remove(0);
+    let mut allocator = Allocator::new();
+    let program = convert_to_clvm_rs(&mut allocator, program).expect("convert compiled output");
+    let mut stream = Stream::new(None);
+    sexp_to_stream(&mut allocator, program, &mut stream);
+    let metadata = DebugMetadata::decode(&fs::read(output.path()).expect("read debug output"))
+        .expect("decode");
+    metadata
+        .verify_program(stream.get_value().data())
+        .expect("verify CLI program against sidecar");
 }
 
 #[test]

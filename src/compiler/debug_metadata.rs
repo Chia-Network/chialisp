@@ -254,7 +254,10 @@ impl InternState {
     ) -> Result<usize, String> {
         let file = self.intern_file(loc.file.as_str(), supplied)?;
         let (end_line, end_column) = src_location_max(loc);
-        let key = (file, loc.line, loc.col, end_line, end_column);
+        let source = &self.files[file].source;
+        let start_column = source_display_column(source, loc.line, loc.col);
+        let end_column = source_display_column(source, end_line, end_column);
+        let key = (file, loc.line, start_column, end_line, end_column);
         if let Some(index) = self.span_indices.get(&key) {
             return Ok(*index);
         }
@@ -262,13 +265,36 @@ impl InternState {
         self.spans.push(DebugSourceSpan {
             file,
             start_line: loc.line,
-            start_column: loc.col,
+            start_column,
             end_line,
             end_column,
         });
         self.span_indices.insert(key, index);
         Ok(index)
     }
+}
+
+fn source_display_column(source: &str, line: usize, compiler_column: usize) -> usize {
+    let Some(source_line) = source.lines().nth(line.saturating_sub(1)) else {
+        return compiler_column;
+    };
+    let mut byte_column = 1usize;
+    let mut display_column = 1usize;
+    for character in source_line.chars() {
+        if byte_column >= compiler_column {
+            break;
+        }
+        if character == '\t' {
+            byte_column =
+                (byte_column + DEBUG_METADATA_TAB_WIDTH) & !(DEBUG_METADATA_TAB_WIDTH - 1);
+            display_column =
+                (display_column + DEBUG_METADATA_TAB_WIDTH) & !(DEBUG_METADATA_TAB_WIDTH - 1);
+        } else {
+            byte_column += character.len_utf8();
+            display_column += 1;
+        }
+    }
+    display_column + compiler_column.saturating_sub(byte_column)
 }
 
 fn build_tree(
@@ -1943,6 +1969,25 @@ mod tests {
     }
 
     #[test]
+    fn structural_metadata_rejects_shadow_topology_mismatch_after_identity_match() {
+        let (program, symbols, sources) = fixture();
+        let program_bytes = serialize_program(&program).expect("serialize program");
+        let mut metadata =
+            DebugMetadata::from_program(&program, &symbols, &sources).expect("build metadata");
+        metadata.tree = DebugNode::Atom {
+            span: None,
+            label: None,
+            function: None,
+            value: Vec::new(),
+        };
+
+        assert_eq!(
+            metadata.verify_program(&program_bytes),
+            Err("debug shadow tree does not match program structure".to_string())
+        );
+    }
+
+    #[test]
     fn decoder_rejects_non_current_version() {
         let mut allocator = Allocator::new();
         let magic = atom(&mut allocator, MAGIC).expect("magic");
@@ -2154,6 +2199,255 @@ mod tests {
                 .expect("render value"),
             "(\"hello\" . 5)"
         );
+    }
+
+    #[test]
+    fn utf8_spans_and_excerpts_use_display_columns_with_tabs() {
+        let source = "\t(\"é\" 参数)";
+        let program = parse_sexp(Srcloc::start("utf8.clsp"), source.bytes())
+            .expect("parse UTF-8 fixture")
+            .remove(0);
+        let program = program.as_ref().clone();
+        let hash = tree_hash_hex(&program);
+        let mut symbols = HashMap::new();
+        symbols.insert(hash.clone(), "fünc".to_string());
+        symbols.insert(format!("{hash}_arguments"), "(参数)".to_string());
+        let mut sources = HashMap::new();
+        sources.insert("utf8.clsp".to_string(), source.to_string());
+        let metadata = DebugMetadata::from_program(&program, &symbols, &sources).expect("metadata");
+        let frame = metadata
+            .symbolize_frame(
+                &serialize_program(&program).expect("program bytes"),
+                &[atom_serialization("值".as_bytes())],
+            )
+            .expect("frame");
+        let span = &metadata.spans[frame.source_span.expect("source span")];
+        assert_eq!(
+            (span.start_line, span.start_column),
+            (1, 8),
+            "tab convention remains one-based with eight-column stops"
+        );
+        assert_eq!(
+            (span.end_line, span.end_column),
+            (1, 12),
+            "non-ASCII characters occupy one display column"
+        );
+        assert!(
+            metadata.spans.iter().any(|span| {
+                span.start_line == 1
+                    && span.start_column == 13
+                    && span.end_line == 1
+                    && span.end_column == 15
+            }),
+            "the two-character non-ASCII parameter should occupy columns 13 through 15"
+        );
+
+        let rendered =
+            format_stack_frame(&metadata, &frame, StackFrameStyle::Python).expect("render frame");
+        assert!(
+            rendered.starts_with("fünc(参数: unknown = 0xe580bc)"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("--> utf8.clsp:1:8"), "{rendered}");
+        assert!(rendered.contains("        (\"é\" 参数)"), "{rendered}");
+        assert!(rendered.contains("       ^^^^"), "{rendered}");
+    }
+
+    #[test]
+    fn compiler_metadata_interns_files_sources_strings_and_spans() {
+        let source = indoc! {"
+            (mod (X)
+              (include *standard-cl-23*)
+              (defun first (X) (+ X X))
+              (defun second (X) (+ X X))
+              (+ (first X) (second X)))
+        "};
+        let opts: Rc<dyn CompilerOpts> = Rc::new(
+            crate::compiler::compiler::DefaultCompilerOpts::new("dedup.clsp"),
+        );
+        let artifact = compile_with_debug(opts, source)
+            .expect("compile dedup fixture")
+            .remove(0);
+        let metadata = DebugMetadata::decode(&artifact.metadata).expect("decode metadata");
+
+        assert!(
+            metadata.files.len() >= 2,
+            "fixture should retain both user and included macro sources"
+        );
+        assert_eq!(
+            metadata
+                .files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            metadata.files.len(),
+            "file/source records must be interned"
+        );
+        assert_eq!(
+            metadata
+                .strings
+                .iter()
+                .map(String::as_str)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            metadata.strings.len(),
+            "repeated parameter and symbol names must be interned"
+        );
+        assert_eq!(
+            metadata
+                .spans
+                .iter()
+                .map(|span| (
+                    span.file,
+                    span.start_line,
+                    span.start_column,
+                    span.end_line,
+                    span.end_column,
+                ))
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            metadata.spans.len(),
+            "repeated source spans must be interned"
+        );
+        assert_eq!(
+            metadata
+                .strings
+                .iter()
+                .filter(|value| value.as_str() == "X")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn destructured_parameters_round_trip_bind_infer_and_render() {
+        let source = indoc! {"
+            (mod (MAIN)
+              (include *standard-cl-23*)
+              (defun destructured ((N . P) B)
+                (c (+ N 1) (c (f P) (c (coinid B B N) ()))))
+              (destructured MAIN MAIN))
+        "};
+        let opts: Rc<dyn CompilerOpts> = Rc::new(
+            crate::compiler::compiler::DefaultCompilerOpts::new("destructured.clsp"),
+        );
+        let artifact = compile_with_debug(opts, source)
+            .expect("compile destructured metadata")
+            .remove(0);
+        let metadata = DebugMetadata::decode(&artifact.metadata).expect("decode metadata");
+        assert_eq!(
+            DebugMetadata::decode(&metadata.encode().expect("re-encode metadata"))
+                .expect("decode re-encoded metadata"),
+            metadata
+        );
+        let function_index = metadata
+            .functions
+            .iter()
+            .position(|function| metadata.strings[function.name] == "destructured")
+            .expect("destructured function record");
+        let mut leaves = Vec::new();
+        parameter_leaves(&metadata.functions[function_index].parameters, &mut leaves);
+        assert_eq!(
+            leaves
+                .iter()
+                .map(|(name, constraint)| (metadata.strings[*name].as_str(), (*constraint).clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("N", ParameterConstraint::Integer),
+                ("P", ParameterConstraint::Pair),
+                ("B", ParameterConstraint::Bytes(32)),
+            ]
+        );
+
+        let program = shadow_bytes(
+            function_shadow(&metadata.tree, function_index).expect("destructured structural node"),
+        );
+        let pair = serialize_program(
+            parse_sexp(Srcloc::start("*value*"), "(5 7 . 8)".bytes())
+                .expect("destructured value")
+                .remove(0)
+                .as_ref(),
+        )
+        .expect("serialize destructured value");
+        let frame = metadata
+            .symbolize_frame(
+                &program,
+                &[
+                    atom_serialization(b"captured"),
+                    pair,
+                    atom_serialization(&[0x22; 32]),
+                ],
+            )
+            .expect("symbolize destructured frame");
+        assert_eq!(
+            frame
+                .arguments
+                .iter()
+                .map(|argument| (
+                    argument.name.as_str(),
+                    argument.binding,
+                    argument.constraint.clone(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("N", ArgumentBinding::Runtime, ParameterConstraint::Integer),
+                ("P", ArgumentBinding::Runtime, ParameterConstraint::Pair),
+                (
+                    "B",
+                    ArgumentBinding::Runtime,
+                    ParameterConstraint::Bytes(32),
+                ),
+            ]
+        );
+        let rendered =
+            format_stack_frame(&metadata, &frame, StackFrameStyle::Python).expect("render");
+        assert!(
+            rendered.starts_with("destructured(N: integer = 5, P: pair = (l . 8), B: bytes[32] = "),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn optimized_function_retains_user_source_location() {
+        let source = indoc! {"
+            (mod (N)
+              (include *standard-cl-23*)
+              (defun optimized (X)
+                (+ X 0))
+              (optimized N))
+        "};
+        let base = crate::compiler::compiler::DefaultCompilerOpts::new("optimized.clsp");
+        let unoptimized = compile_with_debug(Rc::new(base.clone()), source)
+            .expect("compile unoptimized fixture")
+            .remove(0);
+        let optimized = compile_with_debug(Rc::new(base).set_optimize(true), source)
+            .expect("compile optimized fixture")
+            .remove(0);
+        assert_ne!(
+            optimized.program, unoptimized.program,
+            "fixture must exercise a final-tree optimization"
+        );
+
+        let metadata = DebugMetadata::decode(&optimized.metadata).expect("decode metadata");
+        let function_index = metadata
+            .functions
+            .iter()
+            .position(|function| metadata.strings[function.name] == "optimized")
+            .expect("optimized function record");
+        let function_program = shadow_bytes(
+            function_shadow(&metadata.tree, function_index).expect("optimized structural node"),
+        );
+        let frame = metadata
+            .symbolize_frame(
+                &function_program,
+                &[atom_serialization(b"captured"), vec![5]],
+            )
+            .expect("symbolize optimized function");
+        let rendered =
+            format_stack_frame(&metadata, &frame, StackFrameStyle::Python).expect("render");
+        assert!(rendered.contains("--> optimized.clsp:4:"), "{rendered}");
+        assert!(rendered.contains("    (+ X 0))"), "{rendered}");
     }
 
     #[test]
