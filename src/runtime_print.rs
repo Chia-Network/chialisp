@@ -3,7 +3,6 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fmt;
-use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr, SExp};
 use clvm_rs::chia_dialect::{ChiaDialect, ClvmFlags};
@@ -59,9 +58,9 @@ struct RuntimePrintState {
     dropped: usize,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct RuntimePrintCollector {
-    state: Rc<RefCell<RuntimePrintState>>,
+    state: RefCell<RuntimePrintState>,
 }
 
 impl RuntimePrintCollector {
@@ -161,7 +160,7 @@ pub(crate) fn detect_runtime_print(
     Ok(None)
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct RuntimePrintDialect {
     flags: ClvmFlags,
     collector: RuntimePrintCollector,
@@ -173,10 +172,6 @@ impl RuntimePrintDialect {
             flags,
             collector: RuntimePrintCollector::default(),
         }
-    }
-
-    pub fn collector(&self) -> RuntimePrintCollector {
-        self.collector.clone()
     }
 
     pub fn take_prints(&self) -> RuntimePrintOutput {
