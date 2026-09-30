@@ -175,10 +175,49 @@ pub enum StackFrameStyle {
 struct InternState {
     files: Vec<DebugSourceFile>,
     file_indices: HashMap<String, usize>,
+    source_indices: Vec<SourceIndex>,
     strings: Vec<String>,
     string_indices: HashMap<String, usize>,
     spans: Vec<DebugSourceSpan>,
     span_indices: HashMap<(usize, usize, usize, usize, usize), usize>,
+}
+
+#[derive(Default)]
+struct SourceIndex {
+    line_starts: Vec<usize>,
+}
+
+impl SourceIndex {
+    fn new(source: &str) -> Self {
+        let mut line_starts = vec![0];
+        line_starts.extend(
+            source
+                .bytes()
+                .enumerate()
+                .filter_map(|(index, byte)| (byte == b'\n').then_some(index + 1)),
+        );
+        Self { line_starts }
+    }
+
+    fn line<'a>(&self, source: &'a str, line: usize) -> Option<&'a str> {
+        let index = line.checked_sub(1)?;
+        let start = *self.line_starts.get(index)?;
+        if start == source.len() && (source.is_empty() || source.ends_with('\n')) {
+            return None;
+        }
+        let mut end = self
+            .line_starts
+            .get(index + 1)
+            .map(|next| next - 1)
+            .unwrap_or(source.len());
+        if end > start
+            && self.line_starts.get(index + 1).is_some()
+            && source.as_bytes()[end - 1] == b'\r'
+        {
+            end -= 1;
+        }
+        Some(&source[start..end])
+    }
 }
 
 fn atom_bytes(value: &SExp) -> Vec<u8> {
@@ -229,9 +268,11 @@ impl InternState {
             return Ok(*index);
         }
         let index = self.files.len();
+        let source = source_for_file(path, supplied)?;
+        self.source_indices.push(SourceIndex::new(&source));
         self.files.push(DebugSourceFile {
             path: path.to_string(),
-            source: source_for_file(path, supplied)?,
+            source,
         });
         self.file_indices.insert(path.to_string(), index);
         Ok(index)
@@ -255,8 +296,9 @@ impl InternState {
         let file = self.intern_file(loc.file.as_str(), supplied)?;
         let (end_line, end_column) = src_location_max(loc);
         let source = &self.files[file].source;
-        let start_column = source_display_column(source, loc.line, loc.col);
-        let end_column = source_display_column(source, end_line, end_column);
+        let source_index = &self.source_indices[file];
+        let start_column = source_display_column(source, source_index, loc.line, loc.col);
+        let end_column = source_display_column(source, source_index, end_line, end_column);
         let key = (file, loc.line, start_column, end_line, end_column);
         if let Some(index) = self.span_indices.get(&key) {
             return Ok(*index);
@@ -274,8 +316,13 @@ impl InternState {
     }
 }
 
-fn source_display_column(source: &str, line: usize, compiler_column: usize) -> usize {
-    let Some(source_line) = source.lines().nth(line.saturating_sub(1)) else {
+fn source_display_column(
+    source: &str,
+    source_index: &SourceIndex,
+    line: usize,
+    compiler_column: usize,
+) -> usize {
+    let Some(source_line) = source_index.line(source, line) else {
         return compiler_column;
     };
     let mut byte_column = 1usize;
@@ -2251,6 +2298,35 @@ mod tests {
         assert!(rendered.contains("--> utf8.clsp:1:8"), "{rendered}");
         assert!(rendered.contains("        (\"é\" 参数)"), "{rendered}");
         assert!(rendered.contains("       ^^^^"), "{rendered}");
+    }
+
+    #[test]
+    fn many_line_span_indexing_does_not_rescan_source_prefixes() {
+        const LINE_COUNT: usize = 20_000;
+        let source = "éX\n".repeat(LINE_COUNT);
+        let path = Rc::new("many-lines.clsp".to_string());
+        let mut sources = HashMap::new();
+        sources.insert(path.as_ref().clone(), source);
+        let mut state = InternState::default();
+
+        for line in 1..=LINE_COUNT {
+            state
+                .intern_span(&Srcloc::new(path.clone(), line, 3), &sources)
+                .expect("intern span");
+        }
+
+        assert_eq!(state.source_indices[0].line_starts.len(), LINE_COUNT + 1);
+        assert_eq!(state.spans.len(), LINE_COUNT);
+        assert_eq!(
+            state.spans.last(),
+            Some(&DebugSourceSpan {
+                file: 0,
+                start_line: LINE_COUNT,
+                start_column: 2,
+                end_line: LINE_COUNT,
+                end_column: 3,
+            })
+        );
     }
 
     #[test]
