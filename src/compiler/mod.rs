@@ -167,13 +167,14 @@ impl BasicCompileContext {
 
     /// Note: must take measures to ensure that the symbols are changed along
     /// with any code that's changed.  It's likely better to do optimizations
-    /// at other stages, such as post_codegen_function_optimize.
-    fn post_codegen_output_optimize(
+    /// at other stages, such as after_codegen_function_optimize.
+    fn after_codegen_output_optimize(
         &mut self,
         opts: Rc<dyn CompilerOpts>,
         generated: SExp,
     ) -> Result<SExp, CompileErr> {
-        self.optimizer.post_codegen_output_optimize(opts, generated)
+        self.optimizer
+            .after_codegen_output_optimize(opts, generated)
     }
 
     /// Called when a full macro program optimization is used.
@@ -204,13 +205,13 @@ impl BasicCompileContext {
     }
 
     /// Called to transform the function body after code generation.
-    fn post_codegen_function_optimize(
+    fn after_codegen_function_optimize(
         &mut self,
         opts: Rc<dyn CompilerOpts>,
         helper: Option<&HelperForm>,
         code: Rc<SExp>,
     ) -> Result<Rc<SExp>, CompileErr> {
-        self.optimizer.post_codegen_function_optimize(
+        self.optimizer.after_codegen_function_optimize(
             &mut self.allocator,
             self.runner.clone(),
             opts,

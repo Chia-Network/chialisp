@@ -51,6 +51,17 @@ assert symbols["30960d7f2ddc7188a6428a11d39a13ff70d308e6cc571ffb6ed5ec8dbe4376c0
 assert symbols["30960d7f2ddc7188a6428a11d39a13ff70d308e6cc571ffb6ed5ec8dbe4376c0"] == "F"
 assert compiled_code["output"] == expected_cl23
 
+option_parity_code = """
+(mod (N)
+  (include *standard-cl-23*)
+  (defun optimized (X) (+ X 0))
+  (optimized N)
+  )
+"""
+normal_output = chialisp.compile(option_parity_code, ["."])
+debug_output = chialisp.compile_debug(option_parity_code, "*inline*", ["."])
+assert debug_output["artifacts"][0]["program"].hex() == normal_output
+
 # Check compilation with a path
 test_path = Path(__file__).parent
 

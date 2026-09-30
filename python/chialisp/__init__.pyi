@@ -80,6 +80,8 @@ from . import binutils as binutils
 __all__ = [
     "CldbError",
     "CompError",
+    "DebugCompileArtifact",
+    "DebugCompileResult",
     "PythonRunStep",
     "binutils",
     "call_tool",

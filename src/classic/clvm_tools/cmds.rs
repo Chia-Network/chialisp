@@ -56,9 +56,9 @@ use crate::compiler::cldb::{
 };
 use crate::compiler::cldb_hierarchy::{HierarchialRunner, HierarchialStepResult, RunPurpose};
 use crate::compiler::clvm::start_step;
-use crate::compiler::compiler::{DefaultCompilerOpts, ADVANCED_MACROS, STANDARD_MACROS};
+use crate::compiler::compiler::DefaultCompilerOpts;
 use crate::compiler::comptypes::{CompileErr, CompilerOpts};
-use crate::compiler::debug_metadata::DebugMetadata;
+use crate::compiler::debug_metadata::{capture_compiler_sources, CapturedSources, DebugMetadata};
 use crate::compiler::frontend::frontend;
 use crate::compiler::preprocessor::gather_dependencies;
 use crate::compiler::prims;
@@ -1188,13 +1188,23 @@ pub fn launch_tool(
         return ToolRunStatus::ok(fail_on_error);
     }
 
-    let parsed = match RunAndCompileInputData::new(&mut allocator, &parsed_args) {
+    let mut parsed = match RunAndCompileInputData::new(&mut allocator, &parsed_args) {
         Ok(r) => r,
         Err(e) => {
             stdout.write_str(&format!("FAIL: {e}\n"));
             return ToolRunStatus::error(fail_on_error);
         }
     };
+    let captured_sources: Option<CapturedSources> =
+        parsed_args.get("debug_output_file").map(|_| {
+            let (opts, sources) = capture_compiler_sources(
+                parsed.opts.clone(),
+                parsed.use_filename(),
+                parsed.program.content.clone(),
+            );
+            parsed.opts = opts;
+            sources
+        });
 
     let empty_map = HashMap::new();
     let keywords = match parsed_args.get("no_keywords") {
@@ -1351,16 +1361,11 @@ pub fn launch_tool(
                 if let Some(ArgumentValue::ArgString(_, debug_path)) =
                     parsed_args.get("debug_output_file")
                 {
-                    let mut sources = HashMap::new();
-                    sources.insert(parsed.use_filename(), parsed.program.content.clone());
-                    sources.insert(
-                        "*macros*".to_string(),
-                        if parsed.dialect.strict {
-                            ADVANCED_MACROS.to_string()
-                        } else {
-                            STANDARD_MACROS.to_string()
-                        },
-                    );
+                    let sources = captured_sources
+                        .as_ref()
+                        .expect("debug output captures compiler sources")
+                        .as_ref()
+                        .borrow();
                     let metadata = DebugMetadata::from_program(&r, &symbol_table, &sources)
                         .and_then(|metadata| metadata.encode())
                         .map_err(|e| {

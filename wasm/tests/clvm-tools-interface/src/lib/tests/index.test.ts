@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import { resolve } from 'path';
 import * as assert from 'assert';
 import * as bls_loader from 'bls-signatures';
-const {h, t, Program} = require('../../../../../pkg/clvm_tools_wasm.js');
+const {compile, compile_debug, h, t, Program} = require('../../../../../pkg/clvm_tools_wasm.js');
 
 it('Has BLS signatures support', async () => {
     const bls = await bls_loader.default();
@@ -177,6 +177,20 @@ it('Has run', async () => {
     assert.equal(cost, 2658);
 });
 
+it('Matches normal optimized CL23 compilation with debug compilation', async () => {
+    const source = `
+        (mod (N)
+          (include *standard-cl-23*)
+          (defun optimized (X) (+ X 0))
+          (optimized N))
+    `;
+    const normal = compile(source, 'option-parity.clsp', []);
+    assert.equal(normal.error, undefined);
+    const debug = compile_debug(source, 'option-parity.clsp', []);
+    assert.equal(debug.error, undefined);
+    assert.equal(Buffer.from(debug[0].program).toString('hex'), normal.hex);
+});
+
 it('Detects Chialisp and Rue runtime prints', async () => {
     const chialisp = Program.from_hex('ff22ffff0187247072696e7424ffff01847761736dffff010980');
     const [, chialispResult, chialispPrints] = chialisp.run(Program.null());
@@ -193,6 +207,22 @@ it('Detects Chialisp and Rue runtime prints', async () => {
     assert.equal(ruePrints[0].kind, 'rue');
     assert.equal(ruePrints[0].source, 'wasm.rue:3:4');
     assert.equal(ruePrints[0].value, '("rue" 10)');
+});
+
+it('Keeps runtime prints on evaluation errors', async () => {
+    const program = Program.from_hex(
+        'ff04ffff8f6e6f745f616e5f6f70657261746f7280ffff8b64656275675f7072696e74ffff018c67616d652e7275653a343a35ffff018c6265666f7265206572726f728080',
+    );
+    try {
+        program.run(Program.null());
+        assert.fail('evaluation unexpectedly succeeded');
+    } catch (error: any) {
+        assert.match(error.message, /unimplemented operator/);
+        assert.equal(error.prints.length, 1);
+        assert.equal(error.prints[0].kind, 'rue');
+        assert.equal(error.prints[0].source, 'game.rue:4:5');
+        assert.equal(error.prints[0].value, '"before error"');
+    }
 });
 
 it('Has curry', async () => {

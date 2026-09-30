@@ -19,7 +19,9 @@ use crate::jsval::{
 use crate::objects::Program;
 use chialisp::classic::clvm::__type_compatibility__::{Bytes, Stream, UnvalidatedBytesFromType};
 use chialisp::classic::clvm::serialize::sexp_to_stream;
-use chialisp::classic::clvm_tools::clvmc::compile_clvm_inner;
+use chialisp::classic::clvm_tools::clvmc::{
+    compile_clvm_inner, compiler_opts_for_source,
+};
 use chialisp::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
 use chialisp::compiler::cldb::{
     hex_to_modern_sexp, CldbOverrideBespokeCode, CldbRun, CldbRunEnv, CldbRunnable,
@@ -338,7 +340,12 @@ pub fn compile_debug(
         .iter()
         .map(|value| value.as_string().unwrap())
         .collect();
-    let opts = Rc::new(DefaultCompilerOpts::new(&filename)).set_search_paths(&search_paths);
+    let base_opts = Rc::new(DefaultCompilerOpts::new(&filename)).set_search_paths(&search_paths);
+    let mut allocator = Allocator::new();
+    let opts = match compiler_opts_for_source(&mut allocator, base_opts.clone(), &input, false) {
+        Ok(opts) => opts,
+        Err(error) => return create_clvm_runner_err(error.format(&allocator, base_opts)),
+    };
     match compile_with_debug(opts, &input) {
         Err(error) => create_clvm_compile_failure(&error),
         Ok(artifacts) => {

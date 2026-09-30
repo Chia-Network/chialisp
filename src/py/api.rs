@@ -214,8 +214,11 @@ fn compile_debug(
     filename: String,
     search_paths: Vec<String>,
 ) -> PyResult<Py<PyAny>> {
-    let opts: Rc<dyn CompilerOpts> =
+    let base_opts: Rc<dyn CompilerOpts> =
         Rc::new(DefaultCompilerOpts::new(&filename)).set_search_paths(&search_paths);
+    let mut allocator = Allocator::new();
+    let opts = clvmc::compiler_opts_for_source(&mut allocator, base_opts.clone(), &source, false)
+        .map_err(|e| CompError::new_err(e.format(&allocator, base_opts)))?;
     let artifacts = compile_with_debug(opts, &source)
         .map_err(|e| CompError::new_err(format!("{}: {}", e.0, e.1)))?;
     Python::attach(|py| {

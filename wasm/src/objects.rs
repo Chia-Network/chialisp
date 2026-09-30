@@ -312,6 +312,12 @@ interface ITuple {
     to_program(): IProgram;
 }
 
+interface RuntimePrint {
+    kind: "chialisp" | "rue";
+    source?: string;
+    value: string;
+}
+
 interface IProgram {
     toString(): string;
     as_pair(): ITuple;
@@ -323,7 +329,7 @@ interface IProgram {
     first(): IProgram;
     rest(): IProgram;
     cons(p: IProgram): IProgram;
-    run(env: IProgram): [number, IProgram];
+    run(env: IProgram): [number, IProgram, RuntimePrint[]];
     list_len(): number;
     equal_to(other: IProgram): boolean;
     as_javascript(): any;
@@ -688,16 +694,22 @@ impl Program {
             0,
         );
         let print_records = runtime_prints_to_js(run.prints)?;
-        let run_result = run
-            .result
-            .map_err(|e| {
+        let run_result = match run.result {
+            Ok(result) => result,
+            Err(e) => {
                 let err_str = match e {
                     EvalErr::InternalError(_, e) => e.to_string(),
                     _ => e.to_string(),
                 };
-                let err: JsValue = JsString::from(err_str.as_str()).into();
-                err
-            })?;
+                let error = js_sys::Error::new(&err_str);
+                Reflect::set(
+                    &error,
+                    &JsString::from("prints"),
+                    print_records.as_ref(),
+                )?;
+                return Err(error.into());
+            }
+        };
         let modern_result = convert_from_clvm_rs(&mut allocator, get_srcloc(), run_result.1)
             .map_err(|_| {
                 let err: JsValue = JsString::from("error converting result").into();

@@ -108,6 +108,37 @@ fn run_writes_verifiable_structural_debug_sidecar() {
 }
 
 #[test]
+fn run_debug_sidecar_captures_search_path_include_once() {
+    let temp = tempfile::tempdir().expect("temp directory");
+    let include_dir = temp.path().join("include");
+    fs::create_dir(&include_dir).expect("create include directory");
+    let include_source = "((defun included (X) (+ X 7)))\n";
+    fs::write(include_dir.join("helper.clib"), include_source).expect("write include");
+    let output = tempfile::NamedTempFile::new().expect("debug output file");
+    let args = vec![
+        "run".to_string(),
+        "(mod (X) (include *standard-cl-23*) (include helper.clib) (included X))".to_string(),
+        "--include".to_string(),
+        include_dir.to_string_lossy().into_owned(),
+        "--debug-output-file".to_string(),
+        output.path().to_string_lossy().into_owned(),
+    ];
+
+    let (compiled, status) = launch_tool_output(&args, "run", 2);
+    assert!(!status.error_encountered, "{compiled}");
+    let metadata = DebugMetadata::decode(&fs::read(output.path()).expect("read debug output"))
+        .expect("decode");
+    let included = metadata
+        .files
+        .iter()
+        .filter(|file| file.source == include_source)
+        .collect::<Vec<_>>();
+
+    assert_eq!(included.len(), 1, "included source must be interned once");
+    assert_eq!(included[0].path, "helper.clib");
+}
+
+#[test]
 fn fail_on_error_status_is_opt_in() {
     let args = vec![
         "run".to_string(),

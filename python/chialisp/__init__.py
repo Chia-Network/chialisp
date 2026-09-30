@@ -1,4 +1,5 @@
 import sys
+from typing import TypedDict
 
 from chialisp._chialisp import (
     CldbError,
@@ -19,9 +20,23 @@ from chialisp._chialisp import (
 sys.modules[f"{__name__}.binutils"] = _binutils
 binutils = _binutils
 
+
+class DebugCompileArtifact(TypedDict):
+    export_name: str | None
+    program: bytes
+    debug: bytes
+    symbols: dict[str, str]
+
+
+class DebugCompileResult(TypedDict):
+    artifacts: list[DebugCompileArtifact]
+
+
 __all__ = [
     "CldbError",
     "CompError",
+    "DebugCompileArtifact",
+    "DebugCompileResult",
     "PythonRunStep",
     "binutils",
     "call_tool",

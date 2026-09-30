@@ -21,8 +21,8 @@
 
 #[cfg(test)]
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fs;
 use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr};
@@ -36,8 +36,10 @@ use crate::classic::clvm::serialize::{sexp_from_stream, sexp_to_stream, SimpleCr
 use crate::classic::clvm_tools::binutils::disassemble_with_kw;
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 use crate::compiler::clvm::convert_to_clvm_rs;
-use crate::compiler::compiler::{compile_file, ADVANCED_MACROS, STANDARD_MACROS};
-use crate::compiler::comptypes::{CompileErr, CompilerOpts, CompilerOutput};
+use crate::compiler::compiler::compile_file;
+use crate::compiler::comptypes::{
+    CompileErr, CompilerOpts, CompilerOutput, HasCompilerOptsDelegation,
+};
 use crate::compiler::dialect::KNOWN_DIALECTS;
 use crate::compiler::sexp::{parse_sexp, SExp};
 use crate::compiler::srcloc::{src_location_max, Srcloc};
@@ -358,8 +360,61 @@ fn source_for_file(path: &str, supplied: &HashMap<String, String>) -> Result<Str
         // Compiler-generated locations name virtual files. They have no
         // external source text; their complete source is the empty string.
         .or_else(|| (path.starts_with('*') && path.ends_with('*')).then(String::new))
-        .or_else(|| fs::read_to_string(path).ok())
         .ok_or_else(|| format!("debug metadata has no UTF-8 source for {path}"))
+}
+
+pub(crate) type CapturedSources = Rc<RefCell<HashMap<String, String>>>;
+
+#[derive(Clone)]
+struct SourceCapturingCompilerOpts {
+    opts: Rc<dyn CompilerOpts>,
+    sources: CapturedSources,
+}
+
+impl HasCompilerOptsDelegation for SourceCapturingCompilerOpts {
+    fn compiler_opts(&self) -> Rc<dyn CompilerOpts> {
+        self.opts.clone()
+    }
+
+    fn update_compiler_opts<F: FnOnce(Rc<dyn CompilerOpts>) -> Rc<dyn CompilerOpts>>(
+        &self,
+        f: F,
+    ) -> Rc<dyn CompilerOpts> {
+        Rc::new(Self {
+            opts: f(self.opts.clone()),
+            sources: self.sources.clone(),
+        })
+    }
+
+    fn override_read_new_file(
+        &self,
+        inc_from: String,
+        filename: String,
+    ) -> Result<(String, Vec<u8>), CompileErr> {
+        let requested = filename.clone();
+        let (resolved, content) = self.opts.read_new_file(inc_from, filename)?;
+        if let Ok(source) = String::from_utf8(content.clone()) {
+            let mut sources = self.sources.borrow_mut();
+            sources.insert(requested, source.clone());
+            sources.insert(resolved.clone(), source);
+        }
+        Ok((resolved, content))
+    }
+}
+
+pub(crate) fn capture_compiler_sources(
+    opts: Rc<dyn CompilerOpts>,
+    main_path: String,
+    main_source: String,
+) -> (Rc<dyn CompilerOpts>, CapturedSources) {
+    let sources = Rc::new(RefCell::new(HashMap::from([(main_path, main_source)])));
+    (
+        Rc::new(SourceCapturingCompilerOpts {
+            opts,
+            sources: sources.clone(),
+        }),
+        sources,
+    )
 }
 
 impl InternState {
@@ -591,21 +646,29 @@ fn parse_formal_parameters(text: &str) -> Result<SExp, String> {
         .ok_or_else(|| "empty compiler formal parameter metadata".to_string())
 }
 
+struct FunctionRecordSpec<'a> {
+    hash: &'a str,
+    name: &'a str,
+    arguments: &'a str,
+    left_env: bool,
+}
+
 fn add_function_record(
     program_index: &ProgramIndex<'_>,
-    hash: &str,
-    name: &str,
-    arguments: &str,
-    left_env: bool,
+    spec: FunctionRecordSpec<'_>,
     state: &mut InternState,
     functions: &mut Vec<DebugFunction>,
     functions_by_hash: &mut HashMap<String, usize>,
 ) -> Result<(), String> {
-    let Some(function_program) = program_index.find_subtree_by_hash(hash) else {
+    let Some(function_program) = program_index.find_subtree_by_hash(spec.hash) else {
         return Ok(());
     };
-    let formal = parse_formal_parameters(arguments)?;
-    let mut directions = if left_env { vec![true] } else { Vec::new() };
+    let formal = parse_formal_parameters(spec.arguments)?;
+    let mut directions = if spec.left_env {
+        vec![true]
+    } else {
+        Vec::new()
+    };
     let mut parameters = build_parameter_shape(&formal, &mut directions, state);
     let mut paths = Vec::new();
     parameter_paths(&parameters, &state.strings, &mut paths);
@@ -617,11 +680,11 @@ fn add_function_record(
     );
     let index = functions.len();
     functions.push(DebugFunction {
-        name: state.intern_string(name),
-        left_env,
+        name: state.intern_string(spec.name),
+        left_env: spec.left_env,
         parameters,
     });
-    functions_by_hash.insert(hash.to_string(), index);
+    functions_by_hash.insert(spec.hash.to_string(), index);
     Ok(())
 }
 
@@ -647,15 +710,17 @@ fn build_functions(
     for hash in hashes {
         add_function_record(
             program_index,
-            &hash,
-            &symbols[&hash],
-            symbols
-                .get(&format!("{hash}_arguments"))
-                .map(String::as_str)
-                .unwrap_or("()"),
-            symbols
-                .get(&format!("{hash}_left_env"))
-                .is_some_and(|value| value != "0" && value != "()"),
+            FunctionRecordSpec {
+                hash: &hash,
+                name: &symbols[&hash],
+                arguments: symbols
+                    .get(&format!("{hash}_arguments"))
+                    .map(String::as_str)
+                    .unwrap_or("()"),
+                left_env: symbols
+                    .get(&format!("{hash}_left_env"))
+                    .is_some_and(|value| value != "0" && value != "()"),
+            },
             state,
             &mut functions,
             &mut functions_by_hash,
@@ -667,10 +732,12 @@ fn build_functions(
         if !functions_by_hash.contains_key(&hash) {
             add_function_record(
                 program_index,
-                &hash,
-                "<main>",
-                arguments,
-                false,
+                FunctionRecordSpec {
+                    hash: &hash,
+                    name: "<main>",
+                    arguments,
+                    left_env: false,
+                },
                 state,
                 &mut functions,
                 &mut functions_by_hash,
@@ -989,6 +1056,8 @@ pub fn compile_with_debug(
     opts: Rc<dyn CompilerOpts>,
     content: &str,
 ) -> Result<Vec<DebugCompileArtifact>, CompileErr> {
+    let (opts, sources) =
+        capture_compiler_sources(opts.clone(), opts.filename(), content.to_string());
     let mut allocator = Allocator::new();
     let mut compiler_symbols = HashMap::new();
     let output = compile_file(
@@ -998,12 +1067,7 @@ pub fn compile_with_debug(
         content,
         &mut compiler_symbols,
     )?;
-    let mut sources = HashMap::new();
-    sources.insert(opts.filename(), content.to_string());
-    sources.insert("*macros*".to_string(), STANDARD_MACROS.to_string());
-    if opts.dialect().strict {
-        sources.insert("*macros*".to_string(), ADVANCED_MACROS.to_string());
-    }
+    let sources = sources.borrow();
 
     let mut programs = Vec::new();
     match output {
@@ -1574,9 +1638,9 @@ fn symbolize_node(
     )
 }
 
-fn top_level_parameters<'a>(
-    parameter: &'a DebugParameter,
-) -> (Vec<&'a DebugParameter>, Option<&'a DebugParameter>) {
+fn top_level_parameters(
+    parameter: &DebugParameter,
+) -> (Vec<&DebugParameter>, Option<&DebugParameter>) {
     let mut fixed = Vec::new();
     let mut cursor = parameter;
     loop {
@@ -2062,6 +2126,40 @@ mod tests {
     use super::*;
     use crate::compiler::sexp::parse_sexp;
 
+    #[derive(Clone)]
+    struct InMemoryCompilerOpts {
+        opts: Rc<dyn CompilerOpts>,
+        files: Rc<HashMap<String, (String, Vec<u8>)>>,
+    }
+
+    impl HasCompilerOptsDelegation for InMemoryCompilerOpts {
+        fn compiler_opts(&self) -> Rc<dyn CompilerOpts> {
+            self.opts.clone()
+        }
+
+        fn update_compiler_opts<F: FnOnce(Rc<dyn CompilerOpts>) -> Rc<dyn CompilerOpts>>(
+            &self,
+            f: F,
+        ) -> Rc<dyn CompilerOpts> {
+            Rc::new(Self {
+                opts: f(self.opts.clone()),
+                files: self.files.clone(),
+            })
+        }
+
+        fn override_read_new_file(
+            &self,
+            inc_from: String,
+            filename: String,
+        ) -> Result<(String, Vec<u8>), CompileErr> {
+            self.files
+                .get(&filename)
+                .cloned()
+                .map(Ok)
+                .unwrap_or_else(|| self.opts.read_new_file(inc_from, filename))
+        }
+    }
+
     fn shadow_to_node(allocator: &mut Allocator, tree: &DebugNode) -> NodePtr {
         match tree {
             DebugNode::Atom { value, .. } => allocator.new_atom(value).expect("shadow atom"),
@@ -2343,6 +2441,145 @@ mod tests {
             .expect("decode compiler metadata")
             .verify_program(&artifacts[0].program)
             .expect("verify compiler program");
+    }
+
+    #[test]
+    fn compiler_api_captures_search_path_include_once() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let include_dir = temp.path().join("include");
+        std::fs::create_dir(&include_dir).expect("create include directory");
+        let include_source = "((defun included (X) (+ X 7)))\n";
+        std::fs::write(include_dir.join("helper.clib"), include_source).expect("write include");
+        let source = "(mod (X) (include *standard-cl-23*) (include helper.clib) (included X))";
+        let opts: Rc<dyn CompilerOpts> = Rc::new(
+            crate::compiler::compiler::DefaultCompilerOpts::new("main.clsp"),
+        )
+        .set_search_paths(&[include_dir.to_string_lossy().into_owned()]);
+
+        let artifact = compile_with_debug(opts, source)
+            .expect("compile search-path include")
+            .remove(0);
+        let metadata = DebugMetadata::decode(&artifact.metadata).expect("decode metadata");
+        let included = metadata
+            .files
+            .iter()
+            .filter(|file| file.source == include_source)
+            .collect::<Vec<_>>();
+
+        assert_eq!(included.len(), 1, "included source must be interned once");
+        assert_eq!(included[0].path, "helper.clib");
+        assert_eq!(
+            metadata
+                .files
+                .iter()
+                .filter(|file| file.path == "helper.clib")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn compiler_api_captures_in_memory_include_across_option_clones() {
+        let include_source = "((defun included (X) (+ X 11)))\n";
+        let files = HashMap::from([(
+            "memory.clib".to_string(),
+            (
+                "memory://resolved/memory.clib".to_string(),
+                include_source.as_bytes().to_vec(),
+            ),
+        )]);
+        let base: Rc<dyn CompilerOpts> = Rc::new(
+            crate::compiler::compiler::DefaultCompilerOpts::new("memory-main.clsp"),
+        );
+        let opts: Rc<dyn CompilerOpts> = Rc::new(InMemoryCompilerOpts {
+            opts: base,
+            files: Rc::new(files),
+        });
+        let source = "(mod (X) (include *standard-cl-23*) (include memory.clib) (included X))";
+
+        let artifact = compile_with_debug(opts, source)
+            .expect("compile in-memory include")
+            .remove(0);
+        let metadata = DebugMetadata::decode(&artifact.metadata).expect("decode metadata");
+        let included = metadata
+            .files
+            .iter()
+            .filter(|file| file.source == include_source)
+            .collect::<Vec<_>>();
+
+        assert_eq!(included.len(), 1, "in-memory source must be interned once");
+        assert_eq!(included[0].path, "memory.clib");
+    }
+
+    #[test]
+    fn default_debug_compile_matches_normal_optimized_cl23_compile() {
+        let source = indoc! {"
+            (mod (N)
+              (include *standard-cl-23*)
+              (defun optimized (X)
+                (+ X 0))
+              (optimized N))
+        "};
+        let filename = "option-parity.clsp";
+        let base_opts: Rc<dyn CompilerOpts> = Rc::new(
+            crate::compiler::compiler::DefaultCompilerOpts::new(filename),
+        );
+
+        let mut normal_allocator = Allocator::new();
+        let normal = crate::classic::clvm_tools::clvmc::compile_clvm_text_maybe_opt(
+            &mut normal_allocator,
+            false,
+            base_opts.clone(),
+            &mut HashMap::new(),
+            source,
+            filename,
+            true,
+        )
+        .expect("normal compile");
+        let normal_bytes =
+            node_to_bytes(&normal_allocator, normal).expect("serialize normal compile");
+
+        let mut option_allocator = Allocator::new();
+        let debug_opts = crate::classic::clvm_tools::clvmc::compiler_opts_for_source(
+            &mut option_allocator,
+            base_opts,
+            source,
+            false,
+        )
+        .expect("derive CLI-equivalent options");
+        let artifact = compile_with_debug(debug_opts, source)
+            .expect("debug compile")
+            .remove(0);
+
+        assert_eq!(artifact.program, normal_bytes);
+        DebugMetadata::decode(&artifact.metadata)
+            .expect("decode debug metadata")
+            .verify_program(&normal_bytes)
+            .expect("metadata matches normal program");
+    }
+
+    #[test]
+    fn compile_with_debug_preserves_explicit_optimizer_options() {
+        let source = indoc! {"
+            (mod (N)
+              (include *standard-cl-23*)
+              (defun optimized (X)
+                (+ X 0))
+              (optimized N))
+        "};
+        let dialect = KNOWN_DIALECTS["*standard-cl-23*"].accepted.clone();
+        let base = Rc::new(crate::compiler::compiler::DefaultCompilerOpts::new(
+            "explicit-options.clsp",
+        ))
+        .set_dialect(dialect);
+        let unoptimized = compile_with_debug(base.set_optimize(false), source)
+            .expect("explicit unoptimized compile")
+            .remove(0);
+        let optimized = compile_with_debug(base.set_optimize(true), source)
+            .expect("explicit optimized compile")
+            .remove(0);
+
+        assert_ne!(unoptimized.program, optimized.program);
     }
 
     #[test]
