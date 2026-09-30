@@ -14,11 +14,14 @@ use chialisp::classic::clvm::__type_compatibility__::{
 use chialisp::classic::clvm::serialize::{
     sexp_from_stream, sexp_to_stream, SimpleCreateCLVMObject,
 };
-use chialisp::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
 use chialisp::compiler::clvm::{convert_from_clvm_rs, convert_to_clvm_rs, sha256tree};
 use chialisp::compiler::prims::{primapply, primcons, primquote};
 use chialisp::compiler::sexp::SExp;
 use chialisp::compiler::srcloc::Srcloc;
+use chialisp::runtime_print::{
+    run_program_with_runtime_prints, RuntimePrintKind, RuntimePrintOutput,
+};
+use clvmr::chia_dialect::ClvmFlags;
 use clvmr::error::EvalErr;
 use clvmr::Allocator;
 
@@ -26,6 +29,39 @@ use crate::api::{create_clvm_runner_err, get_next_id};
 use crate::jsval::{js_object_from_sexp, sexp_from_js_object};
 
 const DEFAULT_CACHE_ENTRIES: usize = 1024;
+
+fn runtime_prints_to_js(output: RuntimePrintOutput) -> Result<Array, JsValue> {
+    let records = Array::new();
+    for record in output.records {
+        let object = js_sys::Object::new();
+        let kind = match record.kind {
+            RuntimePrintKind::Chialisp => "chialisp",
+            RuntimePrintKind::Rue => "rue",
+        };
+        Reflect::set(&object, &JsString::from("kind"), &JsString::from(kind))?;
+        if let Some(source) = record.source {
+            Reflect::set(
+                &object,
+                &JsString::from("source"),
+                &JsString::from(source),
+            )?;
+        }
+        Reflect::set(
+            &object,
+            &JsString::from("value"),
+            &JsString::from(record.value),
+        )?;
+        records.push(&object);
+    }
+    if output.dropped > 0 {
+        Reflect::set(
+            &records,
+            &JsString::from("dropped"),
+            &JsValue::from_f64(output.dropped as f64),
+        )?;
+    }
+    Ok(records)
+}
 
 struct FunctionWrapperDesc {
     export_name: &'static str,
@@ -644,9 +680,16 @@ impl Program {
                 err
             })?;
 
-        let runner = DefaultProgramRunner::default();
-        let run_result = runner
-            .run_program(&mut allocator, prog_classic, arg_classic, None)
+        let run = run_program_with_runtime_prints(
+            &mut allocator,
+            ClvmFlags::NO_UNKNOWN_OPS | ClvmFlags::ENABLE_KECCAK_OPS_OUTSIDE_GUARD,
+            prog_classic,
+            arg_classic,
+            0,
+        );
+        let print_records = runtime_prints_to_js(run.prints)?;
+        let run_result = run
+            .result
             .map_err(|e| {
                 let err_str = match e {
                     EvalErr::InternalError(_, e) => e.to_string(),
@@ -666,6 +709,7 @@ impl Program {
         let cost_and_result_array = Array::new();
         cost_and_result_array.push(&JsValue::from_f64(run_result.0 as f64));
         cost_and_result_array.push(&result_object);
+        cost_and_result_array.push(&print_records);
         Ok(cost_and_result_array.into())
     }
 

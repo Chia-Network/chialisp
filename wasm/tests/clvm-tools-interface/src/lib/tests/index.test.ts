@@ -177,6 +177,24 @@ it('Has run', async () => {
     assert.equal(cost, 2658);
 });
 
+it('Detects Chialisp and Rue runtime prints', async () => {
+    const chialisp = Program.from_hex('ff22ffff0187247072696e7424ffff01847761736dffff010980');
+    const [, chialispResult, chialispPrints] = chialisp.run(Program.null());
+    assert.equal(chialispResult.toString(), '01');
+    assert.equal(chialispPrints.length, 1);
+    assert.equal(chialispPrints[0].kind, 'chialisp');
+    assert.equal(chialispPrints[0].source, undefined);
+    assert.equal(chialispPrints[0].value, '("wasm" 9)');
+
+    const rue = Program.from_hex('ff8b64656275675f7072696e74ffff018c7761736d2e7275653a333a34ffff01ff83727565ff0a8080');
+    const [, rueResult, ruePrints] = rue.run(Program.null());
+    assert.equal(rueResult.toString(), '80');
+    assert.equal(ruePrints.length, 1);
+    assert.equal(ruePrints[0].kind, 'rue');
+    assert.equal(ruePrints[0].source, 'wasm.rue:3:4');
+    assert.equal(ruePrints[0].value, '("rue" 10)');
+});
+
 it('Has curry', async () => {
     const program = Program.from_hex('ff12ffff10ff02ffff010180ffff11ff02ffff01018080');
     const program_with_arg = program.curry(Program.to(13));

@@ -1599,6 +1599,17 @@ pub fn launch_tool(
             run_output
         });
 
+    let runtime_prints = dpr.take_runtime_prints();
+    if runtime_prints.dropped > 0 {
+        stdout.write_str(&format!(
+            "print: <{} earlier message(s) omitted>\n",
+            runtime_prints.dropped
+        ));
+    }
+    for record in runtime_prints.records {
+        stdout.write_str(&format!("print: {record}\n"));
+    }
+
     let error_encountered = res.is_err();
     let output = collapse(res.map_err(|ex| {
         format!(

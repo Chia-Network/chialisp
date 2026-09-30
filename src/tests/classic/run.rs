@@ -58,6 +58,27 @@ fn basic_run_test() {
 }
 
 #[test]
+fn brun_reports_chialisp_and_rue_runtime_prints() {
+    let chialisp_args = vec![
+        "brun".to_string(),
+        r#"(all (q . "$print$") (q . "cli") (q . 7))"#.to_string(),
+        "()".to_string(),
+    ];
+    let (chialisp_output, chialisp_status) = launch_tool_output(&chialisp_args, "brun", 0);
+    assert!(!chialisp_status.error_encountered);
+    assert_eq!(chialisp_output, "print: (\"cli\" 7)\n1\n");
+
+    let rue_args = vec![
+        "brun".to_string(),
+        r#"("debug_print" (q . "cli.rue:1:2") (q . ("rue" 8)))"#.to_string(),
+        "()".to_string(),
+    ];
+    let (rue_output, rue_status) = launch_tool_output(&rue_args, "brun", 0);
+    assert!(!rue_status.error_encountered);
+    assert_eq!(rue_output, "print: cli.rue:1:2: (\"rue\" 8)\n()\n");
+}
+
+#[test]
 fn run_writes_verifiable_structural_debug_sidecar() {
     let output = tempfile::NamedTempFile::new().expect("debug output file");
     let args = vec![
