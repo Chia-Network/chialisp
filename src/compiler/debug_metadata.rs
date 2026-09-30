@@ -19,6 +19,8 @@
 //! `(1 SPAN STRING FUNCTION LEFT RIGHT)` for pairs. Table references are
 //! encoded as `index + 1`; zero means absent.
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fs;
 use std::rc::Rc;
@@ -36,7 +38,6 @@ use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 use crate::compiler::clvm::convert_to_clvm_rs;
 use crate::compiler::compiler::{compile_file, ADVANCED_MACROS, STANDARD_MACROS};
 use crate::compiler::comptypes::{CompileErr, CompilerOpts, CompilerOutput};
-use crate::compiler::debug::build_symbol_table_mut;
 use crate::compiler::dialect::KNOWN_DIALECTS;
 use crate::compiler::sexp::{parse_sexp, SExp};
 use crate::compiler::srcloc::{src_location_max, Srcloc};
@@ -238,8 +239,111 @@ fn serialize_program(program: &SExp) -> Result<Vec<u8>, String> {
     Ok(stream.get_value().data().clone())
 }
 
+struct IndexedProgramNode<'a> {
+    program: &'a SExp,
+    hash: [u8; 32],
+    children: Option<(Box<IndexedProgramNode<'a>>, Box<IndexedProgramNode<'a>>)>,
+}
+
+struct ProgramIndex<'a> {
+    root: IndexedProgramNode<'a>,
+    first_by_hash: HashMap<[u8; 32], &'a SExp>,
+    #[cfg(test)]
+    hash_visits: usize,
+    #[cfg(test)]
+    subtree_lookups: Cell<usize>,
+}
+
+impl<'a> ProgramIndex<'a> {
+    fn new(program: &'a SExp) -> Self {
+        let mut hash_visits = 0;
+        let root = Self::build_node(program, &mut hash_visits);
+        let mut first_by_hash = HashMap::new();
+        Self::index_first_occurrences(&root, &mut first_by_hash);
+        Self {
+            root,
+            first_by_hash,
+            #[cfg(test)]
+            hash_visits,
+            #[cfg(test)]
+            subtree_lookups: Cell::new(0),
+        }
+    }
+
+    fn build_node(program: &'a SExp, hash_visits: &mut usize) -> IndexedProgramNode<'a> {
+        *hash_visits += 1;
+        match program {
+            SExp::Cons(_, left, right) => {
+                let left = Box::new(Self::build_node(left, hash_visits));
+                let right = Box::new(Self::build_node(right, hash_visits));
+                let mut hasher = Sha256::new();
+                hasher.update([2]);
+                hasher.update(left.hash);
+                hasher.update(right.hash);
+                IndexedProgramNode {
+                    program,
+                    hash: hasher.finalize().into(),
+                    children: Some((left, right)),
+                }
+            }
+            _ => {
+                IndexedProgramNode {
+                    program,
+                    // The legacy helper preserves the compiler's active integer
+                    // conversion convention. This clones only the leaf atom,
+                    // never a subtree.
+                    hash: crate::compiler::clvm::sha256tree(Rc::new(program.clone()))
+                        .try_into()
+                        .expect("tree hashes are 32 bytes"),
+                    children: None,
+                }
+            }
+        }
+    }
+
+    fn index_first_occurrences(
+        node: &IndexedProgramNode<'a>,
+        first_by_hash: &mut HashMap<[u8; 32], &'a SExp>,
+    ) {
+        first_by_hash.entry(node.hash).or_insert(node.program);
+        if let Some((left, right)) = &node.children {
+            Self::index_first_occurrences(left, first_by_hash);
+            Self::index_first_occurrences(right, first_by_hash);
+        }
+    }
+
+    fn find_subtree_by_hash(&self, hash: &str) -> Option<&'a SExp> {
+        #[cfg(test)]
+        self.subtree_lookups.set(self.subtree_lookups.get() + 1);
+        let decoded: [u8; 32] = hex::decode(hash).ok()?.try_into().ok()?;
+        (hash == hex::encode(decoded))
+            .then(|| self.first_by_hash.get(&decoded).copied())
+            .flatten()
+    }
+
+    fn build_symbol_table(&self, symbols: &mut HashMap<String, String>) {
+        Self::build_symbol_table_node(&self.root, symbols);
+    }
+
+    fn build_symbol_table_node(
+        node: &IndexedProgramNode<'_>,
+        symbols: &mut HashMap<String, String>,
+    ) {
+        if let Some((left, right)) = &node.children {
+            Self::build_symbol_table_node(left, symbols);
+            Self::build_symbol_table_node(right, symbols);
+            symbols
+                .entry(hex::encode(node.hash))
+                .or_insert_with(|| node.program.loc().to_string());
+        } else {
+            symbols.insert(hex::encode(node.hash), node.program.loc().to_string());
+        }
+    }
+}
+
+#[cfg(test)]
 fn tree_hash_hex(program: &SExp) -> String {
-    hex::encode(crate::compiler::clvm::sha256tree(Rc::new(program.clone())))
+    hex::encode(ProgramIndex::new(program).root.hash)
 }
 
 fn source_for_file(path: &str, supplied: &HashMap<String, String>) -> Result<String, String> {
@@ -345,21 +449,21 @@ fn source_display_column(
 }
 
 fn build_tree(
-    program: &SExp,
+    program: &IndexedProgramNode<'_>,
     symbols: &HashMap<String, String>,
     functions_by_hash: &HashMap<String, usize>,
     sources: &HashMap<String, String>,
     state: &mut InternState,
 ) -> Result<DebugNode, String> {
-    let span = Some(state.intern_span(&program.loc(), sources)?);
-    let hash = tree_hash_hex(program);
+    let span = Some(state.intern_span(&program.program.loc(), sources)?);
+    let hash = hex::encode(program.hash);
     let label = symbols
         .get(&hash)
         .filter(|name| !name.contains('('))
         .map(|name| state.intern_string(name));
     let function = functions_by_hash.get(&hash).copied();
-    match program {
-        SExp::Cons(_, left, right) => Ok(DebugNode::Pair {
+    match &program.children {
+        Some((left, right)) => Ok(DebugNode::Pair {
             span,
             label,
             function,
@@ -378,23 +482,12 @@ fn build_tree(
                 state,
             )?),
         }),
-        _ => Ok(DebugNode::Atom {
+        None => Ok(DebugNode::Atom {
             span,
             label,
             function,
-            value: atom_bytes(program),
+            value: atom_bytes(program.program),
         }),
-    }
-}
-
-fn find_subtree_by_hash<'a>(program: &'a SExp, hash: &str) -> Option<&'a SExp> {
-    if tree_hash_hex(program) == hash {
-        return Some(program);
-    }
-    if let SExp::Cons(_, left, right) = program {
-        find_subtree_by_hash(left, hash).or_else(|| find_subtree_by_hash(right, hash))
-    } else {
-        None
     }
 }
 
@@ -499,7 +592,7 @@ fn parse_formal_parameters(text: &str) -> Result<SExp, String> {
 }
 
 fn add_function_record(
-    program: &SExp,
+    program_index: &ProgramIndex<'_>,
     hash: &str,
     name: &str,
     arguments: &str,
@@ -508,7 +601,7 @@ fn add_function_record(
     functions: &mut Vec<DebugFunction>,
     functions_by_hash: &mut HashMap<String, usize>,
 ) -> Result<(), String> {
-    let Some(function_program) = find_subtree_by_hash(program, hash) else {
+    let Some(function_program) = program_index.find_subtree_by_hash(hash) else {
         return Ok(());
     };
     let formal = parse_formal_parameters(arguments)?;
@@ -517,8 +610,7 @@ fn add_function_record(
     let mut paths = Vec::new();
     parameter_paths(&parameters, &state.strings, &mut paths);
     let inference_program = quoted_apply_body(function_program).unwrap_or(function_program);
-    let serialized = serialize_program(inference_program)?;
-    let inferred = infer_parameter_constraints(&serialized, &paths)?;
+    let inferred = infer_parameter_constraints_sexp(inference_program, &paths);
     apply_parameter_constraints(
         &mut parameters,
         &mut inferred.into_iter().map(|(_, constraint)| constraint),
@@ -534,7 +626,7 @@ fn add_function_record(
 }
 
 fn build_functions(
-    program: &SExp,
+    program_index: &ProgramIndex<'_>,
     symbols: &HashMap<String, String>,
     state: &mut InternState,
 ) -> Result<(Vec<DebugFunction>, HashMap<String, usize>), String> {
@@ -554,7 +646,7 @@ fn build_functions(
     let mut functions_by_hash = HashMap::new();
     for hash in hashes {
         add_function_record(
-            program,
+            program_index,
             &hash,
             &symbols[&hash],
             symbols
@@ -571,10 +663,10 @@ fn build_functions(
     }
 
     if let Some(arguments) = symbols.get("__chia__main_arguments") {
-        let hash = tree_hash_hex(program);
+        let hash = hex::encode(program_index.root.hash);
         if !functions_by_hash.contains_key(&hash) {
             add_function_record(
-                program,
+                program_index,
                 &hash,
                 "<main>",
                 arguments,
@@ -607,9 +699,25 @@ impl DebugMetadata {
         if serialize_program(program)? != program_bytes {
             return Err("debug metadata program does not match exact serialized bytes".to_string());
         }
+        let program_index = ProgramIndex::new(program);
+        Self::from_program_index(&program_index, program_bytes, symbols, sources)
+    }
+
+    fn from_program_index(
+        program_index: &ProgramIndex<'_>,
+        program_bytes: &[u8],
+        symbols: &HashMap<String, String>,
+        sources: &HashMap<String, String>,
+    ) -> Result<Self, String> {
         let mut state = InternState::default();
-        let (functions, functions_by_hash) = build_functions(program, symbols, &mut state)?;
-        let tree = build_tree(program, symbols, &functions_by_hash, sources, &mut state)?;
+        let (functions, functions_by_hash) = build_functions(program_index, symbols, &mut state)?;
+        let tree = build_tree(
+            &program_index.root,
+            symbols,
+            &functions_by_hash,
+            sources,
+            &mut state,
+        )?;
         Ok(DebugMetadata {
             program_sha256: Sha256::digest(program_bytes).into(),
             files: state.files,
@@ -916,15 +1024,20 @@ pub fn compile_with_debug(
         .map(|(export_name, program)| {
             let program_bytes =
                 serialize_program(&program).map_err(|error| CompileErr(program.loc(), error))?;
+            let program_index = ProgramIndex::new(&program);
             let mut symbols = HashMap::new();
-            build_symbol_table_mut(&mut symbols, &program);
+            program_index.build_symbol_table(&mut symbols);
             for (key, value) in &compiler_symbols {
                 symbols.insert(key.clone(), value.clone());
             }
-            let metadata =
-                DebugMetadata::from_program_bytes(&program, &program_bytes, &symbols, &sources)
-                    .and_then(|metadata| metadata.encode())
-                    .map_err(|error| CompileErr(program.loc(), error))?;
+            let metadata = DebugMetadata::from_program_index(
+                &program_index,
+                &program_bytes,
+                &symbols,
+                &sources,
+            )
+            .and_then(|metadata| metadata.encode())
+            .map_err(|error| CompileErr(program.loc(), error))?;
             Ok(DebugCompileArtifact {
                 export_name,
                 program: program_bytes,
@@ -1715,6 +1828,86 @@ pub fn infer_parameter_constraints(
         .collect())
 }
 
+fn infer_parameter_constraints_sexp(
+    program: &SExp,
+    parameters: &[(String, Vec<u8>)],
+) -> Vec<(String, ParameterConstraint)> {
+    let mut inferred = vec![None; parameters.len()];
+    infer_constraints_sexp_node(program, parameters, &mut inferred);
+    parameters
+        .iter()
+        .enumerate()
+        .map(|(index, (name, _))| {
+            (
+                name.clone(),
+                inferred[index]
+                    .clone()
+                    .unwrap_or(ParameterConstraint::Unknown),
+            )
+        })
+        .collect()
+}
+
+fn infer_constraints_sexp_node(
+    node: &SExp,
+    parameters: &[(String, Vec<u8>)],
+    inferred: &mut [Option<ParameterConstraint>],
+) {
+    let SExp::Cons(_, operator, arguments) = node else {
+        return;
+    };
+    let operator_value = match operator.as_ref() {
+        SExp::Cons(_, _, _) => {
+            infer_constraints_sexp_node(operator, parameters, inferred);
+            Vec::new()
+        }
+        value => atom_bytes(value),
+    };
+    if primitive_name(&operator_value) == b"q" {
+        return;
+    }
+    let mut arguments = arguments.as_ref();
+    let mut argument_index = 0usize;
+    while let SExp::Cons(_, argument, rest) = arguments {
+        match argument.as_ref() {
+            SExp::Cons(_, _, _) => {
+                infer_constraints_sexp_node(argument, parameters, inferred);
+            }
+            value => record_inferred_constraints(
+                &operator_value,
+                &atom_bytes(value),
+                argument_index,
+                parameters,
+                inferred,
+            ),
+        }
+        arguments = rest;
+        argument_index += 1;
+    }
+}
+
+fn record_inferred_constraints(
+    operator: &[u8],
+    argument: &[u8],
+    argument_index: usize,
+    parameters: &[(String, Vec<u8>)],
+    inferred: &mut [Option<ParameterConstraint>],
+) {
+    for (parameter_index, (_, path)) in parameters.iter().enumerate() {
+        if argument == path {
+            let constraint = primitive_parameter_constraint(operator, argument_index);
+            if constraint != ParameterConstraint::Unknown {
+                inferred[parameter_index] = Some(
+                    inferred[parameter_index]
+                        .clone()
+                        .map(|current| current.union(constraint.clone()))
+                        .unwrap_or(constraint),
+                );
+            }
+        }
+    }
+}
+
 fn infer_constraints_node(
     allocator: &Allocator,
     node: NodePtr,
@@ -1739,20 +1932,13 @@ fn infer_constraints_node(
     while let Some((argument, rest)) = pair(allocator, arguments) {
         if let clvm_rs::allocator::SExp::Atom = allocator.sexp(argument) {
             let argument_value = allocator.atom(argument);
-            for (parameter_index, (_, path)) in parameters.iter().enumerate() {
-                if argument_value.as_ref() == path {
-                    let constraint =
-                        primitive_parameter_constraint(&operator_value, argument_index);
-                    if constraint != ParameterConstraint::Unknown {
-                        inferred[parameter_index] = Some(
-                            inferred[parameter_index]
-                                .clone()
-                                .map(|current| current.union(constraint.clone()))
-                                .unwrap_or(constraint),
-                        );
-                    }
-                }
-            }
+            record_inferred_constraints(
+                &operator_value,
+                argument_value.as_ref(),
+                argument_index,
+                parameters,
+                inferred,
+            );
         } else {
             infer_constraints_node(allocator, argument, parameters, inferred);
         }
@@ -1961,6 +2147,15 @@ mod tests {
         }
     }
 
+    fn sexp_node_count(program: &SExp) -> usize {
+        match program {
+            SExp::Cons(_, left, right) => {
+                1 + sexp_node_count(left.as_ref()) + sexp_node_count(right.as_ref())
+            }
+            _ => 1,
+        }
+    }
+
     fn fixture() -> (SExp, HashMap<String, String>, HashMap<String, String>) {
         let source = "(+ X 1)";
         let program = parse_sexp(Srcloc::start("fixture.clsp"), source.bytes())
@@ -1998,6 +2193,64 @@ mod tests {
         assert_eq!(decoded.strings, vec!["X", "Y", "fixture"]);
         assert_eq!(decoded.functions.len(), 1);
         assert!(decoded.spans.len() < 8, "spans should be interned");
+    }
+
+    #[test]
+    fn program_index_hashes_once_and_uses_constant_time_symbol_lookups() {
+        let (program, _, sources) = fixture();
+        let program_index = ProgramIndex::new(&program);
+        assert_eq!(program_index.hash_visits, sexp_node_count(&program));
+        let mut legacy_symbols = HashMap::new();
+        crate::compiler::debug::build_symbol_table_mut(&mut legacy_symbols, &program);
+        let mut indexed_symbols = HashMap::new();
+        program_index.build_symbol_table(&mut indexed_symbols);
+        assert_eq!(indexed_symbols, legacy_symbols);
+        let zero_program = parse_sexp(Srcloc::start("*zero*"), "(0 . 0)".bytes())
+            .expect("parse zero program")
+            .remove(0);
+        let zero_index = ProgramIndex::new(zero_program.as_ref());
+        let mut legacy_zero_symbols = HashMap::new();
+        crate::compiler::debug::build_symbol_table_mut(
+            &mut legacy_zero_symbols,
+            zero_program.as_ref(),
+        );
+        let mut indexed_zero_symbols = HashMap::new();
+        zero_index.build_symbol_table(&mut indexed_zero_symbols);
+        assert_eq!(indexed_zero_symbols, legacy_zero_symbols);
+
+        let mut symbols = HashMap::new();
+        let present_hash = hex::encode(program_index.root.hash);
+        symbols.insert(present_hash.clone(), "fixture".to_string());
+        symbols.insert(format!("{present_hash}_arguments"), "(X)".to_string());
+        for index in 0_u32..1_000 {
+            let absent_hash = Sha256::digest(index.to_be_bytes());
+            symbols.insert(hex::encode(absent_hash), format!("absent_{index}"));
+        }
+        let expected_lookups = symbols
+            .keys()
+            .filter(|key| {
+                key.len() == 64
+                    && key.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    && symbols.get(*key).is_some_and(|value| !value.contains('('))
+            })
+            .count();
+
+        let mut state = InternState::default();
+        let (_, functions_by_hash) =
+            build_functions(&program_index, &symbols, &mut state).expect("build functions");
+        assert_eq!(program_index.subtree_lookups.get(), expected_lookups);
+        assert_eq!(program_index.hash_visits, sexp_node_count(&program));
+        assert_eq!(functions_by_hash.len(), 1);
+
+        build_tree(
+            &program_index.root,
+            &symbols,
+            &functions_by_hash,
+            &sources,
+            &mut state,
+        )
+        .expect("build indexed shadow tree");
+        assert_eq!(program_index.hash_visits, sexp_node_count(&program));
     }
 
     #[test]
@@ -2190,13 +2443,14 @@ mod tests {
         let program = parse_sexp(Srcloc::start("*constraints*"), "(+ 2 (f 5))".bytes())
             .expect("parse constraint program")
             .remove(0);
+        let parameters = [
+            ("X".to_string(), vec![2]),
+            ("Y".to_string(), vec![5]),
+            ("Z".to_string(), vec![11]),
+        ];
         let inferred = infer_parameter_constraints(
             &serialize_program(program.as_ref()).expect("serialize constraints"),
-            &[
-                ("X".to_string(), vec![2]),
-                ("Y".to_string(), vec![5]),
-                ("Z".to_string(), vec![11]),
-            ],
+            &parameters,
         )
         .expect("infer constraints");
         assert_eq!(
@@ -2206,6 +2460,11 @@ mod tests {
                 ("Y".to_string(), ParameterConstraint::Pair),
                 ("Z".to_string(), ParameterConstraint::Unknown),
             ]
+        );
+        assert_eq!(
+            infer_parameter_constraints_sexp(program.as_ref(), &parameters),
+            inferred,
+            "direct SExp inference must match the public serialized API"
         );
     }
 
