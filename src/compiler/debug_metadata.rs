@@ -22,7 +22,7 @@
 #[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use clvm_rs::allocator::{Allocator, NodePtr};
@@ -141,6 +141,31 @@ pub struct SymbolizedFrame {
     pub runtime_arguments: Vec<Vec<u8>>,
     /// Fully named and constrained arguments derived from the sidecar.
     pub arguments: Vec<StackFrameArgument>,
+}
+
+/// A raw evaluator frame whose program and environment are canonical CLVM
+/// serializations.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SerializedFrame {
+    pub program: Vec<u8>,
+    pub environment: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SymbolizedSerializedFrame {
+    /// Index of the matching sidecar in its [`DebugMetadataCollection`].
+    /// Unknown frames do not have one.
+    pub metadata_index: Option<usize>,
+    pub frame: SymbolizedFrame,
+}
+
+/// Decoded sidecars indexed by the structural identities of their programs
+/// and nested executable forms.
+#[derive(Clone, Debug, Default)]
+pub struct DebugMetadataCollection {
+    entries: Vec<DebugMetadata>,
+    program_identities: HashMap<[u8; 32], usize>,
+    structural_identities: HashMap<[u8; 32], Vec<usize>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -851,6 +876,15 @@ impl DebugMetadata {
         program_bytes: &[u8],
         runtime_arguments: &[Vec<u8>],
     ) -> Result<SymbolizedFrame, String> {
+        self.symbolize_frame_with_environment(program_bytes, runtime_arguments, None)
+    }
+
+    fn symbolize_frame_with_environment(
+        &self,
+        program_bytes: &[u8],
+        runtime_arguments: &[Vec<u8>],
+        runtime_tail: Option<&[u8]>,
+    ) -> Result<SymbolizedFrame, String> {
         let mut allocator = Allocator::new();
         let program = decode_clvm(&mut allocator, program_bytes, "frame program")?;
         let mut bound_arguments = Vec::new();
@@ -868,16 +902,19 @@ impl DebugMetadata {
             .or(fallback_function);
         let arguments = function_index
             .map(|index| {
-                materialize_frame_arguments(self, index, &bound_arguments, runtime_arguments)
+                materialize_frame_arguments(
+                    self,
+                    index,
+                    &bound_arguments,
+                    runtime_arguments,
+                    runtime_tail,
+                )
             })
             .transpose()?
             .unwrap_or_default();
-        let hash = crate::classic::clvm_tools::sha256tree::sha256tree(&mut allocator, program);
-        let program_hash: [u8; 32] = hash
-            .data()
-            .as_slice()
-            .try_into()
-            .map_err(|_| "CLVM tree hash was not 32 bytes".to_string())?;
+        let program_hash = clvm_tree_hash(&mut allocator, program)?;
+        let mut serialized_runtime_arguments = runtime_arguments.to_vec();
+        serialized_runtime_arguments.extend(runtime_tail.map(<[u8]>::to_vec));
         Ok(SymbolizedFrame {
             matched,
             function,
@@ -885,7 +922,7 @@ impl DebugMetadata {
             source_span,
             program_hash,
             bound_arguments,
-            runtime_arguments: runtime_arguments.to_vec(),
+            runtime_arguments: serialized_runtime_arguments,
             arguments,
         })
     }
@@ -1034,6 +1071,163 @@ impl DebugMetadata {
             functions,
             tree,
         })
+    }
+}
+
+impl DebugMetadataCollection {
+    pub fn insert(&mut self, sidecar: &[u8]) -> Result<(), String> {
+        self.insert_metadata(DebugMetadata::decode(sidecar)?)
+    }
+
+    pub fn insert_metadata(&mut self, metadata: DebugMetadata) -> Result<(), String> {
+        if self
+            .program_identities
+            .contains_key(&metadata.program_sha256)
+        {
+            return Err(format!(
+                "duplicate debug metadata program identity {}",
+                hex::encode(metadata.program_sha256)
+            ));
+        }
+
+        let index = self.entries.len();
+        let mut identities = HashSet::new();
+        collect_debug_node_identities(&metadata.tree, &mut identities);
+        for identity in identities {
+            self.structural_identities
+                .entry(identity)
+                .or_default()
+                .push(index);
+        }
+        self.program_identities
+            .insert(metadata.program_sha256, index);
+        self.entries.push(metadata);
+        Ok(())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn get(&self, index: usize) -> Option<&DebugMetadata> {
+        self.entries.get(index)
+    }
+
+    /// Select a sidecar and symbolize a serialized evaluator frame. A
+    /// nonmatching frame is returned as unknown; malformed data for a frame
+    /// that matches an indexed sidecar remains an error.
+    pub fn symbolize_serialized_frame(
+        &self,
+        captured: &SerializedFrame,
+    ) -> Result<SymbolizedSerializedFrame, String> {
+        let mut allocator = Allocator::new();
+        let program = decode_clvm(&mut allocator, &captured.program, "frame program")?;
+        let (runtime_arguments, runtime_tail) =
+            decode_serialized_environment(&captured.environment)?;
+
+        let mut candidates = Vec::new();
+        let mut seen = HashSet::new();
+        let serialized_identity: [u8; 32] = Sha256::digest(&captured.program).into();
+        if let Some(index) = self.program_identities.get(&serialized_identity) {
+            let metadata = &self.entries[*index];
+            let frame = metadata.symbolize_frame_with_environment(
+                &captured.program,
+                &runtime_arguments,
+                runtime_tail.as_deref(),
+            )?;
+            if frame.matched == FrameMatch::Unknown {
+                return Err("debug metadata program structure mismatch".to_string());
+            }
+            return Ok(SymbolizedSerializedFrame {
+                metadata_index: Some(*index),
+                frame,
+            });
+        }
+
+        let mut current = program;
+        loop {
+            let identity = clvm_tree_hash(&mut allocator, current)?;
+            if let Some(indices) = self.structural_identities.get(&identity) {
+                for index in indices {
+                    if seen.insert(*index) {
+                        candidates.push(*index);
+                    }
+                }
+            }
+            let Some((base, _)) = canonical_curry(&allocator, current) else {
+                break;
+            };
+            current = base;
+        }
+
+        let mut matched_error = None;
+        for index in candidates {
+            let metadata = &self.entries[index];
+            match metadata.symbolize_frame_with_environment(
+                &captured.program,
+                &runtime_arguments,
+                runtime_tail.as_deref(),
+            ) {
+                Ok(frame) if frame.matched != FrameMatch::Unknown => {
+                    return Ok(SymbolizedSerializedFrame {
+                        metadata_index: Some(index),
+                        frame,
+                    });
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    matched_error.get_or_insert(error);
+                }
+            }
+        }
+        if let Some(error) = matched_error {
+            return Err(error);
+        }
+
+        Ok(SymbolizedSerializedFrame {
+            metadata_index: None,
+            frame: SymbolizedFrame {
+                matched: FrameMatch::Unknown,
+                function: None,
+                function_index: None,
+                source_span: None,
+                program_hash: clvm_tree_hash(&mut allocator, program)?,
+                bound_arguments: Vec::new(),
+                runtime_arguments: runtime_arguments.into_iter().chain(runtime_tail).collect(),
+                arguments: Vec::new(),
+            },
+        })
+    }
+
+    /// Format retained frames in evaluator order (oldest to newest). The
+    /// omitted count describes older frames dropped before the retained slice.
+    pub fn format_captured_stack(
+        &self,
+        frames: &[SerializedFrame],
+        omitted: usize,
+        style: StackFrameStyle,
+    ) -> Result<String, String> {
+        let mut rendered = Vec::with_capacity(frames.len() + usize::from(omitted != 0));
+        if omitted != 0 {
+            rendered.push(format!(
+                "<... {omitted} older frame{} omitted ...>",
+                if omitted == 1 { "" } else { "s" }
+            ));
+        }
+        for captured in frames {
+            let symbolized = self.symbolize_serialized_frame(captured)?;
+            let frame = if let Some(index) = symbolized.metadata_index {
+                format_stack_frame(&self.entries[index], &symbolized.frame, style)?
+            } else {
+                format_unknown_stack_frame(&symbolized.frame, style)
+            };
+            rendered.push(frame);
+        }
+        Ok(rendered.join("\n"))
     }
 }
 
@@ -1488,6 +1682,63 @@ fn decode_clvm(
     Ok(node)
 }
 
+fn clvm_tree_hash(allocator: &mut Allocator, node: NodePtr) -> Result<[u8; 32], String> {
+    let hash = crate::classic::clvm_tools::sha256tree::sha256tree(allocator, node);
+    hash.data()
+        .as_slice()
+        .try_into()
+        .map_err(|_| "CLVM tree hash was not 32 bytes".to_string())
+}
+
+fn collect_debug_node_identities(node: &DebugNode, identities: &mut HashSet<[u8; 32]>) -> [u8; 32] {
+    let identity = match node {
+        DebugNode::Atom { value, .. } => {
+            let mut hasher = Sha256::new();
+            hasher.update([1]);
+            hasher.update(value);
+            hasher.finalize().into()
+        }
+        DebugNode::Pair { left, right, .. } => {
+            let left = collect_debug_node_identities(left, identities);
+            let right = collect_debug_node_identities(right, identities);
+            let mut hasher = Sha256::new();
+            hasher.update([2]);
+            hasher.update(left);
+            hasher.update(right);
+            hasher.finalize().into()
+        }
+    };
+    identities.insert(identity);
+    identity
+}
+
+fn decode_serialized_environment(
+    environment: &[u8],
+) -> Result<(Vec<Vec<u8>>, Option<Vec<u8>>), String> {
+    let mut allocator = Allocator::new();
+    let mut cursor = decode_clvm(&mut allocator, environment, "frame environment")?;
+    let mut arguments = Vec::new();
+    loop {
+        match allocator.sexp(cursor) {
+            clvm_rs::allocator::SExp::Pair(first, rest) => {
+                arguments.push(
+                    node_to_bytes(&allocator, first)
+                        .map_err(|error| format!("cannot serialize frame argument: {error:?}"))?,
+                );
+                cursor = rest;
+            }
+            clvm_rs::allocator::SExp::Atom if allocator.atom(cursor).is_empty() => {
+                return Ok((arguments, None));
+            }
+            clvm_rs::allocator::SExp::Atom => {
+                let tail = node_to_bytes(&allocator, cursor)
+                    .map_err(|error| format!("cannot serialize frame argument: {error:?}"))?;
+                return Ok((arguments, Some(tail)));
+            }
+        }
+    }
+}
+
 fn node_matches_tree(allocator: &Allocator, node: NodePtr, tree: &DebugNode) -> bool {
     match (allocator.sexp(node), tree) {
         (
@@ -1696,6 +1947,7 @@ fn materialize_frame_arguments(
     function_index: usize,
     bound_arguments: &[Vec<u8>],
     runtime_arguments: &[Vec<u8>],
+    runtime_tail: Option<&[u8]>,
 ) -> Result<Vec<StackFrameArgument>, String> {
     let function = metadata
         .functions
@@ -1714,6 +1966,9 @@ fn materialize_frame_arguments(
             decode_clvm(&mut allocator, value, "frame argument").map(|node| (binding, node))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let runtime_tail = runtime_tail
+        .map(|value| decode_clvm(&mut allocator, value, "frame argument"))
+        .transpose()?;
     // A left-environment function receives its captured lexical environment
     // before its declared parameters. It is compiler plumbing, not a formal.
     let actual = &actual[usize::from(function.left_env).min(actual.len())..];
@@ -1731,7 +1986,7 @@ fn materialize_frame_arguments(
     }
     if let Some(tail) = tail {
         let remaining = &actual[fixed.len().min(actual.len())..];
-        let mut value = NodePtr::NIL;
+        let mut value = runtime_tail.unwrap_or(NodePtr::NIL);
         for (_, item) in remaining.iter().rev() {
             value = allocator
                 .new_pair(*item, value)
@@ -1740,6 +1995,7 @@ fn materialize_frame_arguments(
         let binding = if remaining
             .iter()
             .all(|(binding, _)| *binding == ArgumentBinding::Bound)
+            && runtime_tail.is_none()
         {
             ArgumentBinding::Bound
         } else {
@@ -2039,6 +2295,14 @@ fn expand_tabs(line: &str) -> String {
     result
 }
 
+fn format_unknown_stack_frame(frame: &SymbolizedFrame, style: StackFrameStyle) -> String {
+    let function = format!("<unknown:{}>", hex::encode(frame.program_hash));
+    match style {
+        StackFrameStyle::Lisp => format!("({function})"),
+        StackFrameStyle::Python => format!("{function}()"),
+    }
+}
+
 pub fn format_stack_frame(
     metadata: &DebugMetadata,
     frame: &SymbolizedFrame,
@@ -2195,6 +2459,30 @@ mod tests {
         let mut allocator = Allocator::new();
         let node = allocator.new_atom(value).expect("value atom");
         node_to_bytes(&allocator, node).expect("serialize value atom")
+    }
+
+    fn serialized_sexp(text: &str) -> Vec<u8> {
+        let value = parse_sexp(Srcloc::start("*value*"), text.bytes())
+            .expect("parse value")
+            .remove(0);
+        serialize_program(value.as_ref()).expect("serialize value")
+    }
+
+    fn serialized_environment(values: &[Vec<u8>], tail: Option<&[u8]>) -> Vec<u8> {
+        let mut allocator = Allocator::new();
+        let mut environment = tail
+            .map(|value| decode_clvm(&mut allocator, value, "test environment tail"))
+            .transpose()
+            .expect("environment tail")
+            .unwrap_or(NodePtr::NIL);
+        for value in values.iter().rev() {
+            let value =
+                decode_clvm(&mut allocator, value, "test environment value").expect("value");
+            environment = allocator
+                .new_pair(value, environment)
+                .expect("environment pair");
+        }
+        node_to_bytes(&allocator, environment).expect("serialize environment")
     }
 
     fn canonical_curry_bytes(program: &[u8], bound: &[Vec<u8>]) -> Vec<u8> {
@@ -2612,6 +2900,248 @@ mod tests {
         assert_eq!(curried.matched, FrameMatch::Curried);
         assert_eq!(curried.function.as_deref(), Some("fixture"));
         assert_eq!(curried.bound_arguments, vec![vec![42], vec![99]]);
+    }
+
+    #[test]
+    fn collection_selects_exact_and_recursively_curried_sidecars_in_argument_order() {
+        let (program, symbols, sources) = fixture();
+        let metadata =
+            DebugMetadata::from_program(&program, &symbols, &sources).expect("fixture metadata");
+        let program_bytes = serialize_program(&program).expect("fixture program");
+
+        let other = parse_sexp(Srcloc::start("other.clsp"), "(* Z 2)".bytes())
+            .expect("parse other")
+            .remove(0);
+        let other_hash = tree_hash_hex(other.as_ref());
+        let other_symbols = HashMap::from([
+            (other_hash.clone(), "other".to_string()),
+            (format!("{other_hash}_arguments"), "(Z)".to_string()),
+        ]);
+        let other_sources = HashMap::from([("other.clsp".to_string(), "(* Z 2)".to_string())]);
+        let other_metadata =
+            DebugMetadata::from_program(other.as_ref(), &other_symbols, &other_sources)
+                .expect("other metadata");
+
+        let mut collection = DebugMetadataCollection::default();
+        collection
+            .insert_metadata(other_metadata)
+            .expect("insert other");
+        collection
+            .insert_metadata(metadata.clone())
+            .expect("insert fixture");
+        assert_eq!(collection.len(), 2);
+        assert!(!collection.is_empty());
+
+        let exact = collection
+            .symbolize_serialized_frame(&SerializedFrame {
+                program: program_bytes.clone(),
+                environment: serialized_sexp("(5 6)"),
+            })
+            .expect("exact frame");
+        assert_eq!(exact.metadata_index, Some(1));
+        assert_eq!(exact.frame.matched, FrameMatch::Exact);
+
+        let inner = canonical_curry_bytes(&program_bytes, &[vec![42]]);
+        let outer = canonical_curry_bytes(&inner, &[vec![99]]);
+        let curried = collection
+            .symbolize_serialized_frame(&SerializedFrame {
+                program: outer,
+                environment: serialized_sexp("()"),
+            })
+            .expect("recursive curry frame");
+        assert_eq!(curried.metadata_index, Some(1));
+        assert_eq!(curried.frame.matched, FrameMatch::Curried);
+        assert_eq!(curried.frame.bound_arguments, vec![vec![42], vec![99]]);
+        assert_eq!(
+            curried
+                .frame
+                .arguments
+                .iter()
+                .map(|argument| (argument.name.as_str(), argument.value.as_slice()))
+                .collect::<Vec<_>>(),
+            vec![("X", &[42][..]), ("Y", &[99][..])]
+        );
+
+        let mut inconsistent = metadata.clone();
+        let duplicate = collection.insert_metadata(metadata).unwrap_err();
+        assert!(duplicate.contains("duplicate debug metadata program identity"));
+
+        inconsistent.tree = DebugNode::Atom {
+            span: None,
+            label: None,
+            function: None,
+            value: vec![1],
+        };
+        let mut malformed_collection = DebugMetadataCollection::default();
+        malformed_collection
+            .insert_metadata(inconsistent)
+            .expect("insert structurally inconsistent metadata");
+        assert_eq!(
+            malformed_collection
+                .symbolize_serialized_frame(&SerializedFrame {
+                    program: program_bytes,
+                    environment: serialized_sexp("(5 6)"),
+                })
+                .unwrap_err(),
+            "debug metadata program structure mismatch"
+        );
+    }
+
+    #[test]
+    fn captured_environment_preserves_left_env_and_destructured_parameters() {
+        let source = indoc! {"
+            (mod (MAIN)
+              (include *standard-cl-23*)
+              (defun destructured ((N . P) B)
+                (c (+ N 1) (c (f P) (c (coinid B B N) ()))))
+              (destructured MAIN MAIN))
+        "};
+        let opts: Rc<dyn CompilerOpts> = Rc::new(
+            crate::compiler::compiler::DefaultCompilerOpts::new("captured-destructured.clsp"),
+        );
+        let artifact = compile_with_debug(opts, source)
+            .expect("compile destructured metadata")
+            .remove(0);
+        let metadata = DebugMetadata::decode(&artifact.metadata).expect("decode metadata");
+        let function_index = metadata
+            .functions
+            .iter()
+            .position(|function| metadata.strings[function.name] == "destructured")
+            .expect("destructured function");
+        assert!(metadata.functions[function_index].left_env);
+        let function_program = shadow_bytes(
+            function_shadow(&metadata.tree, function_index).expect("function program"),
+        );
+        let pair = serialized_sexp("(5 7 . 8)");
+        let bytes32 = atom_serialization(&[0x22; 32]);
+        let environment =
+            serialized_environment(&[atom_serialization(b"captured"), pair, bytes32], None);
+
+        let mut collection = DebugMetadataCollection::default();
+        collection
+            .insert(&artifact.metadata)
+            .expect("insert metadata");
+        let symbolized = collection
+            .symbolize_serialized_frame(&SerializedFrame {
+                program: function_program,
+                environment,
+            })
+            .expect("captured frame must not fail destructured binding");
+        assert_eq!(
+            symbolized
+                .frame
+                .arguments
+                .iter()
+                .map(|argument| argument.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["N", "P", "B"]
+        );
+        let rendered = format_stack_frame(
+            collection
+                .get(symbolized.metadata_index.expect("metadata index"))
+                .expect("metadata"),
+            &symbolized.frame,
+            StackFrameStyle::Python,
+        )
+        .expect("render captured frame");
+        assert!(
+            rendered.starts_with("destructured(N: integer = 5, P: pair = (l . 8), B: bytes[32] = ")
+        );
+        assert!(
+            !rendered.contains("frame value does not match destructured parameter"),
+            "{rendered}"
+        );
+
+        let malformed = collection
+            .symbolize_serialized_frame(&SerializedFrame {
+                program: shadow_bytes(
+                    function_shadow(&collection.get(0).expect("metadata").tree, function_index)
+                        .expect("function program"),
+                ),
+                environment: serialized_environment(
+                    &[
+                        atom_serialization(b"captured"),
+                        atom_serialization(b"not-a-pair"),
+                        atom_serialization(&[0x22; 32]),
+                    ],
+                    None,
+                ),
+            })
+            .unwrap_err();
+        assert_eq!(
+            malformed,
+            "frame value does not match destructured parameter"
+        );
+    }
+
+    #[test]
+    fn captured_environment_preserves_proper_and_improper_rest_values() {
+        let source = "(c A REST)";
+        let program = parse_sexp(Srcloc::start("rest.clsp"), source.bytes())
+            .expect("parse rest fixture")
+            .remove(0);
+        let hash = tree_hash_hex(program.as_ref());
+        let symbols = HashMap::from([
+            (hash.clone(), "resty".to_string()),
+            (format!("{hash}_arguments"), "(A . REST)".to_string()),
+        ]);
+        let sources = HashMap::from([("rest.clsp".to_string(), source.to_string())]);
+        let metadata = DebugMetadata::from_program(program.as_ref(), &symbols, &sources)
+            .expect("rest metadata");
+        let program = serialize_program(program.as_ref()).expect("rest program");
+        let mut collection = DebugMetadataCollection::default();
+        collection
+            .insert_metadata(metadata)
+            .expect("insert rest metadata");
+
+        let proper = collection
+            .symbolize_serialized_frame(&SerializedFrame {
+                program: program.clone(),
+                environment: serialized_sexp("(42 43 44)"),
+            })
+            .expect("proper environment");
+        assert_eq!(
+            render_clvm_value(&proper.frame.arguments[1].value).unwrap(),
+            "(43 44)"
+        );
+
+        let improper = collection
+            .symbolize_serialized_frame(&SerializedFrame {
+                program,
+                environment: serialized_sexp("(42 43 . 44)"),
+            })
+            .expect("improper environment");
+        assert_eq!(
+            render_clvm_value(&improper.frame.arguments[1].value).unwrap(),
+            "(43 . 44)"
+        );
+    }
+
+    #[test]
+    fn stack_formatting_keeps_unknown_frames_and_marks_older_omissions() {
+        let (program, symbols, sources) = fixture();
+        let metadata = DebugMetadata::from_program(&program, &symbols, &sources).expect("metadata");
+        let known = SerializedFrame {
+            program: serialize_program(&program).expect("known program"),
+            environment: serialized_sexp("(5 6)"),
+        };
+        let unknown = SerializedFrame {
+            program: serialized_sexp("(- 9 3)"),
+            environment: serialized_sexp("()"),
+        };
+        let mut collection = DebugMetadataCollection::default();
+        collection
+            .insert_metadata(metadata)
+            .expect("insert metadata");
+
+        let rendered = collection
+            .format_captured_stack(&[known.clone(), unknown, known], 2, StackFrameStyle::Python)
+            .expect("partial stack");
+        assert!(rendered.starts_with("<... 2 older frames omitted ...>\n"));
+        let first = rendered.find("fixture(").expect("oldest known frame");
+        let unknown = rendered.find("<unknown:").expect("unknown fallback");
+        let newest = rendered.rfind("fixture(").expect("newest known frame");
+        assert!(first < unknown && unknown < newest, "{rendered}");
     }
 
     #[test]
