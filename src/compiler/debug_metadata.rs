@@ -36,7 +36,7 @@ use crate::classic::clvm::serialize::{sexp_from_stream, sexp_to_stream, SimpleCr
 use crate::classic::clvm_tools::binutils::disassemble_with_kw;
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 use crate::compiler::clvm::convert_to_clvm_rs;
-use crate::compiler::compiler::compile_file;
+use crate::compiler::compiler::{compile_file, is_at_capture};
 use crate::compiler::comptypes::{
     CompileErr, CompilerOpts, CompilerOutput, HasCompilerOptsDelegation,
 };
@@ -598,6 +598,9 @@ fn build_parameter_shape(
     match formal.atomize() {
         SExp::Nil(_) => DebugParameter::Nil,
         SExp::Cons(_, left, right) => {
+            if let Some((_, substructure)) = is_at_capture(left.clone(), right.clone()) {
+                return build_parameter_shape(substructure.as_ref(), directions, state);
+            }
             directions.push(false);
             let left = build_parameter_shape(left.as_ref(), directions, state);
             directions.pop();
@@ -3071,6 +3074,48 @@ mod tests {
         assert_eq!(
             malformed,
             "frame value does not match destructured parameter"
+        );
+    }
+
+    #[test]
+    fn captured_environment_decodes_nested_at_capture_parameters() {
+        let source = indoc! {"
+            (mod (@ ALL_ARGS ((@ CURRIED_ARGS (MOVE OTHER)) . REST))
+              (include *standard-cl-23*)
+              (if MOVE OTHER (f REST)))
+        "};
+        let opts: Rc<dyn CompilerOpts> = Rc::new(
+            crate::compiler::compiler::DefaultCompilerOpts::new("captured-at.clsp"),
+        );
+        let artifact = compile_with_debug(opts, source)
+            .expect("compile at-capture metadata")
+            .remove(0);
+        let mut collection = DebugMetadataCollection::default();
+        collection
+            .insert(&artifact.metadata)
+            .expect("insert metadata");
+
+        let symbolized = collection
+            .symbolize_serialized_frame(&SerializedFrame {
+                program: artifact.program,
+                environment: serialized_sexp("((move other) rest-one . rest-tail)"),
+            })
+            .expect("nested at-capture formals must decode their structural values");
+        assert_eq!(
+            symbolized
+                .frame
+                .arguments
+                .iter()
+                .map(|argument| (
+                    argument.name.as_str(),
+                    render_clvm_value(&argument.value).expect("render argument")
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("MOVE", "\"move\"".to_string()),
+                ("OTHER", "\"other\"".to_string()),
+                ("REST", "(\"rest-one\" . \"rest-tail\")".to_string()),
+            ]
         );
     }
 
