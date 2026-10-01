@@ -207,8 +207,8 @@ dependencies = [
 
 [[package]]
 name = "clvmr"
-version = "0.21.0"
-source = "git+https://github.com/Chia-Network/clvm_rs.git?rev=960f9632f11affa52a68d391ba074d4c03a56065#960f9632f11affa52a68d391ba074d4c03a56065"
+version = "0.17.7"
+source = "git+https://github.com/Chia-Network/clvm_rs.git?rev=22d51cd739398e34ed3cab901b6ad721d12c9c1d#22d51cd739398e34ed3cab901b6ad721d12c9c1d"
 dependencies = [
  "bitflags",
  "bitvec",

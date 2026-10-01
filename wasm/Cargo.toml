@@ -18,7 +18,7 @@ path = "src/mod.rs"
 
 [dependencies]
 chialisp = { path= "..", features = [] }
-clvmr = { git = "https://github.com/Chia-Network/clvm_rs.git", rev = "960f9632f11affa52a68d391ba074d4c03a56065", features = ["pre-eval"] }
+clvmr = { git = "https://github.com/Chia-Network/clvm_rs.git", rev = "22d51cd739398e34ed3cab901b6ad721d12c9c1d", features = ["pre-eval"] }
 wasm-bindgen = "=0.2.101"
 js-sys = "0.3.78"
 num-bigint = "0.4.0"
