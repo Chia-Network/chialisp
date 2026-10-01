@@ -1712,9 +1712,9 @@ fn collect_debug_node_identities(node: &DebugNode, identities: &mut HashSet<[u8;
     identity
 }
 
-fn decode_serialized_environment(
-    environment: &[u8],
-) -> Result<(Vec<Vec<u8>>, Option<Vec<u8>>), String> {
+type DecodedEnvironment = (Vec<Vec<u8>>, Option<Vec<u8>>);
+
+fn decode_serialized_environment(environment: &[u8]) -> Result<DecodedEnvironment, String> {
     let mut allocator = Allocator::new();
     let mut cursor = decode_clvm(&mut allocator, environment, "frame environment")?;
     let mut arguments = Vec::new();
