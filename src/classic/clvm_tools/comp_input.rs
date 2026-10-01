@@ -8,6 +8,7 @@ use crate::classic::clvm::serialize::{sexp_from_stream, SimpleCreateCLVMObject};
 use crate::classic::platform::argparse::ArgumentValue;
 
 use crate::classic::clvm_tools::binutils::assemble_from_ir;
+use crate::classic::clvm_tools::clvmc::compiler_opts_for_dialect;
 use crate::classic::clvm_tools::ir::r#type::NEW_BIT_CONSTANTS;
 use crate::classic::clvm_tools::ir::reader::read_ir;
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
@@ -179,18 +180,10 @@ impl RunAndCompileInputData {
             Vec::new()
         };
 
-        let mut opts: Rc<dyn CompilerOpts> =
-            Rc::new(DefaultCompilerOpts::new(&program.use_filename()))
-                .set_dialect(dialect.clone())
-                .set_search_paths(&search_paths)
-                .set_optimize(do_optimize)
-                .set_disassembly_ver(get_disassembly_ver(parsed_args));
-
-        if let Some(stepping) = dialect.stepping {
-            opts = opts
-                .set_optimize(do_optimize || stepping > 22)
-                .set_frontend_opt(stepping == 22);
-        }
+        let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(&program.use_filename()))
+            .set_search_paths(&search_paths)
+            .set_disassembly_ver(get_disassembly_ver(parsed_args));
+        let opts = compiler_opts_for_dialect(opts, dialect.clone(), do_optimize);
 
         let symbol_table_output = parsed_args
             .get("symbol_output_file")
