@@ -2411,10 +2411,15 @@ pub fn format_stack_frame(
                     "^".repeat(width)
                 ),
                 StackFrameStyle::Python => format!(
-                    "File \"{}\", line {}, column {}, {output}\n  {}\n  {}{}",
+                    "File \"{}\", line {}, column {}{}\n  {}\n  {}{}",
                     file.path,
                     span.start_line,
                     span.start_column,
+                    if frame.function.is_none() {
+                        String::new()
+                    } else {
+                        format!(", {output}")
+                    },
                     expanded.trim_start_matches(' '),
                     " ".repeat(
                         span.start_column.saturating_sub(
@@ -3418,6 +3423,38 @@ mod tests {
                 .expect("render value"),
             "(\"hello\" . 5)"
         );
+    }
+
+    #[test]
+    fn source_mapped_expressions_render_without_call_labels_or_parameters() {
+        let source = "(f X)";
+        let program = parse_sexp(Srcloc::start("leaf.clsp"), source.bytes())
+            .unwrap()
+            .remove(0);
+        let sources = HashMap::from([("leaf.clsp".to_string(), source.to_string())]);
+        let metadata = DebugMetadata::from_program(&program, &HashMap::new(), &sources).unwrap();
+        let frame = metadata
+            .symbolize_frame(&serialize_program(&program).unwrap(), &[vec![5]])
+            .unwrap();
+        assert!(frame.function.is_none());
+        assert!(frame.arguments.is_empty());
+        let rendered = format_stack_frame(&metadata, &frame, StackFrameStyle::Python).unwrap();
+        assert!(
+            rendered.starts_with("File \"leaf.clsp\", line 1, column "),
+            "{rendered}"
+        );
+        assert!(rendered.contains("\n  (f X)\n  ^"), "{rendered}");
+        assert_eq!(rendered.lines().count(), 3, "{rendered}");
+        assert!(
+            !rendered.contains("in ") && !rendered.contains("<unknown:"),
+            "{rendered}"
+        );
+
+        let mut without_location = frame.clone();
+        without_location.source_span = None;
+        let fallback =
+            format_stack_frame(&metadata, &without_location, StackFrameStyle::Python).unwrap();
+        assert!(fallback.starts_with("in <unknown:"), "{fallback}");
     }
 
     #[test]
