@@ -1218,7 +1218,8 @@ impl DebugMetadataCollection {
         style: StackFrameStyle,
     ) -> Result<String, String> {
         const MAX_FRAMES: usize = 100;
-        let mut rendered: Vec<String> = Vec::with_capacity(MAX_FRAMES);
+        // Each displayed entry retains the number of calls it represents.
+        let mut rendered: Vec<(String, usize)> = Vec::with_capacity(MAX_FRAMES);
         let mut omitted = omitted;
         let mut repeated = 0;
         let mut previous_captured: Option<&SerializedFrame> = None;
@@ -1256,7 +1257,9 @@ impl DebugMetadataCollection {
             }
             if repeated != 0 {
                 if let Some(last) = rendered.last_mut() {
-                    last.push_str(&format!("\n<... {repeated} identical frames repeated ...>"));
+                    last.0
+                        .push_str(&format!("\n<... {repeated} identical frames repeated ...>"));
+                    last.1 += repeated;
                 }
                 repeated = 0;
             }
@@ -1265,30 +1268,38 @@ impl DebugMetadataCollection {
             } else {
                 format_unknown_stack_frame(&symbolized.frame, style)
             };
-            rendered.push(frame);
+            rendered.push((frame, 1));
             previous_location = location;
             previous_expression = expression;
             previous_captured = Some(captured);
             if rendered.len() > MAX_FRAMES {
-                rendered.remove(0);
-                omitted += 1;
+                omitted += rendered.remove(0).1;
             }
         }
         if repeated != 0 {
             if let Some(last) = rendered.last_mut() {
-                last.push_str(&format!("\n<... {repeated} identical frames repeated ...>"));
+                last.0
+                    .push_str(&format!("\n<... {repeated} identical frames repeated ...>"));
+                last.1 += repeated;
             }
         }
         if omitted != 0 {
             rendered.insert(
                 0,
-                format!(
-                    "<... {omitted} older frame{} omitted ...>",
-                    if omitted == 1 { "" } else { "s" }
+                (
+                    format!(
+                        "<... {omitted} older frame{} omitted ...>",
+                        if omitted == 1 { "" } else { "s" }
+                    ),
+                    0,
                 ),
             );
         }
-        Ok(rendered.join("\n"))
+        Ok(rendered
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect::<Vec<_>>()
+            .join("\n"))
     }
 }
 
@@ -3746,6 +3757,34 @@ mod tests {
         );
         assert!(rendered.find("X = 203").unwrap() < rendered.find("X = 204").unwrap());
         assert!(!rendered.contains("identical frames repeated"));
+    }
+
+    #[test]
+    fn captured_stack_counts_omitted_repeated_calls() {
+        let (program, symbols, sources) = fixture();
+        let mut collection = DebugMetadataCollection::default();
+        collection
+            .insert_metadata(DebugMetadata::from_program(&program, &symbols, &sources).unwrap())
+            .unwrap();
+        let call = SerializedFrame {
+            program: serialize_program(&program).unwrap(),
+            environment: serialized_sexp("(5 6)"),
+        };
+        let mut frames = vec![call; 4];
+        frames.extend((100..200).map(|value| SerializedFrame {
+            program: serialize_program(&program).unwrap(),
+            environment: serialized_sexp(&format!("({value} 6)")),
+        }));
+        let rendered = collection
+            .format_captured_stack(&frames, 2, StackFrameStyle::Python)
+            .unwrap();
+        assert_eq!(rendered.matches("File ").count(), 100);
+        assert!(
+            rendered.starts_with("<... 6 older frames omitted ...>"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("identical frames repeated"));
+        assert!(rendered.contains("X = 199"));
     }
 
     #[test]
