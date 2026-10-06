@@ -1217,13 +1217,11 @@ impl DebugMetadataCollection {
         omitted: usize,
         style: StackFrameStyle,
     ) -> Result<String, String> {
-        let mut rendered = Vec::with_capacity(frames.len() + usize::from(omitted != 0));
-        if omitted != 0 {
-            rendered.push(format!(
-                "<... {omitted} older frame{} omitted ...>",
-                if omitted == 1 { "" } else { "s" }
-            ));
-        }
+        const MAX_FRAMES: usize = 100;
+        let mut rendered: Vec<String> = Vec::with_capacity(MAX_FRAMES);
+        let mut omitted = omitted;
+        let mut repeated = 0;
+        let mut previous_captured: Option<&SerializedFrame> = None;
         let mut owner = None;
         let mut previous_location = None;
         let mut previous_expression = false;
@@ -1242,6 +1240,26 @@ impl DebugMetadataCollection {
                     continue;
                 }
             }
+            // Compare complete captured values, never abbreviated display text.
+            // Identical recursive calls remain visible as a repetition count.
+            if !expression
+                && !previous_expression
+                && location == previous_location
+                && symbolized.frame.function.is_some()
+                && previous_captured.is_some_and(|previous| {
+                    previous.program == captured.program
+                        && previous.environment == captured.environment
+                })
+            {
+                repeated += 1;
+                continue;
+            }
+            if repeated != 0 {
+                if let Some(last) = rendered.last_mut() {
+                    last.push_str(&format!("\n<... {repeated} identical frames repeated ...>"));
+                }
+                repeated = 0;
+            }
             let frame = if let Some(index) = symbolized.metadata_index {
                 format_stack_frame(&self.entries[index], &symbolized.frame, style)?
             } else {
@@ -1250,6 +1268,25 @@ impl DebugMetadataCollection {
             rendered.push(frame);
             previous_location = location;
             previous_expression = expression;
+            previous_captured = Some(captured);
+            if rendered.len() > MAX_FRAMES {
+                rendered.remove(0);
+                omitted += 1;
+            }
+        }
+        if repeated != 0 {
+            if let Some(last) = rendered.last_mut() {
+                last.push_str(&format!("\n<... {repeated} identical frames repeated ...>"));
+            }
+        }
+        if omitted != 0 {
+            rendered.insert(
+                0,
+                format!(
+                    "<... {omitted} older frame{} omitted ...>",
+                    if omitted == 1 { "" } else { "s" }
+                ),
+            );
         }
         Ok(rendered.join("\n"))
     }
@@ -2305,28 +2342,64 @@ pub fn render_clvm_value(serialized: &[u8]) -> Result<String, String> {
 
 /// Render two list levels of a call parameter, abbreviating deeper pairs.
 fn render_stack_argument(serialized: &[u8]) -> Result<String, String> {
-    fn render(allocator: &Allocator, mut value: NodePtr, depth: usize) -> String {
-        let keywords = keyword_from_atom(crate::classic::clvm::OPERATORS_LATEST_VERSION);
+    const MAX_ITEMS: usize = 100;
+    const MAX_ATOM_CHARS: usize = 100;
+    fn atom(allocator: &Allocator, value: NodePtr) -> String {
+        let bytes = allocator.atom(value);
+        // Bound disassembly itself as well as its output (hex and integers can
+        // expand). Never construct a display string from an unbounded atom.
+        let mut bounded = Allocator::new();
+        let prefix = bounded
+            .new_atom(&bytes.as_ref()[..bytes.as_ref().len().min(MAX_ATOM_CHARS)])
+            .unwrap();
+        let text = disassemble_with_kw(
+            &bounded,
+            prefix,
+            keyword_from_atom(crate::classic::clvm::OPERATORS_LATEST_VERSION),
+        );
+        if bytes.as_ref().len() <= MAX_ATOM_CHARS && text.chars().count() <= MAX_ATOM_CHARS {
+            return text;
+        }
+        let quoted = text.starts_with('"');
+        let prefix: String = text.chars().take(MAX_ATOM_CHARS).collect();
+        format!(
+            "{}...{}",
+            prefix.trim_end_matches('"'),
+            if quoted { "\"" } else { "" }
+        )
+    }
+    fn render(
+        allocator: &Allocator,
+        mut value: NodePtr,
+        depth: usize,
+        remaining: &mut usize,
+    ) -> String {
         if pair(allocator, value).is_none() {
-            return disassemble_with_kw(allocator, value, keywords);
+            return atom(allocator, value);
         }
         if depth == 0 {
             return "(...)".to_string();
         }
         let mut items = Vec::new();
         while let Some((item, rest)) = pair(allocator, value) {
-            items.push(render(allocator, item, depth - 1));
+            if *remaining == 0 {
+                items.push("...".to_string());
+                return format!("({})", items.join(" "));
+            }
+            *remaining -= 1;
+            items.push(render(allocator, item, depth - 1, remaining));
             value = rest;
         }
         if !allocator.atom(value).as_ref().is_empty() {
             items.push(".".to_string());
-            items.push(disassemble_with_kw(allocator, value, keywords));
+            items.push(atom(allocator, value));
         }
         format!("({})", items.join(" "))
     }
     let mut allocator = Allocator::new();
     let value = decode_clvm(&mut allocator, serialized, "frame value")?;
-    Ok(render(&allocator, value, 2))
+    let mut remaining = MAX_ITEMS;
+    Ok(render(&allocator, value, 2, &mut remaining))
 }
 
 fn expand_tabs(line: &str) -> String {
@@ -2362,9 +2435,10 @@ pub fn format_stack_frame(
         .function
         .clone()
         .unwrap_or_else(|| format!("<unknown:{}>", hex::encode(frame.program_hash)));
-    let rendered_arguments = frame
+    let mut rendered_arguments = frame
         .arguments
         .iter()
+        .take(100)
         .map(|argument| {
             render_stack_argument(&argument.value).map(|value| match style {
                 StackFrameStyle::Lisp => {
@@ -2376,6 +2450,9 @@ pub fn format_stack_frame(
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if frame.arguments.len() > 100 {
+        rendered_arguments.push("...".to_string());
+    }
     let mut output = match style {
         StackFrameStyle::Lisp => {
             if rendered_arguments.is_empty() {
@@ -3479,8 +3556,26 @@ mod tests {
                 StackFrameStyle::Python,
             )
             .unwrap();
-        assert_eq!(rendered.matches("in fixture").count(), 3, "{rendered}");
-        assert_eq!(rendered.matches("X = 5").count(), 3, "{rendered}");
+        assert_eq!(rendered.matches("in fixture").count(), 1, "{rendered}");
+        assert!(
+            rendered.contains("2 identical frames repeated"),
+            "{rendered}"
+        );
+        assert_eq!(rendered.matches("X = 5").count(), 1, "{rendered}");
+        // Different complete arguments must not collapse merely because their
+        // bounded display has the same prefix.
+        let calls: Vec<_> = ["a", "b"]
+            .into_iter()
+            .map(|tail| SerializedFrame {
+                program: serialize_program(&program).unwrap(),
+                environment: serialized_sexp(&format!("(\"{}{tail}\" 6)", "x".repeat(150))),
+            })
+            .collect();
+        let rendered = collection
+            .format_captured_stack(&calls, 0, StackFrameStyle::Python)
+            .unwrap();
+        assert_eq!(rendered.matches("in fixture").count(), 2, "{rendered}");
+        assert!(!rendered.contains("identical frames repeated"));
     }
 
     #[test]
@@ -3598,6 +3693,59 @@ mod tests {
                 "{source}"
             );
         }
+    }
+
+    #[test]
+    fn stack_arguments_bound_wide_lists_and_long_atoms() {
+        let source = format!("({})", vec!["5"; 101].join(" "));
+        let rendered = render_stack_argument(&serialized_sexp(&source)).unwrap();
+        assert_eq!(rendered.matches("5").count(), 100);
+        assert!(rendered.ends_with(" ...)"));
+        let exact = format!("({})", vec!["5"; 100].join(" "));
+        assert!(!render_stack_argument(&serialized_sexp(&exact))
+            .unwrap()
+            .contains("..."));
+        for source in [
+            format!("\"{}\"", "a".repeat(1000)),
+            format!("0x{}", "ff".repeat(1000)),
+        ] {
+            let rendered = render_stack_argument(&serialized_sexp(&source)).unwrap();
+            assert!(rendered.contains("..."), "{rendered}");
+            assert!(rendered.chars().count() <= 104, "{rendered}");
+        }
+        let source = format!(
+            "(({}) ({}))",
+            vec!["5"; 60].join(" "),
+            vec!["6"; 60].join(" ")
+        );
+        let rendered = render_stack_argument(&serialized_sexp(&source)).unwrap();
+        assert!(rendered.contains("..."), "{rendered}");
+        assert!(rendered.matches('5').count() + rendered.matches('6').count() <= 100);
+    }
+
+    #[test]
+    fn captured_stack_bounds_depth_and_keeps_differing_recursive_parameters() {
+        let (program, symbols, sources) = fixture();
+        let mut collection = DebugMetadataCollection::default();
+        collection
+            .insert_metadata(DebugMetadata::from_program(&program, &symbols, &sources).unwrap())
+            .unwrap();
+        let frames: Vec<_> = (100..205)
+            .map(|value| SerializedFrame {
+                program: serialize_program(&program).unwrap(),
+                environment: serialized_sexp(&format!("({value} 6)")),
+            })
+            .collect();
+        let rendered = collection
+            .format_captured_stack(&frames, 2, StackFrameStyle::Python)
+            .unwrap();
+        assert_eq!(rendered.matches("File ").count(), 100);
+        assert!(
+            rendered.starts_with("<... 7 older frames omitted ...>"),
+            "{rendered}"
+        );
+        assert!(rendered.find("X = 203").unwrap() < rendered.find("X = 204").unwrap());
+        assert!(!rendered.contains("identical frames repeated"));
     }
 
     #[test]
