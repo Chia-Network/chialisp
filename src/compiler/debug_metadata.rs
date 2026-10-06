@@ -35,7 +35,7 @@ use crate::classic::clvm::keyword_from_atom;
 use crate::classic::clvm::serialize::{sexp_from_stream, sexp_to_stream, SimpleCreateCLVMObject};
 use crate::classic::clvm_tools::binutils::disassemble_with_kw;
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
-use crate::compiler::clvm::convert_to_clvm_rs;
+use crate::compiler::clvm::{convert_to_clvm_rs, integer_atom_bytes};
 use crate::compiler::compiler::{compile_file, is_at_capture};
 use crate::compiler::comptypes::{
     CompileErr, CompilerOpts, CompilerOutput, HasCompilerOptsDelegation,
@@ -252,7 +252,7 @@ fn atom_bytes(value: &SExp) -> Vec<u8> {
     match value {
         SExp::Nil(_) => Vec::new(),
         SExp::Atom(_, value) | SExp::QuotedString(_, _, value) => value.clone(),
-        SExp::Integer(_, value) => u8_from_number(value.clone()),
+        SExp::Integer(_, value) => integer_atom_bytes(value),
         SExp::Cons(_, _, _) => unreachable!("pair passed to atom_bytes"),
     }
 }
@@ -1121,11 +1121,19 @@ impl DebugMetadataCollection {
     }
 
     /// Select a sidecar and symbolize a serialized evaluator frame. A
-    /// nonmatching frame is returned as unknown; malformed data for a frame
-    /// that matches an indexed sidecar remains an error.
+    /// Nonmatching or ambiguous shared-subtree frames are returned as unknown;
+    /// malformed data for a uniquely matched sidecar remains an error.
     pub fn symbolize_serialized_frame(
         &self,
         captured: &SerializedFrame,
+    ) -> Result<SymbolizedSerializedFrame, String> {
+        self.symbolize_serialized_frame_with_owner(captured, None)
+    }
+
+    fn symbolize_serialized_frame_with_owner(
+        &self,
+        captured: &SerializedFrame,
+        owner: Option<usize>,
     ) -> Result<SymbolizedSerializedFrame, String> {
         let mut allocator = Allocator::new();
         let program = decode_clvm(&mut allocator, &captured.program, "frame program")?;
@@ -1134,25 +1142,18 @@ impl DebugMetadataCollection {
 
         let mut candidates = Vec::new();
         let mut seen = HashSet::new();
-        let serialized_identity: [u8; 32] = Sha256::digest(&captured.program).into();
-        if let Some(index) = self.program_identities.get(&serialized_identity) {
-            let metadata = &self.entries[*index];
-            let frame = metadata.symbolize_frame_with_environment(
-                &captured.program,
-                &runtime_arguments,
-                runtime_tail.as_deref(),
-            )?;
-            if frame.matched == FrameMatch::Unknown {
-                return Err("debug metadata program structure mismatch".to_string());
-            }
-            return Ok(SymbolizedSerializedFrame {
-                metadata_index: Some(*index),
-                frame,
-            });
-        }
-
+        let mut program_owner = None;
         let mut current = program;
         loop {
+            // Full program identities, including canonical curry bases, take
+            // precedence over an ancestor's owner or shared subtree identities.
+            let bytes = node_to_bytes(&allocator, current)
+                .map_err(|error| format!("cannot serialize frame program: {error:?}"))?;
+            let serialized_identity: [u8; 32] = Sha256::digest(&bytes).into();
+            if let Some(index) = self.program_identities.get(&serialized_identity) {
+                program_owner = Some(*index);
+                break;
+            }
             let identity = clvm_tree_hash(&mut allocator, current)?;
             if let Some(indices) = self.structural_identities.get(&identity) {
                 for index in indices {
@@ -1167,8 +1168,12 @@ impl DebugMetadataCollection {
             current = base;
         }
 
-        let mut matched_error = None;
-        for index in candidates {
+        // A subtree such as environment path 5 occurs in many programs. Without
+        // an owning ancestor, choosing its first sidecar invents a location.
+        let selected = program_owner
+            .or_else(|| owner.filter(|index| candidates.contains(index)))
+            .or_else(|| (candidates.len() == 1).then(|| candidates[0]));
+        if let Some(index) = selected {
             let metadata = &self.entries[index];
             match metadata.symbolize_frame_with_environment(
                 &captured.program,
@@ -1182,13 +1187,11 @@ impl DebugMetadataCollection {
                     });
                 }
                 Ok(_) => {}
-                Err(error) => {
-                    matched_error.get_or_insert(error);
-                }
+                Err(error) => return Err(error),
             }
-        }
-        if let Some(error) = matched_error {
-            return Err(error);
+            if program_owner.is_some() {
+                return Err("debug metadata program structure mismatch".to_string());
+            }
         }
 
         Ok(SymbolizedSerializedFrame {
@@ -1221,14 +1224,32 @@ impl DebugMetadataCollection {
                 if omitted == 1 { "" } else { "s" }
             ));
         }
-        for captured in frames {
-            let symbolized = self.symbolize_serialized_frame(captured)?;
+        let mut owner = None;
+        let mut previous_location = None;
+        let mut previous_expression = false;
+        for (position, captured) in frames.iter().enumerate() {
+            let symbolized = self.symbolize_serialized_frame_with_owner(captured, owner)?;
+            if symbolized.metadata_index.is_some() {
+                owner = symbolized.metadata_index;
+            }
+            let location = symbolized.metadata_index.zip(symbolized.frame.source_span);
+            let expression = symbolized.frame.function.is_none() && location.is_some();
+            if expression && location == previous_location {
+                if previous_expression {
+                    // Keep the deepest expression, including the actual leaf.
+                    rendered.pop();
+                } else if position + 1 != frames.len() {
+                    continue;
+                }
+            }
             let frame = if let Some(index) = symbolized.metadata_index {
                 format_stack_frame(&self.entries[index], &symbolized.frame, style)?
             } else {
                 format_unknown_stack_frame(&symbolized.frame, style)
             };
             rendered.push(frame);
+            previous_location = location;
+            previous_expression = expression;
         }
         Ok(rendered.join("\n"))
     }
@@ -2616,6 +2637,51 @@ mod tests {
     }
 
     #[test]
+    fn integer_zero_metadata_preserves_active_conversion_and_explicit_atoms() {
+        for modern in [true, false] {
+            let _conversion = crate::compiler::clvm::NewStyleIntConversion::new(modern);
+            let location = Srcloc::start("zero.clsp");
+            let sources = HashMap::from([("zero.clsp".to_string(), "0".to_string())]);
+            let integer = SExp::Integer(location.clone(), 0.to_bigint().expect("zero"));
+            let explicit_atom = SExp::Atom(location, vec![0]);
+            for (program, expected_bytes) in [
+                (&integer, if modern { vec![0x80] } else { vec![0] }),
+                (&explicit_atom, vec![0]),
+            ] {
+                let program_bytes = serialize_program(program).expect("serialize zero");
+                assert_eq!(program_bytes, expected_bytes);
+                let metadata = DebugMetadata::from_program_bytes(
+                    program,
+                    &program_bytes,
+                    &HashMap::new(),
+                    &sources,
+                )
+                .expect("build zero metadata");
+                let decoded = DebugMetadata::decode(&metadata.encode().expect("encode zero"))
+                    .expect("decode zero metadata");
+                decoded.verify_program(&program_bytes).expect("verify zero");
+                let frame = decoded
+                    .symbolize_frame(&program_bytes, &[])
+                    .expect("symbolize zero");
+                assert_eq!(frame.matched, FrameMatch::Exact);
+                assert_eq!(hex::encode(frame.program_hash), tree_hash_hex(program));
+                let mut symbols = HashMap::new();
+                let legacy_hash =
+                    crate::compiler::debug::build_symbol_table_mut(&mut symbols, program);
+                assert_eq!(legacy_hash.hex(), tree_hash_hex(program));
+                let mut indexed_symbols = HashMap::new();
+                ProgramIndex::new(program).build_symbol_table(&mut indexed_symbols);
+                assert_eq!(symbols, indexed_symbols);
+            }
+            if modern {
+                assert_ne!(tree_hash_hex(&integer), tree_hash_hex(&explicit_atom));
+            } else {
+                assert_eq!(tree_hash_hex(&integer), tree_hash_hex(&explicit_atom));
+            }
+        }
+    }
+
+    #[test]
     fn structural_metadata_round_trips_and_verifies_exact_program() {
         let (program, mut symbols, sources) = fixture();
         let absent_hash = "00".repeat(32);
@@ -3243,6 +3309,178 @@ mod tests {
         let unknown = rendered.find("<unknown:").expect("unknown fallback");
         let newest = rendered.rfind("in fixture").expect("newest known frame");
         assert!(first < unknown && unknown < newest, "{rendered}");
+    }
+
+    fn captured_cl26_failure(
+        filename: &str,
+        source: &str,
+    ) -> (DebugCompileArtifact, Vec<SerializedFrame>) {
+        #[derive(Clone)]
+        struct CaptureOpts(Rc<dyn CompilerOpts>);
+        impl HasCompilerOptsDelegation for CaptureOpts {
+            fn compiler_opts(&self) -> Rc<dyn CompilerOpts> {
+                self.0.clone()
+            }
+            fn update_compiler_opts<F: FnOnce(Rc<dyn CompilerOpts>) -> Rc<dyn CompilerOpts>>(
+                &self,
+                f: F,
+            ) -> Rc<dyn CompilerOpts> {
+                Rc::new(Self(f(self.0.clone())))
+            }
+            fn override_write_new_file(
+                &self,
+                _target: &str,
+                _content: &[u8],
+            ) -> Result<(), CompileErr> {
+                Ok(())
+            }
+        }
+        let opts = Rc::new(CaptureOpts(
+            crate::compiler::compiler::DefaultCompilerOpts::new(filename).set_search_paths(&[
+                format!("{}/resources/tests/module", env!("CARGO_MANIFEST_DIR")),
+            ]),
+        ));
+        let artifact = compile_with_debug(opts, source)
+            .expect("compile captured CL26 fixture")
+            .into_iter()
+            .find(|artifact| artifact.export_name.as_deref() == Some("program"))
+            .expect("program export");
+        let mut allocator = Allocator::new();
+        let program = decode_clvm(&mut allocator, &artifact.program, "fixture").unwrap();
+        let environment = allocator.nil();
+        let failure = clvm_rs::run_program_with_diagnostics(
+            &mut allocator,
+            &clvm_rs::chia_dialect::ChiaDialect::new(clvm_rs::chia_dialect::ClvmFlags::empty()),
+            program,
+            environment,
+            1_000_000,
+            64,
+        )
+        .expect_err("fixture fails while accessing X");
+        let frames = failure
+            .frames
+            .into_iter()
+            .map(|frame| SerializedFrame {
+                program: node_to_bytes(&allocator, frame.program).unwrap(),
+                environment: node_to_bytes(&allocator, frame.environment).unwrap(),
+            })
+            .collect();
+        (artifact, frames)
+    }
+
+    #[test]
+    fn captured_stack_collapses_expression_steps_but_keeps_call_and_leaf() {
+        let (artifact, frames) = captured_cl26_failure(
+            "right.clsp",
+            "(include *standard-cl-26*) (defun fail (Y) (f Y)) (export (X) (fail X))",
+        );
+        assert_eq!(frames.len(), 5, "raw evaluator capture remains unchanged");
+        let mut collection = DebugMetadataCollection::default();
+        collection.insert(&artifact.metadata).unwrap();
+        let rendered = collection
+            .format_captured_stack(&frames, 0, StackFrameStyle::Python)
+            .unwrap();
+        assert_eq!(rendered.matches("File ").count(), 2, "{rendered}");
+        assert!(rendered.contains("column 64, in <main>\n"), "{rendered}");
+        assert!(rendered.contains("column 69\n"), "{rendered}");
+        let leaf = rendered.rsplit("File ").next().unwrap();
+        assert!(!leaf.contains("in ") && !leaf.contains(" = "), "{leaf}");
+    }
+
+    #[test]
+    fn captured_stack_uses_owning_program_for_shared_expression_locations() {
+        let (right, frames) = captured_cl26_failure(
+            "right.clsp",
+            "(include *standard-cl-26*) (defun fail (Y) (f Y)) (export (X) (fail X))",
+        );
+        let (wrong, _) = captured_cl26_failure(
+            "wrong.clsp",
+            "(include *standard-cl-26*) (export (A B) (+ A B))",
+        );
+        for metadata in [
+            [&wrong.metadata, &right.metadata],
+            [&right.metadata, &wrong.metadata],
+        ] {
+            let mut collection = DebugMetadataCollection::default();
+            for sidecar in metadata {
+                collection.insert(sidecar).unwrap();
+            }
+            let leaf = frames.last().unwrap();
+            assert_eq!(
+                collection
+                    .symbolize_serialized_frame(leaf)
+                    .unwrap()
+                    .frame
+                    .matched,
+                FrameMatch::Unknown,
+                "shared paths have no source owner without ancestor context"
+            );
+            let rendered = collection
+                .format_captured_stack(&frames, 0, StackFrameStyle::Python)
+                .unwrap();
+            assert!(!rendered.contains("wrong.clsp"), "{rendered}");
+            assert!(
+                rendered.contains("File \"right.clsp\", line 1, column 69\n"),
+                "{rendered}"
+            );
+
+            // A trusted outer owner must switch when the next program is a
+            // canonical curry of a different registered root.
+            let curried = {
+                let mut allocator = Allocator::new();
+                let base = decode_clvm(&mut allocator, &right.program, "right program").unwrap();
+                let quoted = allocator.new_pair(allocator.one(), base).unwrap();
+                let args = allocator
+                    .new_pair(allocator.one(), allocator.nil())
+                    .unwrap();
+                let tail = allocator.new_pair(quoted, args).unwrap();
+                let apply = allocator.new_atom(&[2]).unwrap();
+                let program = allocator.new_pair(apply, tail).unwrap();
+                node_to_bytes(&allocator, program).unwrap()
+            };
+            // No bound arguments: (a (q . ROOT) 1).
+            let mut switched = vec![
+                SerializedFrame {
+                    program: wrong.program.clone(),
+                    environment: serialized_sexp("(1 2)"),
+                },
+                SerializedFrame {
+                    program: curried,
+                    environment: serialized_sexp("()"),
+                },
+            ];
+            switched.extend_from_slice(&frames[1..]);
+            let rendered = collection
+                .format_captured_stack(&switched, 0, StackFrameStyle::Python)
+                .unwrap();
+            let leaf = rendered.rsplit("File ").next().unwrap();
+            assert!(
+                leaf.starts_with("\"right.clsp\", line 1, column 69\n"),
+                "{rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn captured_stack_preserves_identical_recursive_calls() {
+        let (program, symbols, sources) = fixture();
+        let mut collection = DebugMetadataCollection::default();
+        collection
+            .insert_metadata(DebugMetadata::from_program(&program, &symbols, &sources).unwrap())
+            .unwrap();
+        let call = SerializedFrame {
+            program: serialize_program(&program).unwrap(),
+            environment: serialized_sexp("(5 6)"),
+        };
+        let rendered = collection
+            .format_captured_stack(
+                &[call.clone(), call.clone(), call],
+                0,
+                StackFrameStyle::Python,
+            )
+            .unwrap();
+        assert_eq!(rendered.matches("in fixture").count(), 3, "{rendered}");
+        assert_eq!(rendered.matches("X = 5").count(), 3, "{rendered}");
     }
 
     #[test]
