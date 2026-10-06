@@ -2282,6 +2282,30 @@ pub fn render_clvm_value(serialized: &[u8]) -> Result<String, String> {
     ))
 }
 
+/// Render one level of a call parameter, abbreviating nested pairs.
+fn render_stack_argument(serialized: &[u8]) -> Result<String, String> {
+    let mut allocator = Allocator::new();
+    let mut value = decode_clvm(&mut allocator, serialized, "frame value")?;
+    let keywords = keyword_from_atom(crate::classic::clvm::OPERATORS_LATEST_VERSION);
+    if pair(&allocator, value).is_none() {
+        return Ok(disassemble_with_kw(&allocator, value, keywords));
+    }
+    let mut items = Vec::new();
+    while let Some((item, rest)) = pair(&allocator, value) {
+        items.push(if pair(&allocator, item).is_some() {
+            "(...)".to_string()
+        } else {
+            disassemble_with_kw(&allocator, item, keywords)
+        });
+        value = rest;
+    }
+    if !allocator.atom(value).as_ref().is_empty() {
+        items.push(".".to_string());
+        items.push(disassemble_with_kw(&allocator, value, keywords));
+    }
+    Ok(format!("({})", items.join(" ")))
+}
+
 fn expand_tabs(line: &str) -> String {
     let mut result = String::new();
     let mut column = 1usize;
@@ -2319,7 +2343,7 @@ pub fn format_stack_frame(
         .arguments
         .iter()
         .map(|argument| {
-            render_clvm_value(&argument.value).map(|value| match style {
+            render_stack_argument(&argument.value).map(|value| match style {
                 StackFrameStyle::Lisp => {
                     format!("({} {} {})", argument.name, argument.constraint, value)
                 }
@@ -2373,8 +2397,8 @@ pub fn format_stack_frame(
                     .saturating_sub(span.start_column - 1)
                     .max(1)
             };
-            output.push_str(&format!(
-                "\n  --> {}:{}:{}\n   |\n{:>3}| {}\n   | {}{}",
+            output = format!(
+                "--> {}:{}:{}\n   |\n{:>3}| {}\n   | {}{}\n{output}",
                 file.path,
                 span.start_line,
                 span.start_column,
@@ -2382,7 +2406,7 @@ pub fn format_stack_frame(
                 expanded,
                 " ".repeat(span.start_column - 1),
                 "^".repeat(width)
-            ));
+            );
         }
     }
     Ok(output)
@@ -3048,7 +3072,7 @@ mod tests {
         )
         .expect("render captured frame");
         assert!(
-            rendered.starts_with("destructured(N: integer = 5, P: pair = (l . 8), B: bytes[32] = ")
+            rendered.contains("destructured(N: integer = 5, P: pair = (7 . 8), B: bytes[32] = ")
         );
         assert!(
             !rendered.contains("frame value does not match destructured parameter"),
@@ -3281,6 +3305,32 @@ mod tests {
     }
 
     #[test]
+    fn stack_arguments_show_primitives_and_abbreviate_nested_pairs() {
+        for (source, expected) in [
+            ("()", "()"),
+            ("100", "100"),
+            ("\"hello\"", "\"hello\""),
+            ("(100 200 \"hello\")", "(100 200 \"hello\")"),
+            ("(5 6 7)", "(5 6 7)"),
+            ("(100 () 200)", "(100 () 200)"),
+            ("(100 (200 (300)) 400)", "(100 (...) 400)"),
+            ("((100 200))", "((...))"),
+            ("(100 . 200)", "(100 . 200)"),
+            ("((100) . 200)", "((...) . 200)"),
+        ] {
+            let value = parse_sexp(Srcloc::start("*value*"), source.bytes())
+                .expect("parse value")
+                .remove(0);
+            let serialized = serialize_program(value.as_ref()).expect("serialize value");
+            assert_eq!(
+                render_stack_argument(&serialized).unwrap(),
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn renders_brun_values_and_conventional_frames_with_source() {
         let source = "\t(+ X 1)";
         let program = parse_sexp(Srcloc::start("tabs.clsp"), source.bytes())
@@ -3300,14 +3350,35 @@ mod tests {
             .expect("frame");
         let python =
             format_stack_frame(&metadata, &frame, StackFrameStyle::Python).expect("python frame");
-        assert!(python.starts_with("tabbed(X: unknown = 5)"));
+        assert!(python.starts_with("--> tabs.clsp:1:8"));
+        assert!(python.contains("tabbed(X: unknown = 5)"));
         assert!(python.contains("--> tabs.clsp:1:8"), "{python}");
         assert!(python.contains("        (+ X 1)"));
         assert!(python.contains("        ^"));
 
         let lisp =
             format_stack_frame(&metadata, &frame, StackFrameStyle::Lisp).expect("lisp frame");
-        assert!(lisp.starts_with("(tabbed (X unknown 5))"));
+        assert!(lisp.contains("(tabbed (X unknown 5))"));
+
+        let nested = parse_sexp(Srcloc::start("*value*"), "(100 (200 300) 400)".bytes())
+            .expect("parse nested parameter")
+            .remove(0);
+        let mut nested_frame = frame.clone();
+        nested_frame.arguments[0].value = serialize_program(nested.as_ref()).unwrap();
+        for (style, expected) in [
+            (
+                StackFrameStyle::Python,
+                "tabbed(X: unknown = (100 (...) 400))",
+            ),
+            (
+                StackFrameStyle::Lisp,
+                "(tabbed (X unknown (100 (...) 400)))",
+            ),
+        ] {
+            let rendered = format_stack_frame(&metadata, &nested_frame, style).unwrap();
+            assert!(rendered.contains(expected), "{rendered}");
+            assert!(rendered.find("tabs.clsp:1:8").unwrap() < rendered.find("tabbed").unwrap());
+        }
 
         let value = parse_sexp(Srcloc::start("*value*"), "(hello . 5)".bytes())
             .expect("parse value")
@@ -3363,7 +3434,7 @@ mod tests {
         let rendered =
             format_stack_frame(&metadata, &frame, StackFrameStyle::Python).expect("render frame");
         assert!(
-            rendered.starts_with("fünc(参数: unknown = 0xe580bc)"),
+            rendered.contains("fünc(参数: unknown = 0xe580bc)"),
             "{rendered}"
         );
         assert!(rendered.contains("--> utf8.clsp:1:8"), "{rendered}");
@@ -3550,7 +3621,7 @@ mod tests {
         let rendered =
             format_stack_frame(&metadata, &frame, StackFrameStyle::Python).expect("render");
         assert!(
-            rendered.starts_with("destructured(N: integer = 5, P: pair = (l . 8), B: bytes[32] = "),
+            rendered.contains("destructured(N: integer = 5, P: pair = (7 . 8), B: bytes[32] = "),
             "{rendered}"
         );
     }
@@ -3702,7 +3773,7 @@ mod tests {
         let rendered =
             format_stack_frame(&metadata, &curried, StackFrameStyle::Python).expect("render");
         assert!(
-            rendered.starts_with("typed(N: integer = 5, P: pair = (l . 8), B: bytes[32] = "),
+            rendered.contains("typed(N: integer = 5, P: pair = (7 . 8), B: bytes[32] = "),
             "{rendered}"
         );
         assert!(rendered.contains("U: unknown = \"opaque\""));
