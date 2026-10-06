@@ -37,7 +37,7 @@ jobs:
       with:
         repository: Chia-Network/chia-gaming
         path: chia-gaming
-        ref: 283ae3a0dacc057161ed627ef958ccb9692bd727
+        ref: cdd85c6156b9a795f39201e28be857cc000fd436
 
     - name: Replace chialisp pkg in chia-gaming
       run: |
