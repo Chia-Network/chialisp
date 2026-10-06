@@ -2282,28 +2282,30 @@ pub fn render_clvm_value(serialized: &[u8]) -> Result<String, String> {
     ))
 }
 
-/// Render one level of a call parameter, abbreviating nested pairs.
+/// Render two list levels of a call parameter, abbreviating deeper pairs.
 fn render_stack_argument(serialized: &[u8]) -> Result<String, String> {
+    fn render(allocator: &Allocator, mut value: NodePtr, depth: usize) -> String {
+        let keywords = keyword_from_atom(crate::classic::clvm::OPERATORS_LATEST_VERSION);
+        if pair(allocator, value).is_none() {
+            return disassemble_with_kw(allocator, value, keywords);
+        }
+        if depth == 0 {
+            return "(...)".to_string();
+        }
+        let mut items = Vec::new();
+        while let Some((item, rest)) = pair(allocator, value) {
+            items.push(render(allocator, item, depth - 1));
+            value = rest;
+        }
+        if !allocator.atom(value).as_ref().is_empty() {
+            items.push(".".to_string());
+            items.push(disassemble_with_kw(allocator, value, keywords));
+        }
+        format!("({})", items.join(" "))
+    }
     let mut allocator = Allocator::new();
-    let mut value = decode_clvm(&mut allocator, serialized, "frame value")?;
-    let keywords = keyword_from_atom(crate::classic::clvm::OPERATORS_LATEST_VERSION);
-    if pair(&allocator, value).is_none() {
-        return Ok(disassemble_with_kw(&allocator, value, keywords));
-    }
-    let mut items = Vec::new();
-    while let Some((item, rest)) = pair(&allocator, value) {
-        items.push(if pair(&allocator, item).is_some() {
-            "(...)".to_string()
-        } else {
-            disassemble_with_kw(&allocator, item, keywords)
-        });
-        value = rest;
-    }
-    if !allocator.atom(value).as_ref().is_empty() {
-        items.push(".".to_string());
-        items.push(disassemble_with_kw(&allocator, value, keywords));
-    }
-    Ok(format!("({})", items.join(" ")))
+    let value = decode_clvm(&mut allocator, serialized, "frame value")?;
+    Ok(render(&allocator, value, 2))
 }
 
 fn expand_tabs(line: &str) -> String {
@@ -3313,10 +3315,10 @@ mod tests {
             ("(100 200 \"hello\")", "(100 200 \"hello\")"),
             ("(5 6 7)", "(5 6 7)"),
             ("(100 () 200)", "(100 () 200)"),
-            ("(100 (200 (300)) 400)", "(100 (...) 400)"),
-            ("((100 200))", "((...))"),
+            ("(100 (200 (300)) 400)", "(100 (200 (...)) 400)"),
+            ("((100 200))", "((100 200))"),
             ("(100 . 200)", "(100 . 200)"),
-            ("((100) . 200)", "((...) . 200)"),
+            ("((100) . 200)", "((100) . 200)"),
         ] {
             let value = parse_sexp(Srcloc::start("*value*"), source.bytes())
                 .expect("parse value")
@@ -3360,19 +3362,22 @@ mod tests {
             format_stack_frame(&metadata, &frame, StackFrameStyle::Lisp).expect("lisp frame");
         assert!(lisp.contains("(tabbed (X unknown 5))"));
 
-        let nested = parse_sexp(Srcloc::start("*value*"), "(100 (200 300) 400)".bytes())
-            .expect("parse nested parameter")
-            .remove(0);
+        let nested = parse_sexp(
+            Srcloc::start("*value*"),
+            "(100 (200 (300 400)) 500)".bytes(),
+        )
+        .expect("parse nested parameter")
+        .remove(0);
         let mut nested_frame = frame.clone();
         nested_frame.arguments[0].value = serialize_program(nested.as_ref()).unwrap();
         for (style, expected) in [
             (
                 StackFrameStyle::Python,
-                "tabbed(X: unknown = (100 (...) 400))",
+                "tabbed(X: unknown = (100 (200 (...)) 500))",
             ),
             (
                 StackFrameStyle::Lisp,
-                "(tabbed (X unknown (100 (...) 400)))",
+                "(tabbed (X unknown (100 (200 (...)) 500)))",
             ),
         ] {
             let rendered = format_stack_frame(&metadata, &nested_frame, style).unwrap();
