@@ -2328,7 +2328,7 @@ fn format_unknown_stack_frame(frame: &SymbolizedFrame, style: StackFrameStyle) -
     let function = format!("<unknown:{}>", hex::encode(frame.program_hash));
     match style {
         StackFrameStyle::Lisp => format!("({function})"),
-        StackFrameStyle::Python => format!("{function}()"),
+        StackFrameStyle::Python => format!("in {function}"),
     }
 }
 
@@ -2350,7 +2350,7 @@ pub fn format_stack_frame(
                     format!("({} {} {})", argument.name, argument.constraint, value)
                 }
                 StackFrameStyle::Python => {
-                    format!("{}: {} = {}", argument.name, argument.constraint, value)
+                    format!("{} = {}", argument.name, value)
                 }
             })
         })
@@ -2363,7 +2363,7 @@ pub fn format_stack_frame(
                 format!("({function} {})", rendered_arguments.join(" "))
             }
         }
-        StackFrameStyle::Python => format!("{function}({})", rendered_arguments.join(", ")),
+        StackFrameStyle::Python => format!("in {function}"),
     };
     let bound_names = frame
         .arguments
@@ -2399,16 +2399,40 @@ pub fn format_stack_frame(
                     .saturating_sub(span.start_column - 1)
                     .max(1)
             };
-            output = format!(
-                "--> {}:{}:{}\n   |\n{:>3}| {}\n   | {}{}\n{output}",
-                file.path,
-                span.start_line,
-                span.start_column,
-                span.start_line,
-                expanded,
-                " ".repeat(span.start_column - 1),
-                "^".repeat(width)
-            );
+            output = match style {
+                StackFrameStyle::Lisp => format!(
+                    "--> {}:{}:{}\n   |\n{:>3}| {}\n   | {}{}\n{output}",
+                    file.path,
+                    span.start_line,
+                    span.start_column,
+                    span.start_line,
+                    expanded,
+                    " ".repeat(span.start_column - 1),
+                    "^".repeat(width)
+                ),
+                StackFrameStyle::Python => format!(
+                    "File \"{}\", line {}, column {}, {output}\n  {}\n  {}{}",
+                    file.path,
+                    span.start_line,
+                    span.start_column,
+                    expanded.trim_start_matches(' '),
+                    " ".repeat(
+                        span.start_column.saturating_sub(
+                            expanded
+                                .chars()
+                                .take_while(|character| *character == ' ')
+                                .count()
+                                + 1,
+                        )
+                    ),
+                    "^".repeat(width)
+                ),
+            };
+        }
+    }
+    if style == StackFrameStyle::Python {
+        for argument in rendered_arguments {
+            output.push_str(&format!("\n  {argument}"));
         }
     }
     Ok(output)
@@ -3074,7 +3098,8 @@ mod tests {
         )
         .expect("render captured frame");
         assert!(
-            rendered.contains("destructured(N: integer = 5, P: pair = (7 . 8), B: bytes[32] = ")
+            rendered.contains("in destructured")
+                && rendered.contains("N = 5\n  P = (7 . 8)\n  B = ")
         );
         assert!(
             !rendered.contains("frame value does not match destructured parameter"),
@@ -3209,9 +3234,9 @@ mod tests {
             .format_captured_stack(&[known.clone(), unknown, known], 2, StackFrameStyle::Python)
             .expect("partial stack");
         assert!(rendered.starts_with("<... 2 older frames omitted ...>\n"));
-        let first = rendered.find("fixture(").expect("oldest known frame");
+        let first = rendered.find("in fixture").expect("oldest known frame");
         let unknown = rendered.find("<unknown:").expect("unknown fallback");
-        let newest = rendered.rfind("fixture(").expect("newest known frame");
+        let newest = rendered.rfind("in fixture").expect("newest known frame");
         assert!(first < unknown && unknown < newest, "{rendered}");
     }
 
@@ -3352,11 +3377,14 @@ mod tests {
             .expect("frame");
         let python =
             format_stack_frame(&metadata, &frame, StackFrameStyle::Python).expect("python frame");
-        assert!(python.starts_with("--> tabs.clsp:1:8"));
-        assert!(python.contains("tabbed(X: unknown = 5)"));
-        assert!(python.contains("--> tabs.clsp:1:8"), "{python}");
-        assert!(python.contains("        (+ X 1)"));
-        assert!(python.contains("        ^"));
+        assert!(python.starts_with("File \"tabs.clsp\", line 1, column 8, in tabbed"));
+        assert!(python.contains("\n  X = 5"));
+        assert!(
+            python.contains("File \"tabs.clsp\", line 1, column 8, in tabbed"),
+            "{python}"
+        );
+        assert!(python.contains("\n  (+ X 1)"));
+        assert!(python.contains("\n  ^"));
 
         let lisp =
             format_stack_frame(&metadata, &frame, StackFrameStyle::Lisp).expect("lisp frame");
@@ -3371,10 +3399,7 @@ mod tests {
         let mut nested_frame = frame.clone();
         nested_frame.arguments[0].value = serialize_program(nested.as_ref()).unwrap();
         for (style, expected) in [
-            (
-                StackFrameStyle::Python,
-                "tabbed(X: unknown = (100 (200 (...)) 500))",
-            ),
+            (StackFrameStyle::Python, "X = (100 (200 (...)) 500)"),
             (
                 StackFrameStyle::Lisp,
                 "(tabbed (X unknown (100 (200 (...)) 500)))",
@@ -3382,7 +3407,7 @@ mod tests {
         ] {
             let rendered = format_stack_frame(&metadata, &nested_frame, style).unwrap();
             assert!(rendered.contains(expected), "{rendered}");
-            assert!(rendered.find("tabs.clsp:1:8").unwrap() < rendered.find("tabbed").unwrap());
+            assert!(rendered.find("tabs.clsp").unwrap() < rendered.find("tabbed").unwrap());
         }
 
         let value = parse_sexp(Srcloc::start("*value*"), "(hello . 5)".bytes())
@@ -3439,12 +3464,15 @@ mod tests {
         let rendered =
             format_stack_frame(&metadata, &frame, StackFrameStyle::Python).expect("render frame");
         assert!(
-            rendered.contains("fünc(参数: unknown = 0xe580bc)"),
+            rendered.contains("in fünc") && rendered.contains("参数 = 0xe580bc"),
             "{rendered}"
         );
-        assert!(rendered.contains("--> utf8.clsp:1:8"), "{rendered}");
-        assert!(rendered.contains("        (\"é\" 参数)"), "{rendered}");
-        assert!(rendered.contains("       ^^^^"), "{rendered}");
+        assert!(
+            rendered.contains("File \"utf8.clsp\", line 1, column 8"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("\n  (\"é\" 参数)"), "{rendered}");
+        assert!(rendered.contains("\n  ^^^^"), "{rendered}");
     }
 
     #[test]
@@ -3626,7 +3654,8 @@ mod tests {
         let rendered =
             format_stack_frame(&metadata, &frame, StackFrameStyle::Python).expect("render");
         assert!(
-            rendered.contains("destructured(N: integer = 5, P: pair = (7 . 8), B: bytes[32] = "),
+            rendered.contains("in destructured")
+                && rendered.contains("N = 5\n  P = (7 . 8)\n  B = "),
             "{rendered}"
         );
     }
@@ -3669,8 +3698,11 @@ mod tests {
             .expect("symbolize optimized function");
         let rendered =
             format_stack_frame(&metadata, &frame, StackFrameStyle::Python).expect("render");
-        assert!(rendered.contains("--> optimized.clsp:4:"), "{rendered}");
-        assert!(rendered.contains("    (+ X 0))"), "{rendered}");
+        assert!(
+            rendered.contains("File \"optimized.clsp\", line 4, column "),
+            "{rendered}"
+        );
+        assert!(rendered.contains("\n  (+ X 0))"), "{rendered}");
     }
 
     #[test]
@@ -3778,11 +3810,11 @@ mod tests {
         let rendered =
             format_stack_frame(&metadata, &curried, StackFrameStyle::Python).expect("render");
         assert!(
-            rendered.contains("typed(N: integer = 5, P: pair = (7 . 8), B: bytes[32] = "),
+            rendered.contains("in typed") && rendered.contains("N = 5\n  P = (7 . 8)\n  B = "),
             "{rendered}"
         );
-        assert!(rendered.contains("U: unknown = \"opaque\""));
+        assert!(rendered.contains("U = \"opaque\""));
         assert!(rendered.contains("# bound: N"));
-        assert!(rendered.contains("--> typed.clsp:"));
+        assert!(rendered.contains("File \"typed.clsp\", line "));
     }
 }
