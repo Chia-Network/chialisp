@@ -1,9 +1,11 @@
 use std::rc::Rc;
 
-use clvm_rs::allocator::{Allocator, NodePtr};
+use clvm_rs::allocator::NodePtr;
 
 use crate::classic::clvm_tools::binutils::assemble;
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
+use crate::classic::clvm_tools::stages::stage_2::abstraction::ClassicAllocator;
+use crate::compiler::srcloc::Srcloc;
 
 /*
 "function" is used in front of a constant uncompiled
@@ -100,25 +102,46 @@ fn default_macros_src() -> Vec<&'static str> {
     ]
 }
 
-fn build_default_macro_lookup(
-    allocator: &mut Allocator,
+fn build_default_macro_lookup<A: ClassicAllocator>(
+    allocator: &mut A,
     eval_f: Rc<dyn TRunProgram>,
     macros_src: &[String],
-) -> NodePtr {
-    let run = assemble(allocator, "(a (com 2 3) 1)").unwrap();
-    let mut default_macro_lookup: NodePtr = NodePtr::NIL;
+) -> A::NodePtr {
+    let run = assemble(allocator.allocator(), "(a (com 2 3) 1)").unwrap();
+    let macro_loc = Srcloc::start("*macros*");
+    let imported_nil = allocator.import(macro_loc.clone(), NodePtr::NIL).unwrap();
+    let mut default_macro_lookup = imported_nil;
     for macro_src in macros_src {
-        let macro_sexp = assemble(allocator, macro_src).unwrap();
+        let macro_sexp = assemble(allocator.allocator(), macro_src).unwrap();
+        let imported_macro_sexp = allocator.import(macro_loc.clone(), macro_sexp).unwrap();
         let env = allocator
-            .new_pair(macro_sexp, default_macro_lookup)
+            .new_pair(
+                macro_loc.clone(),
+                &imported_macro_sexp,
+                &default_macro_lookup,
+            )
             .unwrap();
-        let new_macro = eval_f.run_program(allocator, run, env, None).unwrap().1;
-        default_macro_lookup = allocator.new_pair(new_macro, default_macro_lookup).unwrap();
+        let exported_env = allocator.export(&env);
+        let new_macro = eval_f
+            .run_program(allocator.allocator(), run, exported_env, None)
+            .unwrap()
+            .1;
+        let imported_new_macro = allocator.import(macro_loc.clone(), new_macro).unwrap();
+        default_macro_lookup = allocator
+            .new_pair(
+                macro_loc.clone(),
+                &imported_new_macro,
+                &default_macro_lookup,
+            )
+            .unwrap();
     }
     default_macro_lookup
 }
 
-pub fn default_macro_lookup(allocator: &mut Allocator, runner: Rc<dyn TRunProgram>) -> NodePtr {
+pub fn default_macro_lookup<A: ClassicAllocator>(
+    allocator: &mut A,
+    runner: Rc<dyn TRunProgram>,
+) -> A::NodePtr {
     let macro_srcs: Vec<String> = default_macros_src().iter().map(|s| s.to_string()).collect();
     build_default_macro_lookup(allocator, runner.clone(), &macro_srcs)
 }

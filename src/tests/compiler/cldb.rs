@@ -125,6 +125,70 @@ fn test_run_clvm_in_cldb() {
     );
 }
 
+struct RecordsRecursiveSteps {
+    steps: Vec<(String, String)>,
+}
+
+impl StepOfCldbViewer for RecordsRecursiveSteps {
+    fn show(&mut self, step: &RunStep, output: Option<BTreeMap<String, String>>) -> bool {
+        let arguments = output
+            .and_then(|values| values.get("Arguments").cloned())
+            .unwrap_or_default();
+        self.steps.push((step.loc().to_string(), arguments));
+        true
+    }
+}
+
+#[test]
+fn test_classic_codegen_recursive_source_locations() {
+    let program_name = "classic_codegen_fact.clsp";
+    let program_code = indoc! {"
+        (mod (N)
+          (include *standard-cl-26-classic*)
+          (defun fact (X)
+            (if (> X 1)
+              (* X (fact (- X 1)))
+              1))
+          (fact N))
+    "};
+    let mut allocator = Allocator::new();
+    let runner = Rc::new(DefaultProgramRunner::new());
+    let opts = Rc::new(DefaultCompilerOpts::new(program_name));
+    let mut symbols = HashMap::new();
+    let args = parse_sexp(Srcloc::start("*args*"), "(4)".bytes()).expect("should parse")[0].clone();
+    let program = compile_file(&mut allocator, runner, opts, program_code, &mut symbols)
+        .expect("should compile");
+    let mut watcher = RecordsRecursiveSteps { steps: Vec::new() };
+
+    assert_eq!(
+        run_clvm_in_cldb(
+            program_name,
+            Rc::new(program_code.lines().map(str::to_string).collect()),
+            Rc::new(program.to_sexp()),
+            symbols,
+            args,
+            &mut watcher,
+            0,
+        ),
+        Some("24".to_string())
+    );
+
+    let recursive_arguments: Vec<&str> = watcher
+        .steps
+        .iter()
+        .filter(|(loc, _)| loc == "classic_codegen_fact.clsp(4):10")
+        .map(|(_, arguments)| arguments.as_str())
+        .collect();
+    assert_eq!(
+        recursive_arguments,
+        vec!["(4 1)", "(3 1)", "(2 1)", "(1 1)"]
+    );
+    assert!(watcher
+        .steps
+        .iter()
+        .any(|(loc, _)| loc.starts_with("classic_codegen_fact.clsp(5):")));
+}
+
 #[test]
 fn test_cldb_hex_to_modern_sexp_smoke_0() {
     let mut allocator = Allocator::new();
@@ -286,6 +350,55 @@ fn test_cldb_hierarchy_mode() {
         compile_and_run_program_with_tree(&input_file, &input_program, "(3 2)", &vec![], 0);
 
     compare_run_output(result, run_entries);
+}
+
+#[test]
+fn test_classic_codegen_mandelbrot() {
+    let input_file = "resources/tests/mandelbrot/mandelbrot.clsp";
+    let input_program = fs::read_to_string(input_file)
+        .expect("test resource should exist")
+        .replace("*standard-cl-21*", "*standard-cl-26-classic*");
+    let mut allocator = Allocator::new();
+    let runner = Rc::new(DefaultProgramRunner::new());
+    // The run and cldb commands both enable frontend optimization for
+    // stepping dialects newer than 22.
+    let cldb_opts = Rc::new(DefaultCompilerOpts::new(input_file)).set_optimize(true);
+    let mut symbols = HashMap::new();
+    let cldb_program = compile_file(
+        &mut allocator,
+        runner.clone(),
+        cldb_opts,
+        &input_program,
+        &mut symbols,
+    )
+    .expect("cldb should compile");
+    let run_opts = Rc::new(DefaultCompilerOpts::new(input_file)).set_optimize(true);
+    let run_program = compile_file(
+        &mut allocator,
+        runner,
+        run_opts,
+        &input_program,
+        &mut HashMap::new(),
+    )
+    .expect("run should compile");
+    assert_eq!(cldb_program.to_sexp(), run_program.to_sexp());
+    let args = parse_sexp(Srcloc::start("*args*"), "(-192 -128 -144 -96 8)".bytes())
+        .expect("should parse args")[0]
+        .clone();
+    let program_lines = Rc::new(input_program.lines().map(str::to_string).collect());
+
+    assert_eq!(
+        run_clvm_in_cldb(
+            input_file,
+            program_lines,
+            Rc::new(cldb_program.to_sexp()),
+            symbols,
+            args,
+            &mut DoesntWatchCldb {},
+            0,
+        ),
+        Some("3356114000950459963475899699747220812557867594760040767593731831711045".to_string())
+    );
 }
 
 #[test]

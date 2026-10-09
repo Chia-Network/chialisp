@@ -1557,6 +1557,7 @@ pub fn hoist_body_let_binding(
         BodyForm::Let(LetFormKind::Parallel, letdata) => {
             let mut out_defuns = Vec::new();
             let defun_name = gensym("letbinding".as_bytes().to_vec());
+            let force_non_inline = opts.dialect().classic_codegen && outer_context.is_some();
 
             let mut revised_bindings = Vec::new();
             for b in letdata.bindings.iter() {
@@ -1575,7 +1576,7 @@ pub fn hoist_body_let_binding(
                 }));
             }
             let generated_defun = generate_let_defun(
-                opts,
+                opts.clone(),
                 letdata.loc.clone(),
                 None,
                 &defun_name,
@@ -1584,12 +1585,29 @@ pub fn hoist_body_let_binding(
                 revised_bindings.to_vec(),
                 letdata.body.clone(),
             );
+            let generated_defun = if force_non_inline {
+                if let HelperForm::Defun(_, defun) = generated_defun {
+                    HelperForm::Defun(false, defun)
+                } else {
+                    unreachable!()
+                }
+            } else {
+                generated_defun
+            };
             out_defuns.push(generated_defun);
 
             let mut let_args = generate_let_args(letdata.loc.clone(), revised_bindings.to_vec());
             let pass_env = outer_context
                 .map(create_let_env_expression)
                 .unwrap_or_else(|| {
+                    // Modern codegen wraps the module arguments in its function
+                    // environment. Classic stage 2 exposes them directly.
+                    if opts.dialect().classic_codegen {
+                        return BodyForm::Value(SExp::Atom(
+                            letdata.loc.clone(),
+                            "@*env*".as_bytes().to_vec(),
+                        ));
+                    }
                     BodyForm::Call(
                         letdata.loc.clone(),
                         vec![
@@ -1712,7 +1730,11 @@ pub fn process_helper_let_bindings(
     while i < result.len() {
         match result[i].clone() {
             HelperForm::Defun(inline, defun) => {
-                let context = if inline {
+                // Let helpers take the enclosing function's argument tree as
+                // their first argument. Classic codegen exposes function
+                // arguments directly via @*env*, so reconstruct that tree at
+                // the call site even for non-inline functions.
+                let context = if inline || opts.dialect().classic_codegen {
                     Some(defun.args.clone())
                 } else {
                     None
