@@ -9,6 +9,7 @@ use clvmr::Allocator;
 use crate::classic::clvm::__type_compatibility__::{Bytes, Stream, UnvalidatedBytesFromType};
 use crate::classic::clvm::serialize::{sexp_from_stream, SimpleCreateCLVMObject};
 use crate::classic::clvm_tools::binutils::{assemble, disassemble};
+use crate::classic::clvm_tools::sha256tree::sha256tree;
 use crate::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
 
 use crate::compiler::clvm::convert_to_clvm_rs;
@@ -815,4 +816,61 @@ fn test_module_phase_deinline_does_not_blow_up() {
             },
         ],
     );
+}
+
+/// Compile a file through the module harness with the optimizer on, as the
+/// command line has it for cl23, and give back the hex it wrote.
+fn compile_with_optimizer_and_read_hex(filename: &str, hexfile: &str) -> Vec<u8> {
+    let content = fs::read_to_string(filename).expect("file should exist");
+    let mut allocator = Allocator::new();
+    let runner = Rc::new(DefaultProgramRunner::new());
+    let opts: Rc<dyn CompilerOpts> = Rc::new(DefaultCompilerOpts::new(filename))
+        .set_search_paths(&["resources/tests/module".to_string()])
+        .set_optimize(true);
+    let source_opts = TestModuleCompilerOpts::new(opts);
+    perform_compile_of_file(&mut allocator, runner, source_opts, filename, &content)
+        .expect("should compile")
+        .source_opts
+        .get_written_file(hexfile)
+        .expect("should have written the hex file")
+}
+
+// The program_hash an import yields must be the hash of what the file compiles
+// to on its own, whatever the importer compiled first. programs/gensym-order.clsp
+// has three subexpressions for CSE to hoist, and CSE orders them by the hash of
+// the renamed expressions, so if the names were numbered from wherever an
+// earlier compile left the counter the bindings could come out in another
+// order. The imports are repeated because that is exactly what an unreset
+// counter would vary: each round would number them differently.
+#[test]
+fn test_imported_program_hash_does_not_depend_on_what_was_compiled_before() {
+    let mut allocator = Allocator::new();
+    let runner = Rc::new(DefaultProgramRunner::new());
+
+    let own_hex = compile_with_optimizer_and_read_hex(
+        "resources/tests/module/programs/gensym-order.clsp",
+        "resources/tests/module/programs/gensym-order.hex",
+    );
+    let own_program = hex_to_clvm(&mut allocator, &own_hex);
+    let own_hash = format!("0x{}", sha256tree(&mut allocator, own_program).hex());
+
+    let nil = assemble(&mut allocator, "()").expect("should assemble");
+    let importers = [
+        "resources/tests/module/gensym-order-alone",
+        "resources/tests/module/gensym-order-after-prefix",
+    ];
+    for _ in 0..12 {
+        for importer in importers.iter() {
+            let hex = compile_with_optimizer_and_read_hex(
+                &format!("{importer}.clsp"),
+                &format!("{importer}.hex"),
+            );
+            let program = hex_to_clvm(&mut allocator, &hex);
+            let hash = runner
+                .run_program(&mut allocator, program, nil, None)
+                .expect("should run")
+                .1;
+            assert_eq!(disassemble(&allocator, hash, None), own_hash, "{importer}");
+        }
+    }
 }
