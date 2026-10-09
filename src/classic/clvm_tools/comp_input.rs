@@ -19,6 +19,10 @@ use crate::compiler::dialect::{detect_modern, AcceptedDialect};
 use crate::compiler::optimize::maybe_finalize_program_via_classic_optimizer;
 use crate::compiler::sexp;
 
+/// One compiled program from `compile_modern_programs`: its export shortname and the program
+/// SExp (nodes carry per-line source locations).
+pub type CompiledModernProgram = (Vec<u8>, Rc<sexp::SExp>);
+
 pub fn get_disassembly_ver(p: &HashMap<String, ArgumentValue>) -> Option<usize> {
     if let Some(ArgumentValue::ArgInt(x)) = p.get("operators_version") {
         return Some(*x as usize);
@@ -250,5 +254,54 @@ impl RunAndCompileInputData {
         build_symbol_table_mut(symbol_table, &res);
 
         Ok(res)
+    }
+
+    /// Like `compile_modern`, but returns the ACTUAL compiled program(s) rather than a
+    /// module's export SUMMARY.
+    ///
+    /// `compile_modern` returns `CompilerOutput::to_sexp()`, which for a module-style source
+    /// (top-level `defun`/`export`, no `(mod ...)` wrapper) is the export *summary*
+    /// (`(("shortname" . <program-hash>))`) built at a single source location -- NOT the
+    /// compiled program itself.  Source-level coverage needs the real program: the one whose
+    /// on-chain hex the corpus captured, whose nodes carry per-line source locations.  For a
+    /// module this is each component's `content` (identical bytes to the written `.hex`, with
+    /// `sha256tree(content) == component.hash`); for a classic `(mod ...)` program it is the
+    /// same single finalized program `compile_modern` returns.
+    ///
+    /// A multi-export module yields one program per exported component; the caller unions their
+    /// srcloc tables.  Returns `(shortname, program)` pairs.
+    pub fn compile_modern_programs(
+        &self,
+        allocator: &mut Allocator,
+        symbol_table: &mut HashMap<String, String>,
+    ) -> Result<Vec<CompiledModernProgram>, CompileErr> {
+        let runner = Rc::new(DefaultProgramRunner::new());
+
+        let unopt_res = compile_file(
+            allocator,
+            runner.clone(),
+            self.opts.clone(),
+            &self.program.content,
+            symbol_table,
+        )?;
+
+        match &unopt_res {
+            CompilerOutput::Module(m) => Ok(m
+                .components
+                .iter()
+                .map(|c| (c.shortname.clone(), c.content.clone()))
+                .collect()),
+            CompilerOutput::Program(_, _) => {
+                // Same finalization compile_modern applies for the classic (mod ...) path.
+                let res = maybe_finalize_program_via_classic_optimizer(
+                    allocator,
+                    runner,
+                    self.opts.clone(),
+                    self.do_optimize,
+                    &unopt_res.to_sexp(),
+                )?;
+                Ok(vec![(b"program".to_vec(), res)])
+            }
+        }
     }
 }
