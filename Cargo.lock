@@ -211,8 +211,8 @@ dependencies = [
 
 [[package]]
 name = "clvmr"
-version = "0.17.7"
-source = "git+https://github.com/Chia-Network/clvm_rs.git?rev=fd40a80aa70bb6a59354248d2927d06895465388#fd40a80aa70bb6a59354248d2927d06895465388"
+version = "0.21.0"
+source = "git+https://github.com/Chia-Network/clvm_rs.git?rev=c6f211ea7f42af93d3e6df6936ab78c8a8bcb7cd#c6f211ea7f42af93d3e6df6936ab78c8a8bcb7cd"
 dependencies = [
  "bitflags",
  "bitvec",
@@ -553,9 +553,9 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hex-literal"
-version = "0.4.1"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fe2267d4ed49bc07b63801559be28c718ea06c4738b7a03c94df7386d2cde46"
+checksum = "e712f64ec3850b98572bffac52e2c6f282b29fe6c5fa6d42334b30be438d95c1"
 
 [[package]]
 name = "hkdf"
