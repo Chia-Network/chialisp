@@ -58,6 +58,7 @@ use crate::compiler::cldb_hierarchy::{HierarchialRunner, HierarchialStepResult, 
 use crate::compiler::clvm::start_step;
 use crate::compiler::compiler::DefaultCompilerOpts;
 use crate::compiler::comptypes::{CompileErr, CompilerOpts};
+use crate::compiler::debug_metadata::{capture_compiler_sources, CapturedSources, DebugMetadata};
 use crate::compiler::frontend::frontend;
 use crate::compiler::preprocessor::gather_dependencies;
 use crate::compiler::prims;
@@ -1134,6 +1135,12 @@ pub fn launch_tool(
             .set_default(ArgumentValue::ArgString(None, "main.sym".to_string())),
     );
     parser.add_argument(
+        vec!["--debug-output-file".to_string()],
+        Argument::new()
+            .set_type(Rc::new(PathJoin {}))
+            .set_help("Write canonical structural debug metadata as CLVM binary".to_string()),
+    );
+    parser.add_argument(
         vec!["--strict".to_string()],
         Argument::new()
             .set_action(TArgOptionAction::StoreTrue)
@@ -1181,13 +1188,23 @@ pub fn launch_tool(
         return ToolRunStatus::ok(fail_on_error);
     }
 
-    let parsed = match RunAndCompileInputData::new(&mut allocator, &parsed_args) {
+    let mut parsed = match RunAndCompileInputData::new(&mut allocator, &parsed_args) {
         Ok(r) => r,
         Err(e) => {
             stdout.write_str(&format!("FAIL: {e}\n"));
             return ToolRunStatus::error(fail_on_error);
         }
     };
+    let captured_sources: Option<CapturedSources> =
+        parsed_args.get("debug_output_file").map(|_| {
+            let (opts, sources) = capture_compiler_sources(
+                parsed.opts.clone(),
+                parsed.use_filename(),
+                parsed.program.content.clone(),
+            );
+            parsed.opts = opts;
+            sources
+        });
 
     let empty_map = HashMap::new();
     let keywords = match parsed_args.get("no_keywords") {
@@ -1341,6 +1358,29 @@ pub fn launch_tool(
                         format!("writing symbols: {e:?}"),
                     )
                 })?;
+                if let Some(ArgumentValue::ArgString(_, debug_path)) =
+                    parsed_args.get("debug_output_file")
+                {
+                    let sources = captured_sources
+                        .as_ref()
+                        .expect("debug output captures compiler sources")
+                        .as_ref()
+                        .borrow();
+                    let metadata = DebugMetadata::from_program(&r, &symbol_table, &sources)
+                        .and_then(|metadata| metadata.encode())
+                        .map_err(|e| {
+                            CompileErr(
+                                Srcloc::start(&parsed.use_filename()),
+                                format!("building debug metadata: {e}"),
+                            )
+                        })?;
+                    fs::write(debug_path, metadata).map_err(|e| {
+                        CompileErr(
+                            Srcloc::start(&parsed.use_filename()),
+                            format!("writing debug metadata {debug_path}: {e}"),
+                        )
+                    })?;
+                }
 
                 Ok(r)
             });
@@ -1563,6 +1603,17 @@ pub fn launch_tool(
 
             run_output
         });
+
+    let runtime_prints = dpr.take_runtime_prints();
+    if runtime_prints.dropped > 0 {
+        stdout.write_str(&format!(
+            "print: <{} earlier message(s) omitted>\n",
+            runtime_prints.dropped
+        ));
+    }
+    for record in runtime_prints.records {
+        stdout.write_str(&format!("print: {record}\n"));
+    }
 
     let error_encountered = res.is_err();
     let output = collapse(res.map_err(|ex| {

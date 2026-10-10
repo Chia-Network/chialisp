@@ -816,3 +816,44 @@ fn test_module_phase_deinline_does_not_blow_up() {
         ],
     );
 }
+
+#[test]
+fn test_single_program_module_compile_is_deterministic() {
+    use crate::classic::clvm_tools::comp_input::RunAndCompileInputData;
+    use crate::classic::platform::argparse::ArgumentValue;
+    use crate::compiler::debug_metadata::compile_with_debug;
+    let filename = "single-program-determinism.clsp";
+    let source = r#"
+        (include *standard-cl-26*)
+        (import determinism_helper exposing make_yellow)
+        (export (left right) (make_yellow left right))
+    "#;
+    let mut expected = None;
+    for _ in 0..12 {
+        let mut allocator = Allocator::new();
+        let mut args = HashMap::new();
+        args.insert(
+            "include".to_string(),
+            ArgumentValue::ArgArray(vec![ArgumentValue::ArgString(
+                None,
+                "resources/tests/module".to_string(),
+            )]),
+        );
+        args.insert(
+            "path_or_code".to_string(),
+            ArgumentValue::ArgString(Some(filename.to_string()), source.to_string()),
+        );
+        let parsed = RunAndCompileInputData::new(&mut allocator, &args).unwrap();
+        let output =
+            compile_with_debug(Rc::new(TestModuleCompilerOpts::new(parsed.opts)), &source).unwrap();
+        let program = output
+            .into_iter()
+            .find(|a| a.export_name.as_deref() == Some("program"))
+            .unwrap()
+            .program;
+        if let Some(previous) = &expected {
+            assert_eq!(&program, previous);
+        }
+        expected = Some(program);
+    }
+}

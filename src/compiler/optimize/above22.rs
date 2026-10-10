@@ -193,7 +193,7 @@ impl Optimization for Strategy23 {
         Ok(new_body)
     }
 
-    fn post_codegen_function_optimize(
+    fn after_codegen_function_optimize(
         &mut self,
         _allocator: &mut Allocator,
         _runner: Rc<dyn TRunProgram>,
@@ -239,7 +239,7 @@ impl Optimization for Strategy23 {
         Ok(new_body)
     }
 
-    fn post_codegen_output_optimize(
+    fn after_codegen_output_optimize(
         &mut self,
         _opts: Rc<dyn CompilerOpts>,
         generated: SExp,

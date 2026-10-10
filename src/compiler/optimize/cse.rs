@@ -717,7 +717,12 @@ pub fn cse_optimize_bodyform(
     b: &BodyForm,
 ) -> Result<BodyForm, CompileErr> {
     let conditions = detect_conditions(b)?;
-    let cse_raw_detections = cse_detect(b)?;
+    let mut cse_raw_detections = cse_detect(b)?;
+    // Hash ordering depends on gensym suffixes from earlier compilations.
+    // Source paths keep CSE binding order independent of those renamed symbols.
+    if opts.dialect().cse_dominance || opts.dialect().stepping.is_some_and(|s| s >= 26) {
+        cse_raw_detections.sort_by(|a, b| a.instances[0].path.cmp(&b.instances[0].path));
+    }
 
     let cse_detections = cse_classify_by_conditions(opts, &conditions, &cse_raw_detections);
 

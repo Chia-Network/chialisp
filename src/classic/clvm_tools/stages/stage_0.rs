@@ -79,7 +79,7 @@ fn unknown_operator(
             "unimplemented operator".to_string(),
         ))
     } else {
-        op_unknown(allocator, o, args, max_cost)
+        op_unknown(allocator, o, args, max_cost, flags)
     }
 }
 

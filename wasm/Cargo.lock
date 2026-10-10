@@ -198,6 +198,8 @@ version = "0.5.0"
 dependencies = [
  "chialisp",
  "clvmr",
+ "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "js-sys",
  "lol_alloc",
  "num-bigint",
@@ -207,9 +209,8 @@ dependencies = [
 
 [[package]]
 name = "clvmr"
-version = "0.17.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3060bcd64cb8cf2b32fe6ee3a82698835c03361c8e1da446d2e9d058fbfffd5f"
+version = "0.21.0"
+source = "git+https://github.com/Chia-Network/clvm_rs.git?rev=c6f211ea7f42af93d3e6df6936ab78c8a8bcb7cd#c6f211ea7f42af93d3e6df6936ab78c8a8bcb7cd"
 dependencies = [
  "bitflags",
  "bitvec",
@@ -472,9 +473,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 5.3.0",
  "wasip2",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -484,9 +487,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
  "rand_core 0.10.1",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -544,9 +549,9 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hex-literal"
-version = "0.4.1"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fe2267d4ed49bc07b63801559be28c718ea06c4738b7a03c94df7386d2cde46"
+checksum = "e712f64ec3850b98572bffac52e2c6f282b29fe6c5fa6d42334b30be438d95c1"
 
 [[package]]
 name = "hkdf"

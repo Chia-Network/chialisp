@@ -18,9 +18,13 @@ path = "src/mod.rs"
 
 [dependencies]
 chialisp = { path= "..", features = [] }
-clvmr = { version = "0.17.5", features = ["pre-eval"] }
+clvmr = { git = "https://github.com/Chia-Network/clvm_rs.git", rev = "c6f211ea7f42af93d3e6df6936ab78c8a8bcb7cd", features = ["pre-eval"] }
 wasm-bindgen = "=0.2.101"
 js-sys = "0.3.78"
 num-bigint = "0.4.0"
 num-traits = "0.2.15"
 lol_alloc = "0.4.1"
+
+# Enable browser entropy for both generations used by evaluator dependencies.
+getrandom = { version = "0.3.4", features = ["wasm_js"] }
+getrandom_04 = { package = "getrandom", version = "0.4.3", features = ["wasm_js"] }

@@ -251,6 +251,15 @@ fn eval_args(
     }
 }
 
+/// The exact atom bytes used by serialization and tree hashing for integers.
+pub(crate) fn integer_atom_bytes(value: &Number) -> Vec<u8> {
+    if NewStyleIntConversion::setting() && *value == bi_zero() {
+        Vec::new()
+    } else {
+        u8_from_number(value.clone())
+    }
+}
+
 /// Given an SExp, produce a clvmr style NodePtr in the given allocator.
 pub fn convert_to_clvm_rs(
     allocator: &mut Allocator,
@@ -264,17 +273,9 @@ pub fn convert_to_clvm_rs(
         SExp::QuotedString(_, _, x) => allocator
             .new_atom(x)
             .map_err(|_e| RunFailure::RunErr(head.loc(), format!("failed to alloc string {head}"))),
-        SExp::Integer(_, i) => {
-            if NewStyleIntConversion::setting() && *i == bi_zero() {
-                Ok(NodePtr::NIL)
-            } else {
-                allocator
-                    .new_atom(&u8_from_number(i.clone()))
-                    .map_err(|_e| {
-                        RunFailure::RunErr(head.loc(), format!("failed to alloc integer {head}"))
-                    })
-            }
-        }
+        SExp::Integer(_, i) => allocator.new_atom(&integer_atom_bytes(i)).map_err(|_e| {
+            RunFailure::RunErr(head.loc(), format!("failed to alloc integer {head}"))
+        }),
         SExp::Cons(_, a, b) => convert_to_clvm_rs(allocator, a.clone()).and_then(|head_ptr| {
             convert_to_clvm_rs(allocator, b.clone()).and_then(|tail| {
                 allocator.new_pair(head_ptr, tail).map_err(|_e| {
@@ -839,13 +840,7 @@ pub fn sha256tree(s: Rc<SExp>) -> Vec<u8> {
             hasher.finalize().to_vec()
         }
         SExp::Nil(_) => sha256tree_from_atom(&[]),
-        SExp::Integer(_, i) => {
-            if NewStyleIntConversion::setting() && *i == bi_zero() {
-                sha256tree_from_atom(&[])
-            } else {
-                sha256tree_from_atom(&u8_from_number(i.clone()))
-            }
-        }
+        SExp::Integer(_, i) => sha256tree_from_atom(&integer_atom_bytes(i)),
         SExp::QuotedString(_, _, v) => sha256tree_from_atom(v),
         SExp::Atom(_, v) => sha256tree_from_atom(v),
     }

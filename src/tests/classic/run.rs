@@ -22,6 +22,7 @@ use crate::classic::clvm_tools::cmds::{cldb, launch_tool, ToolRunStatus};
 use crate::classic::clvm_tools::node_path::NodePath;
 
 use crate::compiler::clvm::convert_to_clvm_rs;
+use crate::compiler::debug_metadata::DebugMetadata;
 use crate::compiler::sexp;
 use crate::compiler::sexp::decode_string;
 use crate::util::{number_from_u8, Number};
@@ -54,6 +55,87 @@ fn basic_run_test() {
         do_basic_run(&vec!("run".to_string(), "(mod (A B) (+ A B))".to_string())).trim(),
         "(+ 2 5)".to_string()
     );
+}
+
+#[test]
+fn brun_reports_chialisp_and_rue_runtime_prints() {
+    let chialisp_args = vec![
+        "brun".to_string(),
+        r#"(all (q . "$print$") (q . "cli") (q . 7))"#.to_string(),
+        "()".to_string(),
+    ];
+    let (chialisp_output, chialisp_status) = launch_tool_output(&chialisp_args, "brun", 0);
+    assert!(!chialisp_status.error_encountered);
+    assert_eq!(chialisp_output, "print: (\"cli\" 7)\n1\n");
+
+    let rue_args = vec![
+        "brun".to_string(),
+        r#"("debug_print" (q . "cli.rue:1:2") (q . ("rue" 8)))"#.to_string(),
+        "()".to_string(),
+    ];
+    let (rue_output, rue_status) = launch_tool_output(&rue_args, "brun", 0);
+    assert!(!rue_status.error_encountered);
+    assert_eq!(rue_output, "print: cli.rue:1:2: (\"rue\" 8)\n()\n");
+}
+
+#[test]
+fn run_writes_verifiable_structural_debug_sidecar() {
+    let output = tempfile::NamedTempFile::new().expect("debug output file");
+    let args = vec![
+        "run".to_string(),
+        "(mod (X) (include *standard-cl-23*) (+ X 1))".to_string(),
+        "--debug-output-file".to_string(),
+        output.path().to_string_lossy().into_owned(),
+    ];
+    let (compiled, status) = launch_tool_output(&args, "run", 2);
+    assert!(!status.error_encountered, "{compiled}");
+
+    let program = sexp::parse_sexp(
+        crate::compiler::srcloc::Srcloc::start("*compiled*"),
+        compiled.bytes(),
+    )
+    .expect("parse compiled output")
+    .remove(0);
+    let mut allocator = Allocator::new();
+    let program = convert_to_clvm_rs(&mut allocator, program).expect("convert compiled output");
+    let mut stream = Stream::new(None);
+    sexp_to_stream(&mut allocator, program, &mut stream);
+    let metadata = DebugMetadata::decode(&fs::read(output.path()).expect("read debug output"))
+        .expect("decode");
+    metadata
+        .verify_program(stream.get_value().data())
+        .expect("verify CLI program against sidecar");
+}
+
+#[test]
+fn run_debug_sidecar_captures_search_path_include_once() {
+    let temp = tempfile::tempdir().expect("temp directory");
+    let include_dir = temp.path().join("include");
+    fs::create_dir(&include_dir).expect("create include directory");
+    let include_source = "((defun included (X) (+ X 7)))\n";
+    fs::write(include_dir.join("helper.clib"), include_source).expect("write include");
+    let output = tempfile::NamedTempFile::new().expect("debug output file");
+    let args = vec![
+        "run".to_string(),
+        "(mod (X) (include *standard-cl-23*) (include helper.clib) (included X))".to_string(),
+        "--include".to_string(),
+        include_dir.to_string_lossy().into_owned(),
+        "--debug-output-file".to_string(),
+        output.path().to_string_lossy().into_owned(),
+    ];
+
+    let (compiled, status) = launch_tool_output(&args, "run", 2);
+    assert!(!status.error_encountered, "{compiled}");
+    let metadata = DebugMetadata::decode(&fs::read(output.path()).expect("read debug output"))
+        .expect("decode");
+    let included = metadata
+        .files
+        .iter()
+        .filter(|file| file.source == include_source)
+        .collect::<Vec<_>>();
+
+    assert_eq!(included.len(), 1, "included source must be interned once");
+    assert_eq!(included[0].path, "helper.clib");
 }
 
 #[test]
