@@ -28,6 +28,7 @@ use crate::classic::clvm_tools::stages::stage_2::optimize::do_optimize;
 
 use crate::compiler::comptypes::CompilerOpts;
 use crate::compiler::sexp::decode_string;
+use crate::runtime_print::{detect_runtime_print, RuntimePrintCollector, RuntimePrintOutput};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AllocatorRefOrTreeHash {
@@ -61,6 +62,7 @@ pub struct CompilerOperatorsInternal {
     // Since flags have moved into the dialect in clvmr 0.17, they need to move
     // here too.
     flags: RefCell<ClvmFlags>,
+    runtime_prints: RuntimePrintCollector,
 }
 
 /// Given a list of search paths, find a full path to a file whose partial name
@@ -153,6 +155,7 @@ impl CompilerOperatorsInternal {
             operators_version: RefCell::new(None),
             language_flags,
             flags: RefCell::new(ClvmFlags::empty()),
+            runtime_prints: RuntimePrintCollector::default(),
         }
     }
 
@@ -383,6 +386,10 @@ impl Dialect for CompilerOperatorsInternal {
         max_cost: Cost,
         _extension: OperatorSet,
     ) -> Response {
+        if let Some(reduction) = detect_runtime_print(&self.runtime_prints, allocator, op, sexp)? {
+            return Ok(reduction);
+        }
+
         let new_operators = self
             .get_operators_version()
             .unwrap_or(OPERATORS_LATEST_VERSION);
@@ -466,6 +473,10 @@ impl CompilerOperators {
 
     pub fn set_operators_version(&self, ver: Option<usize>) {
         self.parent.set_operators_version(ver);
+    }
+
+    pub fn take_runtime_prints(&self) -> RuntimePrintOutput {
+        self.parent.runtime_prints.take()
     }
 }
 

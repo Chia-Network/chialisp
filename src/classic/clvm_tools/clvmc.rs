@@ -20,7 +20,7 @@ use crate::compiler::clvm::convert_to_clvm_rs;
 use crate::compiler::compiler::compile_file;
 use crate::compiler::compiler::DefaultCompilerOpts;
 use crate::compiler::comptypes::{CompileErr, CompilerOpts, CompilerOutput};
-use crate::compiler::dialect::detect_modern;
+use crate::compiler::dialect::{detect_modern, AcceptedDialect};
 use crate::compiler::optimize::maybe_finalize_program_via_classic_optimizer;
 use crate::compiler::runtypes::RunFailure;
 use crate::compiler::srcloc::Srcloc;
@@ -30,6 +30,33 @@ use crate::util::gentle_overwrite;
 pub enum CompileError {
     Modern(Srcloc, String),
     Classic(NodePtr, String),
+}
+
+pub fn compiler_opts_for_dialect(
+    opts: Rc<dyn CompilerOpts>,
+    dialect: AcceptedDialect,
+    do_optimize: bool,
+) -> Rc<dyn CompilerOpts> {
+    let mut opts = opts.set_dialect(dialect.clone()).set_optimize(do_optimize);
+    if let Some(stepping) = dialect.stepping {
+        opts = opts
+            .set_optimize(do_optimize || stepping > 22)
+            .set_frontend_opt(stepping == 22);
+    }
+    opts
+}
+
+pub fn compiler_opts_for_source(
+    allocator: &mut Allocator,
+    opts: Rc<dyn CompilerOpts>,
+    text: &str,
+    do_optimize: bool,
+) -> Result<Rc<dyn CompilerOpts>, CompileError> {
+    let ir_src =
+        read_ir(text, 0).map_err(|s| EvalErr::InternalError(NodePtr::NIL, s.to_string()))?;
+    let assembled_sexp = assemble_from_ir(allocator, Rc::new(ir_src))?;
+    let dialect = detect_modern(allocator, assembled_sexp);
+    Ok(compiler_opts_for_dialect(opts, dialect, do_optimize))
 }
 
 impl From<EvalErr> for CompileError {
@@ -107,12 +134,9 @@ pub fn compile_clvm_text_maybe_opt(
     //
     // I think stepping is a good name for the number below as dialect is going
     // to get more members that are somewhat independent.
-    if let Some(stepping) = dialect.stepping {
+    if dialect.stepping.is_some() {
         let runner = Rc::new(DefaultProgramRunner::new());
-        let opts = opts
-            .set_dialect(dialect)
-            .set_optimize(do_optimize || stepping > 22) // Would apply to cl23
-            .set_frontend_opt(stepping == 22);
+        let opts = compiler_opts_for_dialect(opts, dialect, do_optimize);
 
         let unopt_res = compile_file(allocator, runner.clone(), opts.clone(), text, symbol_table)?;
         let res = if matches!(unopt_res, CompilerOutput::Module(_)) {

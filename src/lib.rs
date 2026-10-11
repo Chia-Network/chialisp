@@ -28,6 +28,7 @@ pub mod util;
 
 pub mod classic;
 pub mod compiler;
+pub mod runtime_print;
 
 // Python impl
 #[cfg(all(not(test), not(target_family = "wasm"), feature = "extension-module"))]

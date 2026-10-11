@@ -163,7 +163,7 @@ pub fn finish_compilation(
     // generate code from AST, optionally with optimization
     let generated = codegen(context, opts.clone(), &p3)?;
 
-    let g2 = context.post_codegen_output_optimize(opts, generated)?;
+    let g2 = context.after_codegen_output_optimize(opts, generated)?;
 
     Ok(g2)
 }

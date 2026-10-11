@@ -37,7 +37,7 @@ jobs:
       with:
         repository: Chia-Network/chia-gaming
         path: chia-gaming
-        ref: c6f0b26882664000ad6842eb87a725768212a6ca
+        ref: bd44edda7b68e33c66fd00d424aed6246fc44231
 
     - name: Replace chialisp pkg in chia-gaming
       run: |
@@ -50,16 +50,8 @@ jobs:
 
     - name: Rebuild chia-gaming chialisp
       run: |
-        cp support/chia-gaming-build.rs chia-gaming/build.rs
-        cp support/chia-gaming-run-clsp-tests.sh chia-gaming/tools/run-clsp-tests.sh
-        chmod +x chia-gaming/tools/run-clsp-tests.sh
         cd chia-gaming
-        for file in $(find clsp -name \*.hex) ; do rm $file ; done
-        cargo build
-        echo generated hex files
-        find clsp -name \*.hex
-        echo end hex files
-        rm -rf build.rs
+        ./tools/build-chialisp.sh
 
     - name: Run chia-gaming chialisp tests
       run: |

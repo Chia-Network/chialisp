@@ -1247,8 +1247,11 @@ fn codegen_(
                     }
                 };
 
-                let code =
-                    context.post_codegen_function_optimize(opts.clone(), Some(h), Rc::new(code))?;
+                let code = context.after_codegen_function_optimize(
+                    opts.clone(),
+                    Some(h),
+                    Rc::new(code),
+                )?;
                 let code = if allow_redef {
                     code
                 } else {
@@ -2280,8 +2283,11 @@ fn final_codegen(
     let optimizer_opts = opts.clone();
     generate_expr_code(context, opts, compiler, opt_final_expr).and_then(|code| {
         let mut final_comp = compiler.clone();
-        let optimized_code =
-            context.post_codegen_function_optimize(optimizer_opts.clone(), None, code.1.clone())?;
+        let optimized_code = context.after_codegen_function_optimize(
+            optimizer_opts.clone(),
+            None,
+            code.1.clone(),
+        )?;
         final_comp.final_code = Some(CompiledCode(code.0, optimized_code));
         Ok(final_comp)
     })

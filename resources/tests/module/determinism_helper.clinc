@@ -1,0 +1,26 @@
+(defun make_yellow (word guess)
+    (if (not guess)
+        0
+        (if (is_yellow word (f guess))
+            (c 1 (make_yellow (elide_one word (f guess)) (r guess)))
+            (c 0 (make_yellow word (r guess)))
+        )
+    )
+)
+
+(defun elide_one (word letter)
+    (if (= (f word) letter)
+        (r word)
+        (c (f word) (elide_one (r word) letter))
+    )
+)
+
+(defun is_yellow (word letter)
+    (if (not word)
+        0
+        (if (= (f word) letter)
+            1
+            (is_yellow (r word) letter)
+        )
+    )
+)

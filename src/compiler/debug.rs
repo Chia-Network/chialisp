@@ -4,8 +4,8 @@ use std::rc::Rc;
 
 use crate::classic::clvm::__type_compatibility__::{sha256, Bytes, BytesFromType};
 
+use crate::compiler::clvm::integer_atom_bytes;
 use crate::compiler::sexp::SExp;
-use crate::util::u8_from_number;
 
 /// Given an SExp and a transformation, make a map of the transformed subtrees of
 /// the given SExp in code that's indexed by treehash.  This will merge equivalent
@@ -77,11 +77,9 @@ pub fn build_table_mut<X>(
         SExp::QuotedString(l, _, a) => {
             build_table_mut(code_map, tx, &SExp::Atom(l.clone(), a.clone()))
         }
-        SExp::Integer(l, i) => build_table_mut(
-            code_map,
-            tx,
-            &SExp::Atom(l.clone(), u8_from_number(i.clone())),
-        ),
+        SExp::Integer(l, i) => {
+            build_table_mut(code_map, tx, &SExp::Atom(l.clone(), integer_atom_bytes(i)))
+        }
         SExp::Nil(l) => build_table_mut(code_map, tx, &SExp::Atom(l.clone(), Vec::new())),
     }
 }
