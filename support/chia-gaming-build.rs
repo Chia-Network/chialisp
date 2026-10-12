@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 
-use clvmr::allocator::Allocator;
+use chialisp::clvmr::allocator::Allocator;
 use toml::{Table, Value};
 
 use chialisp::classic::clvm_tools::clvmc::CompileError;
