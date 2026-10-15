@@ -24,6 +24,9 @@ extern crate tempfile;
 
 extern crate clvmr as clvm_rs;
 
+/// Re-exported so callers can use the same `clvmr` types as chialisp's API.
+pub use clvmr;
+
 pub mod util;
 
 pub mod classic;
