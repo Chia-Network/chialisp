@@ -73,7 +73,6 @@ jobs:
       run: |
         . ./venv/bin/activate
         python -m pip install pytest
-        python -m pip install blspy
 
     - name: install clvm & clvm_tools
       run: |
