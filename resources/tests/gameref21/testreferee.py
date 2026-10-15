@@ -14,10 +14,9 @@ from chia.types.mempool_inclusion_status import MempoolInclusionStatus
 from chia.util.errors import Err
 from dataclasses import dataclass
 from typing import Any
-from chia_rs import Coin
+from chia_rs import Coin, G2Element
 from chia.types.spend_bundle import SpendBundle
 from chia.types.coin_spend import CoinSpend
-from blspy import G2Element
 
 from steprun import diag_run_clvm, compile_module_with_symbols
 
