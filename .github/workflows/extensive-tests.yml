@@ -37,9 +37,9 @@ jobs:
         components: rustfmt, clippy
 
     - uses: actions/setup-python@v7
-      name: Install Python 3.11
+      name: Install Python 3.12
       with:
-        python-version: 3.11
+        python-version: 3.12
 
     - uses: chia-network/actions/create-venv@main
       id: create-venv
@@ -71,14 +71,13 @@ jobs:
         ls target/wheels/
         # this mess puts the name of the `.whl` file into `$WHEEL_PATH`
         # remove the dot, use the `glob` lib to grab the file from the directory
-        export WHEEL_PATH=$(echo "3.10" | python -c 'DOTLESS=input().replace(".", ""); import glob; print(" ".join(filter(lambda x: "musl" not in x, glob.glob("target/wheels/chialisp-*-cp*-*.whl"))))' )
+        export WHEEL_PATH=$(echo "3.12" | python -c 'DOTLESS=input().replace(".", ""); import glob; print(" ".join(filter(lambda x: "musl" not in x, glob.glob("target/wheels/chialisp-*-cp*-*.whl"))))' )
         echo ${WHEEL_PATH}
         pip install ${WHEEL_PATH}
 
     - name: Install other wheels
       run: |
         python -m pip install pytest
-        python -m pip install blspy
 
     - name: install clvm & clvm_tools
       run: |
