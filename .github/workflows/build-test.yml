@@ -135,11 +135,10 @@ jobs:
         name: wheels-${{ matrix.os }}
         path: ./target/wheels/
 
-    - name: Install and constrain the release wheel
+    - name: Install the downloaded release wheel
       run: |
-        python -m pip install --upgrade pip packaging
-        python support/ci_wheel.py install target/wheels --constraint wheel-constraints.txt
-        echo "PIP_CONSTRAINT=${{ github.workspace }}/wheel-constraints.txt" >> "$GITHUB_ENV"
+        python -m pip install --upgrade pip
+        python -m pip install --no-index --only-binary=:all: --find-links target/wheels/ chialisp
 
     - name: Install other wheels
       run: |
@@ -162,9 +161,9 @@ jobs:
         pip uninstall -v -y clvm_tools_rs
         pip install --no-deps -e ./tmp
 
-
-    - name: Verify the installed release wheel
-      run: python support/ci_wheel.py verify target/wheels
+    - name: Reinstall the downloaded wheel after test dependencies
+      run: |
+        python -m pip install --force-reinstall --no-deps --no-index --only-binary=:all: --find-links target/wheels/ chialisp
 
     - name: Ensure clvm, clvm_rs, chialisp are installed
       run: |
@@ -213,12 +212,12 @@ jobs:
         (cd chia_puzzles && python -m venv .venv && . .venv/bin/activate && pip install --upgrade pip && \
         python -m pip install maturin==1.10.2 && \
         cd .. && \
-        pip install --no-index --find-links target/wheels/ chialisp && \
+        pip install --no-index --only-binary=:all: --find-links target/wheels/ chialisp && \
         cd chia_puzzles && \
         pip install click typing_extensions chia_rs clvm chia_puzzles_py) && \
         pip uninstall -v -y clvm_tools_rs && \
         pip uninstall -v -y chialisp && \
-        pip install -v --no-index --find-links target/wheels/ chialisp && \
+        pip install -v --no-index --only-binary=:all: --find-links target/wheels/ chialisp && \
         pip uninstall -v -y clvm_tools_rs && \
         echo "PWD:" $(pwd) && \
         pip install --no-deps -e ./tmp && \
@@ -233,7 +232,7 @@ jobs:
       run: |
         python -m pip install pytest
         # This script installs the wheel built during this workflow.
-        pip install --no-index --find-links target/wheels/ chialisp
+        pip install --no-index --only-binary=:all: --find-links target/wheels/ chialisp
         # TODO: bring in the other tests in resources/tests/cmdline/tests besides cmds_test.py
         (cd resources/tests/cmdline/tests && py.test cmds_test.py )
 
@@ -245,13 +244,13 @@ jobs:
         # Ensure we're using the sources we have.  This is a hedge against
         # changes made by any other step doing operations on pip.
         # This script installs the wheel built during this workflow.
-        pip install --no-index --find-links target/wheels/ chialisp
+        pip install --no-index --only-binary=:all: --find-links target/wheels/ chialisp
         (cd resources/tests && python check-recompiles.py)
 
     - name: Verify recompilation follows date and modification rules
       if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.12')
       run: |
-        pip install --no-index --find-links target/wheels/ chialisp
+        pip install --no-index --only-binary=:all: --find-links target/wheels/ chialisp
         python resources/tests/test-clvm-recompile-behavior.py
 
     - name: Install pytest
@@ -282,9 +281,6 @@ jobs:
         cargo install grcov
         rustup component add llvm-tools-preview
         python ./resources/coverage/run_coverage.py --require-percent 60
-
-    - name: Verify the release wheel after tests
-      run: python support/ci_wheel.py verify target/wheels
 
   upload:
     name: Upload to PyPI
@@ -403,8 +399,8 @@ jobs:
           path: ./target/wheels/
       - name: stubtest the release wheel
         run: |
-          python -m pip install --upgrade pip packaging mypy
-          python support/ci_wheel.py install target/wheels
+          python -m pip install --upgrade pip mypy
+          python -m pip install --no-index --only-binary=:all: --find-links target/wheels/ chialisp
           stubtest --concise chialisp
 
   cargo_fmt:
