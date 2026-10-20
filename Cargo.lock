@@ -135,13 +135,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a70dfe8540688eaed5bdecffd51c26df489b8bc610890b613b81461411f90cc9"
 dependencies = [
  "blst",
- "chia-sha2",
- "chia-traits",
+ "chia-sha2 0.38.2",
+ "chia-traits 0.38.2",
  "hex",
  "hkdf",
  "linked-hash-map",
  "sha2 0.10.9",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "chia-bls"
+version = "0.52.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb13d4c5e2954d31251ffc79254eddb02dd76267219a67e7794b5a220875a948"
+dependencies = [
+ "blst",
+ "chia-sha2 0.52.0",
+ "chia-traits 0.52.0",
+ "hex",
+ "hkdf",
+ "linked-hash-map",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -154,14 +170,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "chia-sha2"
+version = "0.52.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f355f4eae5f9e72ccbdd9ea825c44fe75d246abd8f4bf41c289bd01481e6545"
+dependencies = [
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "chia-traits"
 version = "0.38.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b13ea36e3ae5ede1d015d873fdfa91ea4d7a8790c6859c78b6b74065c7ddbbbd"
 dependencies = [
- "chia-sha2",
- "chia_streamable_macro",
+ "chia-sha2 0.38.2",
+ "chia_streamable_macro 0.38.2",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "chia-traits"
+version = "0.52.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "572bef420004a8548d31847038f0b92402c0da2d1e343b1247df06f25451831c"
+dependencies = [
+ "chia-sha2 0.52.0",
+ "chia_streamable_macro 0.52.0",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -177,11 +213,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "chia_streamable_macro"
+version = "0.52.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1dbb574789d6984919c6a3c67ce901155ab790a5caca377eefedac482d8b719"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2 1.0.107",
+ "quote 1.0.47",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "chialisp"
 version = "0.6.0"
 dependencies = [
  "binascii",
- "chia-bls",
+ "chia-bls 0.52.0",
  "clvmr",
  "do-notation",
  "hashlink",
@@ -218,8 +266,8 @@ dependencies = [
  "bitflags",
  "bitvec",
  "bumpalo",
- "chia-bls",
- "chia-sha2",
+ "chia-bls 0.38.2",
+ "chia-sha2 0.38.2",
  "hex",
  "hex-literal",
  "k256",
