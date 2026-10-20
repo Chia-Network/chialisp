@@ -1,0 +1,4 @@
+(include *standard-cl-23*)
+
+;; Compiling this first makes the compiler generate a few names.
+(export (X) (let ((a (+ X 1))) a))
