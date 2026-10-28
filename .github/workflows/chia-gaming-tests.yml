@@ -42,6 +42,18 @@ jobs:
     - name: Replace chialisp pkg in chia-gaming
       run: |
         python3 support/change-chialisp-rev.py ${{ github.sha }} chia-gaming/Cargo.toml
+        # Keep NodePtr and Allocator types on the same evaluator revision.
+        python3 - <<'PY'
+        from pathlib import Path
+        import tomllib
+
+        chialisp = tomllib.loads(Path("Cargo.toml").read_text())
+        path = Path("chia-gaming/Cargo.toml")
+        gaming = tomllib.loads(path.read_text())
+        old_rev = gaming["patch"]["crates-io"]["clvmr"]["rev"]
+        new_rev = chialisp["dependencies"]["clvmr"]["rev"]
+        path.write_text(path.read_text().replace(old_rev, new_rev))
+        PY
 
     - name: Install chia-gaming dependencies
       run: |
