@@ -25,7 +25,7 @@ jobs:
         fetch-depth: 0
 
     - name: Set up rust
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@stable
       with:
         toolchain: 1.97.1
 
