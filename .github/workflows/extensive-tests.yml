@@ -25,13 +25,13 @@ jobs:
         fetch-depth: 0
 
     - name: Set up rust tools
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@stable
       with:
         toolchain: stable
         components: rustfmt, clippy
 
     - name: Set up rust (stable)
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@stable
       with:
         toolchain: stable
         components: rustfmt, clippy
@@ -53,7 +53,7 @@ jobs:
         python -m pip install --upgrade pip maturin==1.10.2
 
     - name: Set up rust
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@stable
       with:
         toolchain: stable
 
