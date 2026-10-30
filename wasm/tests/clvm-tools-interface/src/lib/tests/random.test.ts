@@ -29,7 +29,7 @@ function rngu32(rng: MersenneTwister): number {
 }
 
 // @ts-ignore
-function bi_add(a: BigInt, b: BigInt): BigInt {
+function bi_add(a: bigint, b: bigint): bigint {
     return <any>a + <any>b;
 }
 
@@ -299,8 +299,8 @@ class RandomS32Generator implements ConvertibleValue {
 
 class RandomBigIntGenerator implements ConvertibleValue {
     sign: boolean;
-    value: BigInt;
-    subtract_from: BigInt;
+    value: bigint;
+    subtract_from: bigint;
     constructor(rng: MersenneTwister) {
         this.sign = (rngu32(rng) % 2) != 0;
         let words = 1 + rngu32(rng) % 2;
