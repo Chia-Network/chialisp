@@ -118,24 +118,28 @@ pub fn detect_serializable(loc: &Srcloc, v: &JsValue) -> Option<Rc<SExp>> {
     js_sys::Reflect::get(v, &serialize_key)
         .ok()
         .and_then(|serialize| {
-            Reflect::apply(serialize.unchecked_ref(), v, &js_sys::Array::new())
-                .ok()
-                .and_then(|array| {
-                    let array = Array::from(&array);
-                    let mut bytes_array: Vec<u8> = vec![];
-                    for item in array.iter() {
-                        if let Some(n) = item.as_f64() {
-                            if !(0.0..=255.0).contains(&n) {
-                                return None;
-                            }
-                            bytes_array.push(n as u8);
-                        } else {
+            Reflect::apply(
+                serialize.unchecked_ref::<js_sys::Function>(),
+                v,
+                &js_sys::Array::new(),
+            )
+            .ok()
+            .and_then(|array| {
+                let array = Array::from(&array);
+                let mut bytes_array: Vec<u8> = vec![];
+                for item in array.iter() {
+                    if let Some(n) = item.as_f64() {
+                        if !(0.0..=255.0).contains(&n) {
                             return None;
                         }
+                        bytes_array.push(n as u8);
+                    } else {
+                        return None;
                     }
+                }
 
-                    Some(Rc::new(SExp::QuotedString(loc.clone(), b'x', bytes_array)))
-                })
+                Some(Rc::new(SExp::QuotedString(loc.clone(), b'x', bytes_array)))
+            })
         })
 }
 
@@ -144,7 +148,11 @@ pub fn detect_convertible(v: &JsValue) -> Result<Rc<SExp>, JsValue> {
     let to_program = js_sys::Reflect::get(v, &convert_key)?;
     let call_args = js_sys::Array::new();
     call_args.push(v);
-    let call_result = Reflect::apply(to_program.unchecked_ref(), v, &call_args)?;
+    let call_result = Reflect::apply(
+        to_program.unchecked_ref::<js_sys::Function>(),
+        v,
+        &call_args,
+    )?;
     let cacheval = js_cache_value_from_js(&call_result)?;
     let cached = find_cached_sexp(cacheval.entry, &cacheval.content)?;
     Ok(cached.modern.clone())

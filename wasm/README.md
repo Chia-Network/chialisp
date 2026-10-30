@@ -17,9 +17,13 @@ Then build with
 
 ```bash
 # Make sure you're at <chialisp root>/wasm
-export RUSTFLAGS='--cfg=getrandom_backend="unsupported" -Ctarget-cpu=mvp'
+export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS='--cfg=getrandom_backend="unsupported" -Ctarget-cpu=mvp -Ctarget-feature=+reference-types'
 wasm-pack build --release --target=nodejs
 ```
+
+The explicit `reference-types` feature keeps wasm-bindgen's runtime consistent
+with the features in the linked Rust standard library. The target-specific
+variable avoids applying WASM flags when wasm-pack builds native tools.
 
 Test
 -----
