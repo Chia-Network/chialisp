@@ -67,7 +67,7 @@ jobs:
 
       - name: Test clvm-js like wasm interface
         run: |
-          cd wasm/tests/clvm-tools-interface && npm install && yarn test
+          cd wasm/tests/clvm-tools-interface && yarn install --frozen-lockfile && yarn test
 
       - name: Upload npm pkg artifacts
         uses: actions/upload-artifact@v7
