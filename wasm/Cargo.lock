@@ -224,7 +224,6 @@ dependencies = [
  "hashlink",
  "hex",
  "indoc",
- "js-sys",
  "lazy_static",
  "num-bigint",
  "num-traits",
@@ -234,7 +233,6 @@ dependencies = [
  "sha2 0.11.1",
  "tempfile",
  "unicode-segmentation",
- "wasm-bindgen",
  "yaml-rust2",
 ]
 
@@ -1409,8 +1407,6 @@ checksum = "a0181c14ddd6c7b8b0b0132a5f1ea2f32be0d893cd3ea97b6e3b28886b8a3d1c"
 dependencies = [
  "cfg-if",
  "rustversion",
- "serde",
- "serde_json",
  "wasm-bindgen-macro",
  "wasm-bindgen-shared",
 ]

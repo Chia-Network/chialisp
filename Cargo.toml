@@ -60,11 +60,6 @@ fuzz = ["dep:rand", "dep:rand_chacha", "dep:lfsr"]
 default = []
 preserved_043 = ["dep:subprocess"]
 
-[target.'cfg(target_family="wasm")'.dependencies]
-js-sys = "0.3.107"
-wasm-bindgen = { version = "0.2.130", features = ["serde-serialize"] }
-
-
 [[bin]]
 name = "opd"
 path = "src/classic/bins/opd.rs"
