@@ -1,0 +1,12 @@
+(include *standard-cl-23*)
+
+;; Three subexpressions appear more than once, so the CSE pass hoists them.
+;; The bindings come out in the order of the renamed expressions' hashes.
+(defun g (p)
+  (list
+    (+ (f p) (f (r p)))
+    (* (f p) (f (r p)))
+    (- (f (r (r p))) (f p))
+    (+ (f (r (r p))) 1)))
+
+(export (P) (g P))
