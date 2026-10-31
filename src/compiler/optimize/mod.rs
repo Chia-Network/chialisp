@@ -22,6 +22,7 @@ use crate::classic::clvm::__type_compatibility__::bi_one;
 use crate::classic::clvm::__type_compatibility__::bi_zero;
 
 use crate::classic::clvm_tools::stages::stage_0::TRunProgram;
+use crate::classic::clvm_tools::stages::stage_2::abstraction::ClError;
 use crate::classic::clvm_tools::stages::stage_2::optimize::optimize_sexp;
 
 use crate::compiler::clvm::{convert_from_clvm_rs, convert_to_clvm_rs, run};
@@ -638,6 +639,8 @@ fn fe_opt(
     context: &mut BasicCompileContext,
     opts: Rc<dyn CompilerOpts>,
     compileform: CompileForm,
+    only_inline: bool,
+    use_main_env: bool,
 ) -> Result<CompileForm, CompileErr> {
     let runner = context.runner();
     let evaluator = Evaluator::new(opts.clone(), runner.clone(), compileform.helpers.clone());
@@ -670,13 +673,20 @@ fn fe_opt(
         }
     }
     let new_evaluator = Evaluator::new(opts.clone(), runner.clone(), optimized_helpers.clone());
+    let mut main_env = HashMap::new();
+    let main_args = if use_main_env {
+        build_reflex_captures(&mut main_env, compileform.args.clone());
+        compileform.args.clone()
+    } else {
+        Rc::new(SExp::Nil(compileform.args.loc()))
+    };
 
     let shrunk = new_evaluator.shrink_bodyform(
         context,
-        Rc::new(SExp::Nil(compileform.args.loc())),
-        &HashMap::new(),
+        main_args,
+        &main_env,
         compileform.exp.clone(),
-        true,
+        only_inline,
         Some(EVAL_STACK_LIMIT),
     )?;
 
@@ -699,12 +709,12 @@ pub fn run_optimizer(
             RunFailure::RunExn(s, e) => CompileErr(s, format!("exception {e}\n")),
         })?;
 
-    let optimized = optimize_sexp(allocator, to_clvm_rs.1, runner)
+    let optimized = optimize_sexp(allocator, &to_clvm_rs.1, runner)
         .map_err(|e| {
             CompileErr(
                 to_clvm_rs.0.clone(),
                 match e {
-                    EvalErr::InternalError(_, e) => e.to_string(),
+                    ClError(l, EvalErr::InternalError(_, e)) => format!("{l}: {e}"),
                     _ => e.to_string(),
                 },
             )

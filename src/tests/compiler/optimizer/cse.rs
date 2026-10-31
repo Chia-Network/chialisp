@@ -888,6 +888,7 @@ fn test_generated_cse(n: u32) {
         int_fix: false,
         extra_numeric_constants: false,
         cse_dominance: false,
+        classic_codegen: false,
     });
     let opts23 = opts
         .set_dialect(AcceptedDialect {
@@ -896,6 +897,7 @@ fn test_generated_cse(n: u32) {
             int_fix: false,
             extra_numeric_constants: false,
             cse_dominance: false,
+            classic_codegen: false,
         })
         .set_optimize(true);
     let mut symbols = HashMap::new();
