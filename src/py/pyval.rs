@@ -1,4 +1,4 @@
-use num::BigInt;
+use num_bigint::BigInt;
 
 use pyo3::types::{PyAny, PyBytes, PyList, PyTuple};
 use pyo3::{prelude::*, IntoPyObjectExt};
