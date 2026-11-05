@@ -891,20 +891,21 @@ impl DebugMetadata {
         program_bytes: &[u8],
         runtime_arguments: &[Vec<u8>],
     ) -> Result<SymbolizedFrame, String> {
-        self.symbolize_frame_with_environment(program_bytes, runtime_arguments, None)
+        self.symbolize_frame_with_environment(program_bytes, runtime_arguments, None, &mut None)
     }
 
-    fn symbolize_frame_with_environment(
-        &self,
+    fn symbolize_frame_with_environment<'a>(
+        &'a self,
         program_bytes: &[u8],
         runtime_arguments: &[Vec<u8>],
         runtime_tail: Option<&[u8]>,
+        context: &mut Option<&'a DebugNode>,
     ) -> Result<SymbolizedFrame, String> {
         let mut allocator = Allocator::new();
         let program = decode_clvm(&mut allocator, program_bytes, "frame program")?;
         let mut bound_arguments = Vec::new();
         let (matched, fallback_function, source_span, function_index, uses_runtime) =
-            symbolize_node(&allocator, program, self, &mut bound_arguments);
+            symbolize_node(&allocator, program, self, &mut bound_arguments, context);
         let (runtime_arguments, runtime_tail) = if uses_runtime {
             (runtime_arguments, runtime_tail)
         } else {
@@ -1146,13 +1147,14 @@ impl DebugMetadataCollection {
         &self,
         captured: &SerializedFrame,
     ) -> Result<SymbolizedSerializedFrame, String> {
-        self.symbolize_serialized_frame_with_owner(captured, None)
+        self.symbolize_serialized_frame_with_owner(captured, None, &mut None)
     }
 
-    fn symbolize_serialized_frame_with_owner(
-        &self,
+    fn symbolize_serialized_frame_with_owner<'a>(
+        &'a self,
         captured: &SerializedFrame,
         owner: Option<usize>,
+        context: &mut Option<&'a DebugNode>,
     ) -> Result<SymbolizedSerializedFrame, String> {
         let mut allocator = Allocator::new();
         let program = decode_clvm(&mut allocator, &captured.program, "frame program")?;
@@ -1193,11 +1195,15 @@ impl DebugMetadataCollection {
             .or_else(|| owner.filter(|index| candidates.contains(index)))
             .or_else(|| (candidates.len() == 1).then(|| candidates[0]));
         if let Some(index) = selected {
+            if owner != Some(index) {
+                *context = None;
+            }
             let metadata = &self.entries[index];
             match metadata.symbolize_frame_with_environment(
                 &captured.program,
                 &runtime_arguments,
                 runtime_tail.as_deref(),
+                context,
             ) {
                 Ok(frame) if frame.matched != FrameMatch::Unknown => {
                     return Ok(SymbolizedSerializedFrame {
@@ -1213,6 +1219,7 @@ impl DebugMetadataCollection {
             }
         }
 
+        *context = None;
         Ok(SymbolizedSerializedFrame {
             metadata_index: None,
             frame: SymbolizedFrame {
@@ -1230,6 +1237,9 @@ impl DebugMetadataCollection {
 
     /// Format retained frames in evaluator order (oldest to newest). The
     /// omitted count describes older frames dropped before the retained slice.
+    /// Matching prefers occurrences inside the last resolved shadow subtree.
+    /// This local source-mapping heuristic needs no execution tracing or format
+    /// extensions; unknown or ambiguous frames discard the subtree hint.
     pub fn format_captured_stack(
         &self,
         frames: &[SerializedFrame],
@@ -1243,10 +1253,12 @@ impl DebugMetadataCollection {
         let mut repeated = 0;
         let mut previous_captured: Option<&SerializedFrame> = None;
         let mut owner = None;
+        let mut context = None;
         let mut previous_location = None;
         let mut previous_expression = false;
         for (position, captured) in frames.iter().enumerate() {
-            let symbolized = self.symbolize_serialized_frame_with_owner(captured, owner)?;
+            let symbolized =
+                self.symbolize_serialized_frame_with_owner(captured, owner, &mut context)?;
             if symbolized.metadata_index.is_some() {
                 owner = symbolized.metadata_index;
             }
@@ -1964,11 +1976,12 @@ fn canonical_curry(allocator: &Allocator, node: NodePtr) -> Option<(NodePtr, Vec
     }
 }
 
-fn symbolize_node(
+fn symbolize_node<'a>(
     allocator: &Allocator,
     node: NodePtr,
-    metadata: &DebugMetadata,
+    metadata: &'a DebugMetadata,
     bound_arguments: &mut Vec<Vec<u8>>,
+    context: &mut Option<&'a DebugNode>,
 ) -> (
     FrameMatch,
     Option<String>,
@@ -1977,7 +1990,14 @@ fn symbolize_node(
     bool,
 ) {
     let mut matches = Vec::new();
-    exact_tree_matches(allocator, node, &metadata.tree, &mut matches);
+    // Captures are ordered outermost to innermost. Prefer a local occurrence
+    // when an enclosing expression distinguishes otherwise identical code.
+    // A call may jump elsewhere, so an absent local match searches the sidecar.
+    let scope = context.unwrap_or(&metadata.tree);
+    exact_tree_matches(allocator, node, scope, &mut matches);
+    if matches.is_empty() && !std::ptr::eq(scope, &metadata.tree) {
+        exact_tree_matches(allocator, node, &metadata.tree, &mut matches);
+    }
     if let Some(exact) = matches.first() {
         let identity = |tree: &DebugNode| {
             (
@@ -2007,8 +2027,12 @@ fn symbolize_node(
             } else {
                 format!("<ambiguous: {}>", names.join(" | "))
             };
+            *context = None;
             return (FrameMatch::Ambiguous, Some(label), None, None, true);
         }
+        // Equivalent annotations can still occupy different subtrees. Do not
+        // let an arbitrary copy become the next frame's context.
+        *context = (matches.len() == 1).then_some(*exact);
         return (
             FrameMatch::Exact,
             node_label(exact, &metadata.strings),
@@ -2018,14 +2042,16 @@ fn symbolize_node(
         );
     }
     let Some((base, arguments, uses_runtime)) = canonical_curry(allocator, node) else {
+        *context = None;
         return (FrameMatch::Unknown, None, None, None, true);
     };
     let (matched, function, source_span, function_index, base_uses_runtime) =
-        symbolize_node(allocator, base, metadata, bound_arguments);
+        symbolize_node(allocator, base, metadata, bound_arguments, context);
     // A closed inner wrapper ignores the complete environment of an outer one.
     if base_uses_runtime {
         for argument in arguments {
             let Ok(bytes) = node_to_bytes(allocator, argument) else {
+                *context = None;
                 return (FrameMatch::Unknown, None, None, None, true);
             };
             bound_arguments.push(bytes);
@@ -3836,6 +3862,158 @@ mod tests {
                 .function
                 .as_deref(),
             Some("fixture")
+        );
+    }
+
+    fn source_context_fixture() -> (DebugMetadataCollection, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
+        // Two distinct enclosing expressions contain byte-identical functions.
+        // A producer can already represent their different origins in v1.
+        let source = "(4\n  (2 (1 5 2) 1)\n  (2 (1 5 2) (1 . (42))))";
+        let program = parse_sexp(Srcloc::start("context.clvm"), source.bytes())
+            .unwrap()
+            .remove(0);
+        let mut metadata = DebugMetadata::from_program(
+            &program,
+            &HashMap::new(),
+            &HashMap::from([("context.clvm".to_string(), source.to_string())]),
+        )
+        .unwrap();
+        for (function, parameter) in [("first", "A"), ("second", "B")] {
+            let name = metadata.strings.len();
+            metadata
+                .strings
+                .extend([function.to_string(), parameter.to_string()]);
+            metadata.functions.push(DebugFunction {
+                name,
+                left_env: false,
+                parameters: DebugParameter::Pair(
+                    Box::new(DebugParameter::Name {
+                        name: name + 1,
+                        path: vec![2],
+                        constraint: ParameterConstraint::Pair,
+                    }),
+                    Box::new(DebugParameter::Nil),
+                ),
+            });
+        }
+        fn annotate(
+            tree: &mut DebugNode,
+            body: &[u8],
+            functions: &[DebugFunction],
+            next: &mut usize,
+        ) {
+            if shadow_bytes(tree) == body {
+                if let DebugNode::Pair {
+                    label, function, ..
+                } = tree
+                {
+                    *label = Some(functions[*next].name);
+                    *function = Some(*next);
+                    *next += 1;
+                }
+            } else if let DebugNode::Pair { left, right, .. } = tree {
+                annotate(left, body, functions, next);
+                annotate(right, body, functions, next);
+            }
+        }
+        let body = serialized_sexp("(5 2)");
+        let mut next = 0;
+        annotate(&mut metadata.tree, &body, &metadata.functions, &mut next);
+        assert_eq!(next, 2);
+        let root = shadow_bytes(&metadata.tree);
+        let mut collection = DebugMetadataCollection::default();
+        collection.insert(&metadata.encode().unwrap()).unwrap();
+        (
+            collection,
+            root,
+            serialized_sexp("(2 (1 5 2) 1)"),
+            serialized_sexp("(2 (1 5 2) (1 . (42)))"),
+            body,
+        )
+    }
+
+    #[test]
+    fn captured_source_mapping_uses_enclosing_shadow_context() {
+        let (collection, _, first, second, body) = source_context_fixture();
+        let frame = |program: Vec<u8>| SerializedFrame {
+            program,
+            environment: serialized_sexp("(7)"),
+        };
+        assert_eq!(
+            collection
+                .symbolize_serialized_frame(&frame(body.clone()))
+                .unwrap()
+                .frame
+                .matched,
+            FrameMatch::Ambiguous,
+            "a lone frame still has two possible origins"
+        );
+        for (parent, expected, other, parameter, line) in [
+            (first, "first", "second", "A", 2),
+            (second, "second", "first", "B", 3),
+        ] {
+            let rendered = collection
+                .format_captured_stack(
+                    &[frame(parent.clone()), frame(body.clone())],
+                    0,
+                    StackFrameStyle::Python,
+                )
+                .unwrap();
+            assert!(rendered.contains(&format!("in {expected}")), "{rendered}");
+            assert!(rendered.contains(&format!("line {line},")), "{rendered}");
+            assert!(rendered.contains(&format!("{parameter} = 7")), "{rendered}");
+            assert!(
+                !rendered.contains(other) && !rendered.contains("<ambiguous"),
+                "{rendered}"
+            );
+            let curried = canonical_curry_bytes(&body, &[vec![42]]);
+            let rendered = collection
+                .format_captured_stack(&[frame(parent), frame(curried)], 0, StackFrameStyle::Lisp)
+                .unwrap();
+            assert!(
+                rendered.contains(&format!("({expected} ({parameter} pair 42))")),
+                "{rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn captured_source_mapping_drops_stale_context_and_preserves_ties() {
+        let (collection, root, first, second, body) = source_context_fixture();
+        let frame = |program: Vec<u8>| SerializedFrame {
+            program,
+            environment: serialized_sexp("(7)"),
+        };
+        for prefix in [
+            vec![root.clone()],
+            vec![first.clone(), root],
+            vec![first.clone(), serialized_sexp("(8 (1 . 999))")],
+        ] {
+            let mut frames = prefix.into_iter().map(frame).collect::<Vec<_>>();
+            frames.push(frame(body.clone()));
+            let rendered = collection
+                .format_captured_stack(&frames, 0, StackFrameStyle::Python)
+                .unwrap();
+            assert!(
+                rendered.contains("<ambiguous: first | second>"),
+                "{rendered}"
+            );
+            assert!(
+                !rendered.contains("A = ") && !rendered.contains("B = "),
+                "{rendered}"
+            );
+        }
+        // A jump outside the previous subtree falls back to the owning sidecar.
+        let rendered = collection
+            .format_captured_stack(
+                &[frame(first), frame(second), frame(body)],
+                0,
+                StackFrameStyle::Python,
+            )
+            .unwrap();
+        assert!(
+            rendered.contains("in second") && rendered.contains("B = 7"),
+            "{rendered}"
         );
     }
 
