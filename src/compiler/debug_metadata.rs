@@ -1397,6 +1397,13 @@ pub fn debug_output_path(program_path: &str) -> String {
 ///
 /// Module compilation returns the summary first, followed by one artifact for
 /// every exported component. Ordinary compilation returns one artifact.
+///
+/// This low-level entry point uses the supplied compiler options and skips the
+/// optional final classic optimization pass. To match the normal Python/WASM
+/// compile APIs, derive options with
+/// [`compiler_opts_for_source`](crate::classic::clvm_tools::clvmc::compiler_opts_for_source)
+/// using `do_optimize = true`, then call [`compile_with_debug_maybe_opt`] with
+/// `do_optimize = true`. The final pass can change the emitted bytes for CL21/CL22.
 pub fn compile_with_debug(
     opts: Rc<dyn CompilerOpts>,
     content: &str,

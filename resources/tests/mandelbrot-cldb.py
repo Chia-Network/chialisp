@@ -3,6 +3,8 @@
 import subprocess
 
 command = ['../../target/debug/cldb', '-p', './mandelbrot/mandelbrot.clsp', '(-192 -128 -144 -96 8)']
+# The result comes from the then-branch P (column 46), not the equal P in
+# the condition (column 43). Macro expansion preserves each token's origin.
 want_output = """---
 - Print: ((escape-at -152 -104) 14)
 - Print: ((escape-at -160 -104) 14)
@@ -30,7 +32,7 @@ want_output = """---
 - Print: ((escape-at -192 -128) 5)
 - Print: "(\\"result\\" \\"||567AAC|68DEEE|78EEEE|78BEEE\\")"
 - Final: "3356114000950459963475899699747220812557867594760040767593731831711045"
-  Final-Location: "./mandelbrot/mandelbrot.clsp(8):43"
+  Final-Location: "./mandelbrot/mandelbrot.clsp(8):46"
 """
 
 have_output = subprocess.check_output(command).decode('utf8')

@@ -160,6 +160,12 @@ pub(crate) fn detect_runtime_print(
     Ok(None)
 }
 
+/// A debugging dialect that captures Chialisp and Rue runtime prints.
+///
+/// Rue's `debug_print` is recognized before the inner Chia dialect checks its
+/// flags. It returns nil with zero operator cost even under `NO_UNKNOWN_OPS`;
+/// evaluating its arguments still incurs the usual cost. This is a debugging
+/// extension, so a successful debug run does not establish consensus validity.
 #[derive(Debug)]
 pub struct RuntimePrintDialect {
     flags: ClvmFlags,

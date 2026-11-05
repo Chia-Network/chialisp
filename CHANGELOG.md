@@ -5,6 +5,9 @@
 - WASM `Program.run` now throws an `Error` for evaluator failures instead of a
   string. Use `error.message` for the failure text; `error.prints` contains the
   runtime prints captured before the failure.
+- Debug execution accepts Rue's `debug_print` with zero operator cost even under
+  `NO_UNKNOWN_OPS`. This is a debugging extension; a successful debug run does
+  not establish consensus validity.
 
 ## 0.1.42
 ### Fixed
