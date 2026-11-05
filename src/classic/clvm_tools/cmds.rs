@@ -1195,6 +1195,10 @@ pub fn launch_tool(
             return ToolRunStatus::error(fail_on_error);
         }
     };
+    if parsed_args.contains_key("debug_output_file") && parsed.dialect.stepping.is_none() {
+        stdout.write_str("FAIL: --debug-output-file requires modern Chialisp\n");
+        return ToolRunStatus::error(fail_on_error);
+    }
     let captured_sources: Option<CapturedSources> =
         parsed_args.get("debug_output_file").map(|_| {
             let (opts, sources) = capture_compiler_sources(

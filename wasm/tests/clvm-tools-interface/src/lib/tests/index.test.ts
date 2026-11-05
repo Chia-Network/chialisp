@@ -177,18 +177,15 @@ it('Has run', async () => {
     assert.equal(cost, 2658);
 });
 
-it('Matches normal optimized CL23 compilation with debug compilation', async () => {
-    const source = `
-        (mod (N)
-          (include *standard-cl-23*)
-          (defun optimized (X) (+ X 0))
-          (optimized N))
-    `;
-    const normal = compile(source, 'option-parity.clsp', []);
-    assert.equal(normal.error, undefined);
-    const debug = compile_debug(source, 'option-parity.clsp', []);
-    assert.equal(debug.error, undefined);
-    assert.equal(Buffer.from(debug[0].program).toString('hex'), normal.hex);
+it.each([21, 22, 23])('Matches normal optimized CL%i compilation with debug compilation', async (stepping) => {
+    for (const body of ['(+ 1 2)', '(defun optimized (X) (+ X 0)) (optimized N)']) {
+        const source = `(mod (N) (include *standard-cl-${stepping}*) ${body})`;
+        const normal = compile(source, 'option-parity.clsp', []);
+        assert.equal(normal.error, undefined);
+        const debug = compile_debug(source, 'option-parity.clsp', []);
+        assert.equal(debug.error, undefined);
+        assert.equal(Buffer.from(debug[0].program).toString('hex'), normal.hex);
+    }
 });
 
 it('Detects Chialisp and Rue runtime prints', async () => {

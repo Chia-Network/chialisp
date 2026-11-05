@@ -1,5 +1,11 @@
 # chialisp Changelog
 
+## Unreleased
+### Changed
+- WASM `Program.run` now throws an `Error` for evaluator failures instead of a
+  string. Use `error.message` for the failure text; `error.prints` contains the
+  runtime prints captured before the failure.
+
 ## 0.1.42
 ### Fixed
 - Subtle differences with python representation of disassmebled strings.

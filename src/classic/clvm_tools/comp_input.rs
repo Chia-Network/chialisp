@@ -13,11 +13,10 @@ use crate::classic::clvm_tools::ir::r#type::NEW_BIT_CONSTANTS;
 use crate::classic::clvm_tools::ir::reader::read_ir;
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 
-use crate::compiler::compiler::{compile_file, DefaultCompilerOpts};
-use crate::compiler::comptypes::{CompileErr, CompilerOpts, CompilerOutput};
+use crate::compiler::compiler::{compile_file_maybe_opt, DefaultCompilerOpts};
+use crate::compiler::comptypes::{CompileErr, CompilerOpts};
 use crate::compiler::debug::build_symbol_table_mut;
 use crate::compiler::dialect::{detect_modern, AcceptedDialect};
-use crate::compiler::optimize::maybe_finalize_program_via_classic_optimizer;
 use crate::compiler::sexp;
 
 pub fn get_disassembly_ver(p: &HashMap<String, ArgumentValue>) -> Option<usize> {
@@ -221,24 +220,15 @@ impl RunAndCompileInputData {
     ) -> Result<Rc<sexp::SExp>, CompileErr> {
         let runner = Rc::new(DefaultProgramRunner::new());
 
-        let unopt_res = compile_file(
+        let output = compile_file_maybe_opt(
             allocator,
-            runner.clone(),
+            runner,
             self.opts.clone(),
             &self.program.content,
             symbol_table,
+            self.do_optimize,
         )?;
-        let res = if matches!(unopt_res, CompilerOutput::Module(_)) {
-            Rc::new(unopt_res.to_sexp())
-        } else {
-            maybe_finalize_program_via_classic_optimizer(
-                allocator,
-                runner,
-                self.opts.clone(),
-                self.do_optimize,
-                &unopt_res.to_sexp(),
-            )?
-        };
+        let res = Rc::new(output.to_sexp());
 
         build_symbol_table_mut(symbol_table, &res);
 

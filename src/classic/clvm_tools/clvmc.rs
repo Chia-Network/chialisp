@@ -17,11 +17,10 @@ use crate::classic::clvm_tools::stages::stage_2::operators::run_program_for_sear
 use crate::classic::platform::distutils::dep_util::newer;
 
 use crate::compiler::clvm::convert_to_clvm_rs;
-use crate::compiler::compiler::compile_file;
+use crate::compiler::compiler::compile_file_maybe_opt;
 use crate::compiler::compiler::DefaultCompilerOpts;
-use crate::compiler::comptypes::{CompileErr, CompilerOpts, CompilerOutput};
+use crate::compiler::comptypes::{CompileErr, CompilerOpts};
 use crate::compiler::dialect::{detect_modern, AcceptedDialect};
-use crate::compiler::optimize::maybe_finalize_program_via_classic_optimizer;
 use crate::compiler::runtypes::RunFailure;
 use crate::compiler::srcloc::Srcloc;
 use crate::util::gentle_overwrite;
@@ -138,18 +137,9 @@ pub fn compile_clvm_text_maybe_opt(
         let runner = Rc::new(DefaultProgramRunner::new());
         let opts = compiler_opts_for_dialect(opts, dialect, do_optimize);
 
-        let unopt_res = compile_file(allocator, runner.clone(), opts.clone(), text, symbol_table)?;
-        let res = if matches!(unopt_res, CompilerOutput::Module(_)) {
-            Rc::new(unopt_res.to_sexp())
-        } else {
-            maybe_finalize_program_via_classic_optimizer(
-                allocator,
-                runner,
-                opts,
-                do_optimize,
-                &unopt_res.to_sexp(),
-            )?
-        };
+        let output =
+            compile_file_maybe_opt(allocator, runner, opts, text, symbol_table, do_optimize)?;
+        let res = Rc::new(output.to_sexp());
 
         Ok(convert_to_clvm_rs(allocator, res)?)
     } else {

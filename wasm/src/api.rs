@@ -32,7 +32,7 @@ use chialisp::compiler::compiler::{
     extract_program_and_env, path_to_function, rewrite_in_program, DefaultCompilerOpts,
 };
 use chialisp::compiler::comptypes::{CompileErr, CompilerOpts};
-use chialisp::compiler::debug_metadata::compile_with_debug;
+use chialisp::compiler::debug_metadata::compile_with_debug_maybe_opt;
 use chialisp::compiler::optimize::get_optimizer;
 use chialisp::compiler::prims;
 use chialisp::compiler::repl::Repl;
@@ -342,11 +342,11 @@ pub fn compile_debug(
         .collect();
     let base_opts = Rc::new(DefaultCompilerOpts::new(&filename)).set_search_paths(&search_paths);
     let mut allocator = Allocator::new();
-    let opts = match compiler_opts_for_source(&mut allocator, base_opts.clone(), &input, false) {
+    let opts = match compiler_opts_for_source(&mut allocator, base_opts.clone(), &input, true) {
         Ok(opts) => opts,
         Err(error) => return create_clvm_runner_err(error.format(&allocator, base_opts)),
     };
-    match compile_with_debug(opts, &input) {
+    match compile_with_debug_maybe_opt(opts, &input, true) {
         Err(error) => create_clvm_compile_failure(&error),
         Ok(artifacts) => {
             let result = js_sys::Array::new();

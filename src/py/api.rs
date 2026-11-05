@@ -34,7 +34,7 @@ use crate::compiler::compiler::{
     extract_program_and_env, path_to_function, rewrite_in_program, DefaultCompilerOpts,
 };
 use crate::compiler::comptypes::{CompileErr, CompilerOpts};
-use crate::compiler::debug_metadata::compile_with_debug;
+use crate::compiler::debug_metadata::compile_with_debug_maybe_opt;
 use crate::compiler::preprocessor::gather_dependencies;
 use crate::compiler::prims;
 use crate::compiler::runtypes::RunFailure;
@@ -217,9 +217,9 @@ fn compile_debug(
     let base_opts: Rc<dyn CompilerOpts> =
         Rc::new(DefaultCompilerOpts::new(&filename)).set_search_paths(&search_paths);
     let mut allocator = Allocator::new();
-    let opts = clvmc::compiler_opts_for_source(&mut allocator, base_opts.clone(), &source, false)
+    let opts = clvmc::compiler_opts_for_source(&mut allocator, base_opts.clone(), &source, true)
         .map_err(|e| CompError::new_err(e.format(&allocator, base_opts)))?;
-    let artifacts = compile_with_debug(opts, &source)
+    let artifacts = compile_with_debug_maybe_opt(opts, &source, true)
         .map_err(|e| CompError::new_err(format!("{}: {}", e.0, e.1)))?;
     Python::attach(|py| {
         let result = PyDict::new(py);

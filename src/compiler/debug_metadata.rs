@@ -36,7 +36,7 @@ use crate::classic::clvm::serialize::{sexp_from_stream, sexp_to_stream, SimpleCr
 use crate::classic::clvm_tools::binutils::disassemble_with_kw;
 use crate::classic::clvm_tools::stages::stage_0::DefaultProgramRunner;
 use crate::compiler::clvm::{convert_to_clvm_rs, integer_atom_bytes};
-use crate::compiler::compiler::{compile_file, is_at_capture};
+use crate::compiler::compiler::{compile_file_maybe_opt, is_at_capture};
 use crate::compiler::comptypes::{
     CompileErr, CompilerOpts, CompilerOutput, HasCompilerOptsDelegation,
 };
@@ -124,6 +124,7 @@ pub struct DebugCompileArtifact {
 pub enum FrameMatch {
     Exact,
     Curried,
+    Ambiguous,
     Unknown,
 }
 
@@ -137,7 +138,8 @@ pub struct SymbolizedFrame {
     pub program_hash: [u8; 32],
     /// Canonical CLVM serialization of values quoted into curry wrappers.
     pub bound_arguments: Vec<Vec<u8>>,
-    /// Canonical CLVM serialization of arguments supplied by the caller.
+    /// Canonical CLVM serialization of caller arguments forwarded to the base.
+    /// Closed curry wrappers do not forward the caller's environment.
     pub runtime_arguments: Vec<Vec<u8>>,
     /// Fully named and constrained arguments derived from the sidecar.
     pub arguments: Vec<StackFrameArgument>,
@@ -166,6 +168,7 @@ pub struct DebugMetadataCollection {
     entries: Vec<DebugMetadata>,
     program_identities: HashMap<[u8; 32], usize>,
     structural_identities: HashMap<[u8; 32], Vec<usize>>,
+    source_indices: Vec<Vec<SourceIndex>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -210,7 +213,7 @@ struct InternState {
     span_indices: HashMap<(usize, usize, usize, usize, usize), usize>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 struct SourceIndex {
     line_starts: Vec<usize>,
 }
@@ -535,11 +538,16 @@ fn build_tree(
     sources: &HashMap<String, String>,
     state: &mut InternState,
 ) -> Result<DebugNode, String> {
-    let span = Some(state.intern_span(&program.program.loc(), sources)?);
     let hash = hex::encode(program.hash);
+    let ambiguous = symbols.contains_key(&format!("{hash}_ambiguous"));
+    let span = if ambiguous {
+        None
+    } else {
+        Some(state.intern_span(&program.program.loc(), sources)?)
+    };
     let label = symbols
         .get(&hash)
-        .filter(|name| !name.contains('('))
+        .filter(|name| !name.contains('(') && !ambiguous)
         .map(|name| state.intern_string(name));
     let function = functions_by_hash.get(&hash).copied();
     match &program.children {
@@ -736,6 +744,9 @@ fn build_functions(
     let mut functions = Vec::new();
     let mut functions_by_hash = HashMap::new();
     for hash in hashes {
+        if symbols.contains_key(&format!("{hash}_ambiguous")) {
+            continue;
+        }
         add_function_record(
             program_index,
             FunctionRecordSpec {
@@ -782,7 +793,8 @@ impl DebugMetadata {
         sources: &HashMap<String, String>,
     ) -> Result<Self, String> {
         let program_bytes = serialize_program(program)?;
-        Self::from_program_bytes(program, &program_bytes, symbols, sources)
+        let program_index = ProgramIndex::new(program);
+        Self::from_program_index(&program_index, &program_bytes, symbols, sources)
     }
 
     pub fn from_program_bytes(
@@ -891,13 +903,13 @@ impl DebugMetadata {
         let mut allocator = Allocator::new();
         let program = decode_clvm(&mut allocator, program_bytes, "frame program")?;
         let mut bound_arguments = Vec::new();
-        let (matched, fallback_function, source_span, function_index) = symbolize_node(
-            &allocator,
-            program,
-            &self.tree,
-            &self.strings,
-            &mut bound_arguments,
-        );
+        let (matched, fallback_function, source_span, function_index, uses_runtime) =
+            symbolize_node(&allocator, program, self, &mut bound_arguments);
+        let (runtime_arguments, runtime_tail) = if uses_runtime {
+            (runtime_arguments, runtime_tail)
+        } else {
+            (&[][..], None)
+        };
         let function = function_index
             .and_then(|index| self.functions.get(index))
             .and_then(|function| self.strings.get(function.name))
@@ -1104,6 +1116,13 @@ impl DebugMetadataCollection {
         }
         self.program_identities
             .insert(metadata.program_sha256, index);
+        self.source_indices.push(
+            metadata
+                .files
+                .iter()
+                .map(|file| SourceIndex::new(&file.source))
+                .collect(),
+        );
         self.entries.push(metadata);
         Ok(())
     }
@@ -1162,7 +1181,7 @@ impl DebugMetadataCollection {
                     }
                 }
             }
-            let Some((base, _)) = canonical_curry(&allocator, current) else {
+            let Some((base, _, _)) = canonical_curry(&allocator, current) else {
                 break;
             };
             current = base;
@@ -1264,7 +1283,12 @@ impl DebugMetadataCollection {
                 repeated = 0;
             }
             let frame = if let Some(index) = symbolized.metadata_index {
-                format_stack_frame(&self.entries[index], &symbolized.frame, style)?
+                format_stack_frame_with_sources(
+                    &self.entries[index],
+                    &symbolized.frame,
+                    style,
+                    Some(&self.source_indices[index]),
+                )?
             } else {
                 format_unknown_stack_frame(&symbolized.frame, style)
             };
@@ -1322,16 +1346,28 @@ pub fn compile_with_debug(
     opts: Rc<dyn CompilerOpts>,
     content: &str,
 ) -> Result<Vec<DebugCompileArtifact>, CompileErr> {
+    compile_with_debug_maybe_opt(opts, content, false)
+}
+
+/// As [`compile_with_debug`], with the optional final classic optimization used
+/// by the CLI's optimization flag. Public Python/WASM compile APIs enable this
+/// and derive compiler options with `do_optimize = true`, just like `compile`.
+pub fn compile_with_debug_maybe_opt(
+    opts: Rc<dyn CompilerOpts>,
+    content: &str,
+    do_optimize: bool,
+) -> Result<Vec<DebugCompileArtifact>, CompileErr> {
     let (opts, sources) =
         capture_compiler_sources(opts.clone(), opts.filename(), content.to_string());
     let mut allocator = Allocator::new();
     let mut compiler_symbols = HashMap::new();
-    let output = compile_file(
+    let output = compile_file_maybe_opt(
         &mut allocator,
         Rc::new(DefaultProgramRunner::new()),
         opts.clone(),
         content,
         &mut compiler_symbols,
+        do_optimize,
     )?;
     let sources = sources.borrow();
 
@@ -1834,18 +1870,19 @@ fn node_matches_tree(allocator: &Allocator, node: NodePtr, tree: &DebugNode) -> 
     }
 }
 
-fn exact_tree_match<'a>(
+fn exact_tree_matches<'a>(
     allocator: &Allocator,
     node: NodePtr,
     tree: &'a DebugNode,
-) -> Option<&'a DebugNode> {
+    matches: &mut Vec<&'a DebugNode>,
+) {
     if node_matches_tree(allocator, node, tree) {
-        return Some(tree);
+        matches.push(tree);
+        return;
     }
     if let DebugNode::Pair { left, right, .. } = tree {
-        exact_tree_match(allocator, node, left).or_else(|| exact_tree_match(allocator, node, right))
-    } else {
-        None
+        exact_tree_matches(allocator, node, left, matches);
+        exact_tree_matches(allocator, node, right, matches);
     }
 }
 
@@ -1890,8 +1927,9 @@ fn quoted_value(allocator: &Allocator, node: NodePtr) -> Option<NodePtr> {
     })
 }
 
-/// Recognize only `(a (q . MOD) (c (q . ARG) ... 1))`.
-fn canonical_curry(allocator: &Allocator, node: NodePtr) -> Option<(NodePtr, Vec<NodePtr>)> {
+/// Recognize `(a (q . MOD) (c (q . ARG) ... TAIL))`, where TAIL is
+/// runtime path 1 or nil. Nil closes the environment over quoted arguments.
+fn canonical_curry(allocator: &Allocator, node: NodePtr) -> Option<(NodePtr, Vec<NodePtr>, bool)> {
     let (apply, tail) = pair(allocator, node)?;
     if !atom_is(allocator, apply, &[2]) {
         return None;
@@ -1907,7 +1945,10 @@ fn canonical_curry(allocator: &Allocator, node: NodePtr) -> Option<(NodePtr, Vec
     let mut arguments = Vec::new();
     loop {
         if atom_is(allocator, cursor, &[1]) {
-            return Some((base, arguments));
+            return Some((base, arguments, true));
+        }
+        if atom_is(allocator, cursor, &[]) {
+            return Some((base, arguments, false));
         }
         let (cons, tail) = pair(allocator, cursor)?;
         if !atom_is(allocator, cons, &[4]) {
@@ -1926,38 +1967,79 @@ fn canonical_curry(allocator: &Allocator, node: NodePtr) -> Option<(NodePtr, Vec
 fn symbolize_node(
     allocator: &Allocator,
     node: NodePtr,
-    metadata_tree: &DebugNode,
-    strings: &[String],
+    metadata: &DebugMetadata,
     bound_arguments: &mut Vec<Vec<u8>>,
-) -> (FrameMatch, Option<String>, Option<usize>, Option<usize>) {
-    if let Some(exact) = exact_tree_match(allocator, node, metadata_tree) {
+) -> (
+    FrameMatch,
+    Option<String>,
+    Option<usize>,
+    Option<usize>,
+    bool,
+) {
+    let mut matches = Vec::new();
+    exact_tree_matches(allocator, node, &metadata.tree, &mut matches);
+    if let Some(exact) = matches.first() {
+        let identity = |tree: &DebugNode| {
+            (
+                node_label(tree, &metadata.strings),
+                node_span(tree),
+                node_function(tree),
+            )
+        };
+        if matches
+            .iter()
+            .any(|other| identity(other) != identity(exact))
+        {
+            let mut names = matches
+                .iter()
+                .filter_map(|tree| {
+                    node_function(tree)
+                        .and_then(|index| metadata.functions.get(index))
+                        .and_then(|function| metadata.strings.get(function.name))
+                        .cloned()
+                        .or_else(|| node_label(tree, &metadata.strings))
+                })
+                .collect::<Vec<_>>();
+            names.sort();
+            names.dedup();
+            let label = if names.is_empty() {
+                "<ambiguous>".to_string()
+            } else {
+                format!("<ambiguous: {}>", names.join(" | "))
+            };
+            return (FrameMatch::Ambiguous, Some(label), None, None, true);
+        }
         return (
             FrameMatch::Exact,
-            node_label(exact, strings),
+            node_label(exact, &metadata.strings),
             node_span(exact),
             node_function(exact),
+            true,
         );
     }
-    let Some((base, arguments)) = canonical_curry(allocator, node) else {
-        return (FrameMatch::Unknown, None, None, None);
+    let Some((base, arguments, uses_runtime)) = canonical_curry(allocator, node) else {
+        return (FrameMatch::Unknown, None, None, None, true);
     };
-    let (matched, function, source_span, function_index) =
-        symbolize_node(allocator, base, metadata_tree, strings, bound_arguments);
-    for argument in arguments {
-        let Ok(bytes) = node_to_bytes(allocator, argument) else {
-            return (FrameMatch::Unknown, None, None, None);
-        };
-        bound_arguments.push(bytes);
+    let (matched, function, source_span, function_index, base_uses_runtime) =
+        symbolize_node(allocator, base, metadata, bound_arguments);
+    // A closed inner wrapper ignores the complete environment of an outer one.
+    if base_uses_runtime {
+        for argument in arguments {
+            let Ok(bytes) = node_to_bytes(allocator, argument) else {
+                return (FrameMatch::Unknown, None, None, None, true);
+            };
+            bound_arguments.push(bytes);
+        }
     }
     (
-        if matched == FrameMatch::Unknown {
-            FrameMatch::Unknown
-        } else {
-            FrameMatch::Curried
+        match matched {
+            FrameMatch::Exact | FrameMatch::Curried => FrameMatch::Curried,
+            other => other,
         },
         function,
         source_span,
         function_index,
+        uses_runtime && base_uses_runtime,
     )
 }
 
@@ -1974,6 +2056,32 @@ fn top_level_parameters(
             }
             DebugParameter::Nil => return (fixed, None),
             DebugParameter::Name { .. } => return (fixed, Some(cursor)),
+        }
+    }
+}
+
+fn parameter_pattern(
+    metadata: &DebugMetadata,
+    parameter: &DebugParameter,
+) -> Result<String, String> {
+    match parameter {
+        DebugParameter::Nil => Ok("()".to_string()),
+        DebugParameter::Name { name, .. } => metadata
+            .strings
+            .get(*name)
+            .cloned()
+            .ok_or_else(|| "debug parameter name index out of range".to_string()),
+        DebugParameter::Pair(_, _) => {
+            let (fixed, tail) = top_level_parameters(parameter);
+            let mut parts = fixed
+                .into_iter()
+                .map(|item| parameter_pattern(metadata, item))
+                .collect::<Result<Vec<_>, _>>()?;
+            if let Some(tail) = tail {
+                parts.push(".".to_string());
+                parts.push(parameter_pattern(metadata, tail)?);
+            }
+            Ok(format!("({})", parts.join(" ")))
         }
     }
 }
@@ -2006,8 +2114,17 @@ fn bind_parameter_value(
             Ok(())
         }
         DebugParameter::Pair(left, right) => {
-            let (first, rest) = pair(allocator, value)
-                .ok_or_else(|| "frame value does not match destructured parameter".to_string())?;
+            let Some((first, rest)) = pair(allocator, value) else {
+                // A bad call is precisely when its raw argument is most useful.
+                result.push(StackFrameArgument {
+                    name: parameter_pattern(metadata, parameter)?,
+                    binding,
+                    constraint: ParameterConstraint::Pair,
+                    value: node_to_bytes(allocator, value)
+                        .map_err(|error| format!("cannot serialize frame argument: {error:?}"))?,
+                });
+                return Ok(());
+            };
             bind_parameter_value(metadata, allocator, left, first, binding, result)?;
             bind_parameter_value(metadata, allocator, right, rest, binding, result)
         }
@@ -2064,9 +2181,10 @@ fn materialize_frame_arguments(
                 .new_pair(*item, value)
                 .map_err(|error| format!("cannot construct rest argument: {error:?}"))?;
         }
-        let binding = if remaining
-            .iter()
-            .all(|(binding, _)| *binding == ArgumentBinding::Bound)
+        let binding = if !remaining.is_empty()
+            && remaining
+                .iter()
+                .all(|(binding, _)| *binding == ArgumentBinding::Bound)
             && runtime_tail.is_none()
         {
             ArgumentBinding::Bound
@@ -2188,10 +2306,13 @@ pub fn primitive_parameter_constraint(
         b"g2_multiply" => ParameterConstraint::Integer,
         b"coinid" if argument_index < 2 => ParameterConstraint::Bytes(32),
         b"coinid" if argument_index == 2 => ParameterConstraint::Integer,
-        b"bls_pairing_identity" | b"bls_verify" if argument_index.is_multiple_of(2) => {
+        b"bls_verify" if argument_index == 0 => ParameterConstraint::Bytes(96),
+        b"bls_verify" if !argument_index.is_multiple_of(2) => ParameterConstraint::Bytes(48),
+        b"bls_verify" => ParameterConstraint::Atom,
+        b"bls_pairing_identity" if argument_index.is_multiple_of(2) => {
             ParameterConstraint::Bytes(48)
         }
-        b"bls_pairing_identity" | b"bls_verify" => ParameterConstraint::Bytes(96),
+        b"bls_pairing_identity" => ParameterConstraint::Bytes(96),
         _ => ParameterConstraint::Unknown,
     }
 }
@@ -2442,6 +2563,15 @@ pub fn format_stack_frame(
     frame: &SymbolizedFrame,
     style: StackFrameStyle,
 ) -> Result<String, String> {
+    format_stack_frame_with_sources(metadata, frame, style, None)
+}
+
+fn format_stack_frame_with_sources(
+    metadata: &DebugMetadata,
+    frame: &SymbolizedFrame,
+    style: StackFrameStyle,
+    source_indices: Option<&[SourceIndex]>,
+) -> Result<String, String> {
     let function = frame
         .function
         .clone()
@@ -2461,6 +2591,23 @@ pub fn format_stack_frame(
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if frame.matched == FrameMatch::Ambiguous {
+        // Preserve values without borrowing parameter names from any candidate.
+        let mut values = frame
+            .bound_arguments
+            .iter()
+            .chain(&frame.runtime_arguments)
+            .take(100)
+            .map(|value| render_stack_argument(value))
+            .collect::<Result<Vec<_>, _>>()?;
+        if frame.bound_arguments.len() + frame.runtime_arguments.len() > 100 {
+            values.push("...".to_string());
+        }
+        rendered_arguments.push(match style {
+            StackFrameStyle::Lisp => format!("(arguments unknown ({}))", values.join(" ")),
+            StackFrameStyle::Python => format!("arguments = [{}]", values.join(", ")),
+        });
+    }
     if frame.arguments.len() > 100 {
         rendered_arguments.push("...".to_string());
     }
@@ -2497,7 +2644,15 @@ pub fn format_stack_frame(
             .files
             .get(span.file)
             .ok_or_else(|| "frame source file index out of range".to_string())?;
-        if let Some(line) = file.source.lines().nth(span.start_line - 1) {
+        let local_index;
+        let source_index = match source_indices.and_then(|indices| indices.get(span.file)) {
+            Some(index) => index,
+            None => {
+                local_index = SourceIndex::new(&file.source);
+                &local_index
+            }
+        };
+        if let Some(line) = source_index.line(&file.source, span.start_line) {
             let expanded = expand_tabs(line);
             let width = if span.end_line == span.start_line {
                 span.end_column.saturating_sub(span.start_column).max(1)
@@ -3012,50 +3167,42 @@ mod tests {
     }
 
     #[test]
-    fn default_debug_compile_matches_normal_optimized_cl23_compile() {
-        let source = indoc! {"
-            (mod (N)
-              (include *standard-cl-23*)
-              (defun optimized (X)
-                (+ X 0))
-              (optimized N))
-        "};
-        let filename = "option-parity.clsp";
-        let base_opts: Rc<dyn CompilerOpts> = Rc::new(
-            crate::compiler::compiler::DefaultCompilerOpts::new(filename),
-        );
-
-        let mut normal_allocator = Allocator::new();
-        let normal = crate::classic::clvm_tools::clvmc::compile_clvm_text_maybe_opt(
-            &mut normal_allocator,
-            false,
-            base_opts.clone(),
-            &mut HashMap::new(),
-            source,
-            filename,
-            true,
-        )
-        .expect("normal compile");
-        let normal_bytes =
-            node_to_bytes(&normal_allocator, normal).expect("serialize normal compile");
-
-        let mut option_allocator = Allocator::new();
-        let debug_opts = crate::classic::clvm_tools::clvmc::compiler_opts_for_source(
-            &mut option_allocator,
-            base_opts,
-            source,
-            false,
-        )
-        .expect("derive CLI-equivalent options");
-        let artifact = compile_with_debug(debug_opts, source)
-            .expect("debug compile")
-            .remove(0);
-
-        assert_eq!(artifact.program, normal_bytes);
-        DebugMetadata::decode(&artifact.metadata)
-            .expect("decode debug metadata")
-            .verify_program(&normal_bytes)
-            .expect("metadata matches normal program");
+    fn default_debug_compile_matches_normal_optimized_compile() {
+        for stepping in [21, 22, 23] {
+            for body in ["(+ 1 2)", "(defun optimized (X) (+ X 0)) (optimized N)"] {
+                let source = format!("(mod (N) (include *standard-cl-{stepping}*) {body})");
+                let filename = "option-parity.clsp";
+                let base_opts: Rc<dyn CompilerOpts> = Rc::new(
+                    crate::compiler::compiler::DefaultCompilerOpts::new(filename),
+                );
+                let mut allocator = Allocator::new();
+                let normal = crate::classic::clvm_tools::clvmc::compile_clvm_text(
+                    &mut allocator,
+                    base_opts.clone(),
+                    &mut HashMap::new(),
+                    &source,
+                    filename,
+                    true,
+                )
+                .expect("normal API compile");
+                let normal_bytes = node_to_bytes(&allocator, normal).unwrap();
+                let debug_opts = crate::classic::clvm_tools::clvmc::compiler_opts_for_source(
+                    &mut allocator,
+                    base_opts,
+                    &source,
+                    true,
+                )
+                .unwrap();
+                let artifact = compile_with_debug_maybe_opt(debug_opts, &source, true)
+                    .unwrap()
+                    .remove(0);
+                assert_eq!(artifact.program, normal_bytes, "CL{stepping}: {body}");
+                DebugMetadata::decode(&artifact.metadata)
+                    .unwrap()
+                    .verify_program(&normal_bytes)
+                    .unwrap();
+            }
+        }
     }
 
     #[test]
@@ -3265,26 +3412,42 @@ mod tests {
             "{rendered}"
         );
 
-        let malformed = collection
-            .symbolize_serialized_frame(&SerializedFrame {
-                program: shadow_bytes(
-                    function_shadow(&collection.get(0).expect("metadata").tree, function_index)
-                        .expect("function program"),
-                ),
-                environment: serialized_environment(
-                    &[
-                        atom_serialization(b"captured"),
-                        atom_serialization(b"not-a-pair"),
-                        atom_serialization(&[0x22; 32]),
-                    ],
-                    None,
-                ),
-            })
-            .unwrap_err();
+        let malformed = SerializedFrame {
+            program: shadow_bytes(
+                function_shadow(&collection.get(0).expect("metadata").tree, function_index)
+                    .expect("function program"),
+            ),
+            environment: serialized_environment(
+                &[
+                    atom_serialization(b"captured"),
+                    atom_serialization(b"not-a-pair"),
+                    atom_serialization(&[0x22; 32]),
+                ],
+                None,
+            ),
+        };
+        let frame = collection.symbolize_serialized_frame(&malformed).unwrap();
+        assert_eq!(frame.frame.arguments[0].name, "(N . P)");
         assert_eq!(
-            malformed,
-            "frame value does not match destructured parameter"
+            frame.frame.arguments[0].value,
+            atom_serialization(b"not-a-pair")
         );
+        assert_eq!(frame.frame.arguments[1].name, "B");
+        let rendered = collection
+            .format_captured_stack(
+                &[
+                    SerializedFrame {
+                        program: artifact.program,
+                        environment: serialized_sexp("(1)"),
+                    },
+                    malformed,
+                ],
+                0,
+                StackFrameStyle::Python,
+            )
+            .expect("a malformed argument must not discard the traceback");
+        assert!(rendered.contains("in <main>"), "{rendered}");
+        assert!(rendered.contains("(N . P) = \"not-a-pair\""), "{rendered}");
     }
 
     #[test]
@@ -3358,6 +3521,18 @@ mod tests {
         assert_eq!(
             render_clvm_value(&proper.frame.arguments[1].value).unwrap(),
             "(43 44)"
+        );
+
+        let empty = collection
+            .symbolize_serialized_frame(&SerializedFrame {
+                program: program.clone(),
+                environment: serialized_sexp("(5)"),
+            })
+            .unwrap();
+        assert_eq!(empty.frame.arguments[1].binding, ArgumentBinding::Runtime);
+        assert_eq!(
+            render_clvm_value(&empty.frame.arguments[1].value).unwrap(),
+            "()"
         );
 
         let improper = collection
@@ -3590,12 +3765,148 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_code_does_not_invent_a_function_span_or_parameters() {
+        let (program, symbols, sources) = fixture();
+        let mut metadata = DebugMetadata::from_program(&program, &symbols, &sources).unwrap();
+        let bytes = serialize_program(&program).unwrap();
+        let first = metadata.tree.clone();
+        let mut second = first.clone();
+        let name = metadata.strings.len();
+        metadata.strings.push("second".to_string());
+        let function = metadata.functions.len();
+        let mut second_function = metadata.functions[0].clone();
+        second_function.name = name;
+        metadata.functions.push(second_function);
+        match &mut second {
+            DebugNode::Atom {
+                label,
+                function: index,
+                span,
+                ..
+            }
+            | DebugNode::Pair {
+                label,
+                function: index,
+                span,
+                ..
+            } => {
+                *label = Some(name);
+                *index = Some(function);
+                *span = None;
+            }
+        }
+        metadata.tree = DebugNode::Pair {
+            span: None,
+            label: None,
+            function: None,
+            left: Box::new(first.clone()),
+            right: Box::new(second),
+        };
+        metadata.program_sha256 = Sha256::digest(shadow_bytes(&metadata.tree)).into();
+        let mut collection = DebugMetadataCollection::default();
+        collection.insert(&metadata.encode().unwrap()).unwrap();
+        let captured = SerializedFrame {
+            program: bytes.clone(),
+            environment: serialized_sexp("(5 6)"),
+        };
+        let frame = collection.symbolize_serialized_frame(&captured).unwrap();
+        assert_eq!(frame.frame.function_index, None);
+        assert_eq!(frame.frame.source_span, None);
+        assert!(frame.frame.arguments.is_empty());
+        let rendered = collection
+            .format_captured_stack(&[captured], 0, StackFrameStyle::Python)
+            .unwrap();
+        assert!(
+            rendered.contains("<ambiguous: fixture | second>"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("arguments = [5, 6]"), "{rendered}");
+        // Repeated copies with identical annotations have no attribution conflict.
+        metadata.tree = DebugNode::Pair {
+            span: None,
+            label: None,
+            function: None,
+            left: Box::new(first.clone()),
+            right: Box::new(first),
+        };
+        assert_eq!(
+            metadata
+                .symbolize_frame(&bytes, &[])
+                .unwrap()
+                .function
+                .as_deref(),
+            Some("fixture")
+        );
+    }
+
+    #[test]
+    fn identical_compiled_defuns_do_not_keep_the_last_functions_names() {
+        let source = "(mod (A B) (include *standard-cl-21*)
+            (defun first (X) (+ X 1)) (defun second (Y) (+ Y 1))
+            (c (first A) (second B)))";
+        let opts = Rc::new(crate::compiler::compiler::DefaultCompilerOpts::new(
+            "duplicates.clsp",
+        ));
+        let artifact = compile_with_debug(opts, source).unwrap().remove(0);
+        let metadata = DebugMetadata::decode(&artifact.metadata).unwrap();
+        assert!(!metadata.functions.iter().any(
+            |function| ["first", "second"].contains(&metadata.strings[function.name].as_str())
+        ));
+    }
+
+    #[test]
+    fn compiler_hash_collision_does_not_claim_a_single_origin() {
+        // An optimizer may retain just one copy of shared code. The collision
+        // marker must still prevent attribution to that copy's original span.
+        let (program, mut symbols, sources) = fixture();
+        symbols.insert(
+            format!("{}_ambiguous", tree_hash_hex(&program)),
+            "1".to_string(),
+        );
+        let metadata = DebugMetadata::from_program(&program, &symbols, &sources).unwrap();
+        let frame = metadata
+            .symbolize_frame(&serialize_program(&program).unwrap(), &[])
+            .unwrap();
+        assert_eq!(frame.function, None);
+        assert_eq!(frame.source_span, None);
+    }
+
+    #[test]
+    fn nil_terminated_curry_discards_caller_and_outer_curry_arguments() {
+        let (program, symbols, sources) = fixture();
+        let metadata = DebugMetadata::from_program(&program, &symbols, &sources).unwrap();
+        let closed = serialized_sexp(&format!("(2 (1 . {program}) (4 (1 . 42) ()))"));
+        for program in [closed.clone(), canonical_curry_bytes(&closed, &[vec![99]])] {
+            let frame = metadata.symbolize_frame(&program, &[vec![77]]).unwrap();
+            assert_eq!(frame.matched, FrameMatch::Curried);
+            assert_eq!(frame.bound_arguments, vec![vec![42]]);
+            assert!(frame.runtime_arguments.is_empty());
+            assert_eq!(frame.arguments.len(), 1);
+            assert_eq!(frame.arguments[0].value, vec![42]);
+        }
+        let open = format!("(2 (1 . {program}) (4 (1 . 42) 1))");
+        let closed_outer = serialized_sexp(&format!("(2 (1 . {open}) (4 (1 . 99) ()))"));
+        let frame = metadata
+            .symbolize_frame(&closed_outer, &[vec![77]])
+            .unwrap();
+        assert_eq!(frame.bound_arguments, vec![vec![42], vec![99]]);
+        assert_eq!(
+            frame
+                .arguments
+                .iter()
+                .map(|arg| arg.value.clone())
+                .collect::<Vec<_>>(),
+            vec![vec![42], vec![99]]
+        );
+    }
+
+    #[test]
     fn rejects_noncanonical_curry_and_retains_unknown_hash() {
         let (program, symbols, sources) = fixture();
         let metadata =
             DebugMetadata::from_program(&program, &symbols, &sources).expect("build metadata");
-        // The environment terminates in nil rather than runtime path 1.
-        let text = format!("(2 (1 . {program}) (4 (1 . 42) ()))");
+        // A different environment path is not a canonical curry or closed closure.
+        let text = format!("(2 (1 . {program}) (4 (1 . 42) 2))");
         let unknown = parse_sexp(Srcloc::start("unknown.clvm"), text.bytes())
             .expect("parse unknown")
             .remove(0);
@@ -3607,6 +3918,31 @@ mod tests {
         assert_eq!(frame.function, None);
         assert_ne!(frame.program_hash, [0; 32]);
         assert!(frame.bound_arguments.is_empty());
+    }
+
+    #[test]
+    fn bls_verify_constraints_follow_signature_key_message_order() {
+        let expected = [
+            ParameterConstraint::Bytes(96),
+            ParameterConstraint::Bytes(48),
+            ParameterConstraint::Atom,
+            ParameterConstraint::Bytes(48),
+            ParameterConstraint::Atom,
+        ];
+        for primitive in [b"bls_verify".as_slice(), &[59]] {
+            for (index, constraint) in expected.iter().enumerate() {
+                assert_eq!(
+                    &primitive_parameter_constraint(primitive, index),
+                    constraint
+                );
+            }
+        }
+        for index in 0..4 {
+            assert_eq!(
+                primitive_parameter_constraint(b"bls_pairing_identity", index),
+                ParameterConstraint::Bytes(if index % 2 == 0 { 48 } else { 96 })
+            );
+        }
     }
 
     #[test]

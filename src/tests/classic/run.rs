@@ -79,6 +79,26 @@ fn brun_reports_chialisp_and_rue_runtime_prints() {
 }
 
 #[test]
+fn classic_debug_output_reports_unsupported_dialect() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = temp.path().join("classic.debug.clvm.bin");
+    let args = vec![
+        "run".to_string(),
+        "--fail-on-error".to_string(),
+        "(mod (X) (+ X 1))".to_string(),
+        "--debug-output-file".to_string(),
+        output.to_string_lossy().into_owned(),
+    ];
+    let (message, status) = launch_tool_output(&args, "run", 2);
+    assert!(status.should_exit_with_error(), "{message}");
+    assert!(
+        message.contains("--debug-output-file requires modern Chialisp"),
+        "{message}"
+    );
+    assert!(!output.exists());
+}
+
+#[test]
 fn run_writes_verifiable_structural_debug_sidecar() {
     let output = tempfile::NamedTempFile::new().expect("debug output file");
     let args = vec![
