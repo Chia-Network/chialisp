@@ -18,6 +18,14 @@
 //! `(0 SPAN STRING FUNCTION ATOM)` for atoms and
 //! `(1 SPAN STRING FUNCTION LEFT RIGHT)` for pairs. Table references are
 //! encoded as `index + 1`; zero means absent.
+//!
+//! The version is a compatibility boundary, incremented for incompatible changes
+//! to required fields or structural tags. Additive extensions keep the same
+//! version: readers ignore trailing fields in every record and decode unknown
+//! constraint tags as `Unknown`. A union containing an unknown constraint is
+//! conservatively unknown as a whole. Required fields are still validated;
+//! unsupported versions are rejected without interpreting their payload schema.
+//! Encoders emit only known fields; ignored extensions are not round-tripped.
 
 #[cfg(test)]
 use std::cell::Cell;
@@ -46,6 +54,7 @@ use crate::compiler::srcloc::{src_location_max, Srcloc};
 use crate::util::u8_from_number;
 
 const MAGIC: &[u8] = b"CHIALISP_DEBUG";
+/// Compatibility version; additive metadata extensions do not increment it.
 pub const DEBUG_METADATA_VERSION: usize = 1;
 pub const DEBUG_METADATA_TAB_WIDTH: usize = 8;
 
@@ -1007,15 +1016,18 @@ impl DebugMetadata {
 
     fn from_clvm(allocator: &Allocator, root: NodePtr) -> Result<Self, String> {
         let root = proper_list(allocator, root)?;
-        if root.len() != 9 || atom_value(allocator, root[0])? != MAGIC {
+        if root.len() < 2 || atom_value(allocator, root[0])? != MAGIC {
             return Err("not Chialisp structural debug metadata".to_string());
         }
         let version = decode_uint(&atom_value(allocator, root[1])?)?;
         if version != DEBUG_METADATA_VERSION {
             return Err(format!("unsupported debug metadata version {version}"));
         }
+        if root.len() < 9 {
+            return Err("not Chialisp structural debug metadata".to_string());
+        }
         let coordinates = proper_list(allocator, root[2])?;
-        if coordinates.len() != 2
+        if coordinates.len() < 2
             || decode_uint(&atom_value(allocator, coordinates[0])?)? != 1
             || decode_uint(&atom_value(allocator, coordinates[1])?)? != DEBUG_METADATA_TAB_WIDTH
         {
@@ -1030,7 +1042,7 @@ impl DebugMetadata {
             .into_iter()
             .map(|entry| {
                 let entry = proper_list(allocator, entry)?;
-                if entry.len() != 2 {
+                if entry.len() < 2 {
                     return Err("malformed debug source file entry".to_string());
                 }
                 Ok(DebugSourceFile {
@@ -1047,7 +1059,7 @@ impl DebugMetadata {
             .into_iter()
             .map(|entry| {
                 let entry = proper_list(allocator, entry)?;
-                if entry.len() != 5 {
+                if entry.len() < 5 {
                     return Err("malformed debug span entry".to_string());
                 }
                 let span = DebugSourceSpan {
@@ -1506,19 +1518,24 @@ fn decode_constraint(allocator: &Allocator, node: NodePtr) -> Result<ParameterCo
     }
     let tag = decode_uint(&atom_value(allocator, fields[0])?)?;
     match (tag, fields.as_slice()) {
-        (0, [_]) => Ok(ParameterConstraint::Unknown),
-        (1, [_]) => Ok(ParameterConstraint::Integer),
-        (2, [_]) => Ok(ParameterConstraint::Atom),
-        (3, [_, length]) => Ok(ParameterConstraint::Bytes(decode_uint(&atom_value(
+        (0, [_, ..]) => Ok(ParameterConstraint::Unknown),
+        (1, [_, ..]) => Ok(ParameterConstraint::Integer),
+        (2, [_, ..]) => Ok(ParameterConstraint::Atom),
+        (3, [_, length, ..]) => Ok(ParameterConstraint::Bytes(decode_uint(&atom_value(
             allocator, *length,
         )?)?)),
-        (4, [_]) => Ok(ParameterConstraint::Pair),
-        (5, [_]) => Ok(ParameterConstraint::ProperList),
-        (6, [_, values]) => {
+        (4, [_, ..]) => Ok(ParameterConstraint::Pair),
+        (5, [_, ..]) => Ok(ParameterConstraint::ProperList),
+        (6, [_, values, ..]) => {
             let decoded = proper_list(allocator, *values)?
                 .into_iter()
                 .map(|value| decode_constraint(allocator, value))
                 .collect::<Result<Vec<_>, _>>()?;
+            // An unfamiliar alternative prevents us from claiming a known
+            // constraint for the union, but every known member must still parse.
+            if decoded.len() >= 2 && decoded.contains(&ParameterConstraint::Unknown) {
+                return Ok(ParameterConstraint::Unknown);
+            }
             if decoded.len() < 2
                 || decoded.windows(2).any(|pair| pair[0] >= pair[1])
                 || decoded.iter().any(|value| {
@@ -1532,6 +1549,7 @@ fn decode_constraint(allocator: &Allocator, node: NodePtr) -> Result<ParameterCo
             }
             Ok(ParameterConstraint::Union(decoded))
         }
+        (tag, _) if tag > 6 => Ok(ParameterConstraint::Unknown),
         _ => Err("unknown or malformed parameter constraint".to_string()),
     }
 }
@@ -1576,8 +1594,8 @@ fn decode_parameter(
     }
     let tag = decode_uint(&atom_value(allocator, fields[0])?)?;
     match (tag, fields.as_slice()) {
-        (0, [_]) => Ok(DebugParameter::Nil),
-        (1, [_, name, path, constraint]) => {
+        (0, [_, ..]) => Ok(DebugParameter::Nil),
+        (1, [_, name, path, constraint, ..]) => {
             let name = decode_uint(&atom_value(allocator, *name)?)?;
             if name >= string_count {
                 return Err("debug parameter name index out of range".to_string());
@@ -1592,7 +1610,7 @@ fn decode_parameter(
                 constraint: decode_constraint(allocator, *constraint)?,
             })
         }
-        (2, [_, left, right]) => Ok(DebugParameter::Pair(
+        (2, [_, left, right, ..]) => Ok(DebugParameter::Pair(
             Box::new(decode_parameter(allocator, *left, string_count)?),
             Box::new(decode_parameter(allocator, *right, string_count)?),
         )),
@@ -1613,7 +1631,7 @@ fn decode_function(
     string_count: usize,
 ) -> Result<DebugFunction, String> {
     let fields = proper_list(allocator, node)?;
-    if fields.len() != 3 {
+    if fields.len() < 3 {
         return Err("malformed debug function record".to_string());
     }
     let name = decode_uint(&atom_value(allocator, fields[0])?)?;
@@ -1735,13 +1753,13 @@ fn decode_tree(
     }
     let tag = decode_uint(&atom_value(allocator, fields[0])?)?;
     match tag {
-        0 if fields.len() == 5 => Ok(DebugNode::Atom {
+        0 if fields.len() >= 5 => Ok(DebugNode::Atom {
             span: decode_optional_index(&atom_value(allocator, fields[1])?, span_count)?,
             label: decode_optional_index(&atom_value(allocator, fields[2])?, string_count)?,
             function: decode_optional_index(&atom_value(allocator, fields[3])?, function_count)?,
             value: atom_value(allocator, fields[4])?,
         }),
-        1 if fields.len() == 6 => Ok(DebugNode::Pair {
+        1 if fields.len() >= 6 => Ok(DebugNode::Pair {
             span: decode_optional_index(&atom_value(allocator, fields[1])?, span_count)?,
             label: decode_optional_index(&atom_value(allocator, fields[2])?, string_count)?,
             function: decode_optional_index(&atom_value(allocator, fields[3])?, function_count)?,
@@ -3064,6 +3082,147 @@ mod tests {
             metadata.verify_program(&program_bytes),
             Err("debug shadow tree does not match program structure".to_string())
         );
+    }
+
+    fn edit_metadata_record<F: FnOnce(&mut Allocator, &mut Vec<NodePtr>)>(
+        allocator: &mut Allocator,
+        node: NodePtr,
+        path: &[usize],
+        edit: F,
+    ) -> NodePtr {
+        let mut fields = proper_list(allocator, node).unwrap();
+        if let Some((index, rest)) = path.split_first() {
+            fields[*index] = edit_metadata_record(allocator, fields[*index], rest, edit);
+        } else {
+            edit(allocator, &mut fields);
+        }
+        list(allocator, &fields).unwrap()
+    }
+
+    // Root, coordinates, file, span, function, pair/name/nil parameters,
+    // constraint, and pair/atom shadow nodes in fixture().
+    const EXTENSIBLE_RECORD_PATHS: &[&[usize]] = &[
+        &[],
+        &[2],
+        &[4, 0],
+        &[6, 0],
+        &[7, 0],
+        &[7, 0, 2],
+        &[7, 0, 2, 1],
+        &[7, 0, 2, 2, 2],
+        &[7, 0, 2, 1, 3],
+        &[8],
+        &[8, 4],
+    ];
+
+    #[test]
+    fn decoder_ignores_trailing_extension_fields() {
+        let (program, symbols, sources) = fixture();
+        let metadata = DebugMetadata::from_program(&program, &symbols, &sources).unwrap();
+        let mut allocator = Allocator::new();
+        let mut root = metadata.to_clvm(&mut allocator).unwrap();
+        for path in EXTENSIBLE_RECORD_PATHS {
+            root = edit_metadata_record(&mut allocator, root, path, |allocator, fields| {
+                // Extension data is opaque, including non-UTF-8 atoms and pairs.
+                let future = atom(allocator, &[0xff]).unwrap();
+                fields.push(allocator.new_pair(future, future).unwrap());
+            });
+            let decoded = DebugMetadata::decode(&node_to_bytes(&allocator, root).unwrap())
+                .unwrap_or_else(|error| panic!("extension at {path:?}: {error}"));
+            assert_eq!(decoded, metadata);
+            decoded
+                .verify_program(&serialize_program(&program).unwrap())
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn decoder_still_requires_known_structure() {
+        let (program, symbols, sources) = fixture();
+        let metadata = DebugMetadata::from_program(&program, &symbols, &sources).unwrap();
+        let mut allocator = Allocator::new();
+        let root = metadata.to_clvm(&mut allocator).unwrap();
+        for path in EXTENSIBLE_RECORD_PATHS {
+            let truncated = edit_metadata_record(&mut allocator, root, path, |_, fields| {
+                fields.pop();
+            });
+            assert!(
+                DebugMetadata::decode(&node_to_bytes(&allocator, truncated).unwrap()).is_err(),
+                "missing required field at {path:?}"
+            );
+        }
+        for path in [&[7, 0, 2][..], &[8]] {
+            let unsupported =
+                edit_metadata_record(&mut allocator, root, path, |allocator, fields| {
+                    fields[0] = uint(allocator, 99).unwrap();
+                });
+            assert!(
+                DebugMetadata::decode(&node_to_bytes(&allocator, unsupported).unwrap()).is_err(),
+                "unknown structural tag at {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn decoder_ignores_constraint_extensions_and_unknown_tags() {
+        let mut allocator = Allocator::new();
+        for constraint in [
+            ParameterConstraint::Unknown,
+            ParameterConstraint::Integer,
+            ParameterConstraint::Atom,
+            ParameterConstraint::Bytes(32),
+            ParameterConstraint::Pair,
+            ParameterConstraint::ProperList,
+            ParameterConstraint::Union(vec![
+                ParameterConstraint::Integer,
+                ParameterConstraint::Atom,
+            ]),
+        ] {
+            let node = encode_constraint(&mut allocator, &constraint).unwrap();
+            let extended = edit_metadata_record(&mut allocator, node, &[], |allocator, fields| {
+                fields.push(atom(allocator, b"future").unwrap());
+            });
+            assert_eq!(decode_constraint(&allocator, extended).unwrap(), constraint);
+        }
+        let (program, symbols, sources) = fixture();
+        let metadata = DebugMetadata::from_program(&program, &symbols, &sources).unwrap();
+        let root = metadata.to_clvm(&mut allocator).unwrap();
+        for text in [
+            "(99)",
+            "(99 (arbitrary . payload))",
+            "(6 ((1) (99 (future))))",
+        ] {
+            let constraint =
+                decode_clvm(&mut allocator, &serialized_sexp(text), "constraint").unwrap();
+            let extended =
+                edit_metadata_record(&mut allocator, root, &[7, 0, 2, 1], |_, fields| {
+                    fields[3] = constraint;
+                });
+            let decoded =
+                DebugMetadata::decode(&node_to_bytes(&allocator, extended).unwrap()).unwrap();
+            let mut leaves = Vec::new();
+            parameter_leaves(&decoded.functions[0].parameters, &mut leaves);
+            assert_eq!(leaves[0].1, &ParameterConstraint::Unknown, "{text}");
+            decoded
+                .verify_program(&serialize_program(&program).unwrap())
+                .unwrap();
+        }
+        // Unknown additions do not make malformed known constraints valid.
+        for text in ["(3)", "(3 (not-an-atom) extra)", "(6 ((3) (99)))", "(6 ())"] {
+            let node = decode_clvm(&mut allocator, &serialized_sexp(text), "constraint").unwrap();
+            assert!(decode_constraint(&allocator, node).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn decoder_rejects_incompatible_version_without_reading_payload() {
+        for version in [0, DEBUG_METADATA_VERSION + 1] {
+            let encoded = serialized_sexp(&format!("(\"CHIALISP_DEBUG\" {version})"));
+            assert_eq!(
+                DebugMetadata::decode(&encoded),
+                Err(format!("unsupported debug metadata version {version}"))
+            );
+        }
     }
 
     #[test]
