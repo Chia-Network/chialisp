@@ -60,6 +60,11 @@ jobs:
         cd chia-gaming
         ./tools/check-build-deps.sh --install --yes
 
+    - name: Update constrained transitive dependencies
+      working-directory: chia-gaming
+      # The pinned lockfile predates Chialisp's SHA-2 and security minimums.
+      run: cargo update --package sha2@0.11.0 --package crypto-bigint --package ctutils
+
     - name: Rebuild chia-gaming chialisp
       run: |
         cd chia-gaming
