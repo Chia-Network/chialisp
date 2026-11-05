@@ -1268,6 +1268,9 @@ impl DebugMetadataCollection {
         let mut context = None;
         let mut previous_location = None;
         let mut previous_expression = false;
+        let mut previous_wrapper: Option<&SerializedFrame> = None;
+        let mut previous_curried_function = None;
+        let mut previous_unannotated = false;
         for (position, captured) in frames.iter().enumerate() {
             let symbolized =
                 self.symbolize_serialized_frame_with_owner(captured, owner, &mut context)?;
@@ -1275,6 +1278,27 @@ impl DebugMetadataCollection {
                 owner = symbolized.metadata_index;
             }
             let location = symbolized.metadata_index.zip(symbolized.frame.source_span);
+            let function = symbolized
+                .metadata_index
+                .zip(symbolized.frame.function_index);
+            let same_curried_function = function.is_some() && function == previous_curried_function;
+            if (same_curried_function || (previous_unannotated && repeated == 0))
+                && previous_wrapper.is_some_and(|previous| {
+                    position > 0 && std::ptr::eq(previous, &frames[position - 1])
+                })
+                && curry_applies_to(previous_wrapper.unwrap(), captured)?
+            {
+                if same_curried_function {
+                    // The wrapper already describes this call, including which
+                    // arguments were bound. Advance through nested wrappers while
+                    // still symbolizing every raw frame to preserve source context.
+                    previous_wrapper = Some(captured);
+                    continue;
+                }
+                // An anonymous setup wrapper supplies no additional location.
+                // Keep its body, including the actual failure leaf, instead.
+                rendered.pop();
+            }
             let expression = symbolized.frame.function.is_none() && location.is_some();
             if expression && location == previous_location {
                 if previous_expression {
@@ -1320,6 +1344,13 @@ impl DebugMetadataCollection {
             previous_location = location;
             previous_expression = expression;
             previous_captured = Some(captured);
+            previous_wrapper = Some(captured);
+            previous_curried_function = (symbolized.frame.matched == FrameMatch::Curried)
+                .then_some(function)
+                .flatten();
+            previous_unannotated = symbolized.frame.source_span.is_none()
+                && (symbolized.frame.function.is_none()
+                    || symbolized.frame.matched == FrameMatch::Ambiguous);
             if rendered.len() > MAX_FRAMES {
                 omitted += rendered.remove(0).1;
             }
@@ -1992,6 +2023,35 @@ fn canonical_curry(allocator: &Allocator, node: NodePtr) -> Option<(NodePtr, Vec
         }
         cursor = next;
     }
+}
+
+/// Verify a direct wrapper-to-body step without evaluating any CLVM. Captured
+/// frames use canonical serialization, so comparing complete serialized values
+/// also distinguishes environments whose abbreviated display looks identical.
+fn curry_applies_to(wrapper: &SerializedFrame, body: &SerializedFrame) -> Result<bool, String> {
+    let mut allocator = Allocator::new();
+    let program = decode_clvm(&mut allocator, &wrapper.program, "curry wrapper")?;
+    let Some((base, arguments, forwards_environment)) = canonical_curry(&allocator, program) else {
+        return Ok(false);
+    };
+    let base = node_to_bytes(&allocator, base)
+        .map_err(|error| format!("cannot serialize curry body: {error:?}"))?;
+    if base != body.program {
+        return Ok(false);
+    }
+    let mut environment = if forwards_environment {
+        decode_clvm(&mut allocator, &wrapper.environment, "curry environment")?
+    } else {
+        NodePtr::NIL
+    };
+    for argument in arguments.into_iter().rev() {
+        environment = allocator
+            .new_pair(argument, environment)
+            .map_err(|error| format!("cannot construct curry environment: {error:?}"))?;
+    }
+    let environment = node_to_bytes(&allocator, environment)
+        .map_err(|error| format!("cannot serialize curry environment: {error:?}"))?;
+    Ok(environment == body.environment)
 }
 
 fn symbolize_node<'a>(
@@ -3907,6 +3967,169 @@ mod tests {
                 "{rendered}"
             );
         }
+    }
+
+    #[test]
+    fn captured_stack_collapses_curry_wrappers_and_preserves_bindings_and_leaf() {
+        let body = "(2 (3 (21 2 5) (1 . 5) (1 8)) 1)";
+        let program = parse_sexp(Srcloc::start("closure.clsp"), body.bytes())
+            .unwrap()
+            .remove(0);
+        let hash = tree_hash_hex(&program);
+        let symbols = HashMap::from([
+            (hash.clone(), "closure".to_string()),
+            (format!("{hash}_arguments"), "(LIMIT ITEM)".to_string()),
+        ]);
+        let sources = HashMap::from([("closure.clsp".to_string(), body.to_string())]);
+        let metadata = DebugMetadata::from_program(&program, &symbols, &sources).unwrap();
+        let mut collection = DebugMetadataCollection::default();
+        collection.insert_metadata(metadata).unwrap();
+        for (wrapper, environment, bound) in [
+            (format!("(2 (1 . {body}) (4 (1 . 10) 1))"), "(30)", "LIMIT"),
+            (
+                format!("(2 (1 . {body}) (4 (1 . 10) (4 (1 . 30) ())))"),
+                "(99)",
+                "LIMIT, ITEM",
+            ),
+            (
+                format!("(2 (1 . (2 (1 . {body}) (4 (1 . 10) 1))) (4 (1 . 30) 1))"),
+                "()",
+                "LIMIT, ITEM",
+            ),
+        ] {
+            let mut allocator = Allocator::new();
+            let root = decode_clvm(&mut allocator, &serialized_sexp(&wrapper), "wrapper").unwrap();
+            let env =
+                decode_clvm(&mut allocator, &serialized_sexp(environment), "environment").unwrap();
+            let failure = clvm_rs::run_program_with_diagnostics(
+                &mut allocator,
+                &clvm_rs::chia_dialect::ChiaDialect::new(clvm_rs::chia_dialect::ClvmFlags::empty()),
+                root,
+                env,
+                1_000_000,
+                64,
+            )
+            .expect_err("closure assertion fails");
+            let frames: Vec<_> = failure
+                .frames
+                .iter()
+                .map(|frame| SerializedFrame {
+                    program: node_to_bytes(&allocator, frame.program).unwrap(),
+                    environment: node_to_bytes(&allocator, frame.environment).unwrap(),
+                })
+                .collect();
+            assert!(frames.len() >= 3);
+            for (style, header, binding, limit, item) in [
+                (
+                    StackFrameStyle::Python,
+                    "in closure",
+                    "# bound: ",
+                    "LIMIT = 10",
+                    "ITEM = 30",
+                ),
+                (
+                    StackFrameStyle::Lisp,
+                    "(closure ",
+                    "; bound: ",
+                    "(LIMIT integer 10)",
+                    "(ITEM integer 30)",
+                ),
+            ] {
+                let rendered = collection.format_captured_stack(&frames, 0, style).unwrap();
+                assert_eq!(rendered.matches(header).count(), 1, "{rendered}");
+                assert!(
+                    rendered.contains(&format!("{binding}{bound}")),
+                    "{rendered}"
+                );
+                assert!(
+                    rendered.contains(limit) && rendered.contains(item),
+                    "{rendered}"
+                );
+                let leaf = collection
+                    .format_captured_stack(&frames[frames.len() - 1..], 0, style)
+                    .unwrap();
+                assert!(
+                    rendered.ends_with(&leaf),
+                    "failure leaf must remain: {rendered}"
+                );
+            }
+
+            // Matching function names and locations alone cannot justify a collapse.
+            let mut differing = frames.clone();
+            let body_index = differing.len() - 2;
+            assert_eq!(differing[body_index].program, serialized_sexp(body));
+            differing[body_index].environment = serialized_sexp("(10 31)");
+            let rendered = collection
+                .format_captured_stack(&differing, 0, StackFrameStyle::Python)
+                .unwrap();
+            assert_eq!(rendered.matches("in closure").count(), 2, "{rendered}");
+
+            let mut nonadjacent = frames.clone();
+            nonadjacent.insert(
+                body_index,
+                SerializedFrame {
+                    program: serialized_sexp("(16 1 (1 . 1))"),
+                    environment: serialized_sexp("()"),
+                },
+            );
+            let rendered = collection
+                .format_captured_stack(&nonadjacent, 0, StackFrameStyle::Python)
+                .unwrap();
+            assert_eq!(rendered.matches("in closure").count(), 2, "{rendered}");
+        }
+    }
+
+    #[test]
+    fn captured_stack_omits_unannotated_wrapper_but_keeps_named_callers() {
+        let source = "(2 (1 8) 1)";
+        let program = parse_sexp(Srcloc::start("wrapper.clsp"), source.bytes())
+            .unwrap()
+            .remove(0);
+        let leaf = parse_sexp(Srcloc::start("wrapper.clsp"), "(8)".bytes())
+            .unwrap()
+            .remove(0);
+        let root_hash = tree_hash_hex(&program);
+        let leaf_hash = tree_hash_hex(&leaf);
+        let sources = HashMap::from([("wrapper.clsp".to_string(), source.to_string())]);
+        let mut symbols = HashMap::from([
+            (leaf_hash.clone(), "failure".to_string()),
+            (format!("{leaf_hash}_arguments"), "(X)".to_string()),
+        ]);
+        let frames = [
+            SerializedFrame {
+                program: serialized_sexp(source),
+                environment: serialized_sexp("(5)"),
+            },
+            SerializedFrame {
+                program: serialized_sexp("(8)"),
+                environment: serialized_sexp("(5)"),
+            },
+        ];
+        let mut metadata = DebugMetadata::from_program(&program, &symbols, &sources).unwrap();
+        if let DebugNode::Pair { span, .. } = &mut metadata.tree {
+            *span = None;
+        }
+        let mut collection = DebugMetadataCollection::default();
+        collection.insert_metadata(metadata).unwrap();
+        let rendered = collection
+            .format_captured_stack(&frames, 0, StackFrameStyle::Python)
+            .unwrap();
+        assert!(!rendered.contains("<unknown:"), "{rendered}");
+        assert_eq!(rendered.matches("in failure").count(), 1, "{rendered}");
+
+        symbols.insert(root_hash.clone(), "caller".to_string());
+        symbols.insert(format!("{root_hash}_arguments"), "(Y)".to_string());
+        let mut collection = DebugMetadataCollection::default();
+        collection
+            .insert_metadata(DebugMetadata::from_program(&program, &symbols, &sources).unwrap())
+            .unwrap();
+        let rendered = collection
+            .format_captured_stack(&frames, 0, StackFrameStyle::Python)
+            .unwrap();
+        assert!(
+            rendered.contains("in caller") && rendered.contains("in failure"),
+            "{rendered}"
+        );
     }
 
     #[test]

@@ -23,6 +23,7 @@ use crate::compiler::comptypes::{
     HelperForm, ImportLongName, IncludeDesc, IncludeProcessType, LongNameTranslation,
     ModuleImportSpec, NamespaceData, NamespaceRefData, QualifiedModuleInfo,
 };
+use crate::compiler::debug::restore_macro_locations;
 use crate::compiler::dialect::{detect_modern, AcceptedDialect, KNOWN_DIALECTS};
 use crate::compiler::frontend::{compile_helperform, compile_namespace, compile_nsref, frontend};
 use crate::compiler::optimize::get_optimizer;
@@ -1015,6 +1016,7 @@ impl Preprocessor {
                     )
                     .map(nilize)
                     .map_err(CompileErr::from)?;
+                    let res = Rc::new(restore_macro_locations(&args, &res, &res, &body.loc()));
 
                     if let Some(final_result) = self.expand_macros(res.clone())? {
                         return Ok(Some(final_result));
