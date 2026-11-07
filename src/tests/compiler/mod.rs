@@ -13,6 +13,7 @@ mod compiler;
 mod evaluate;
 mod fuzz;
 mod fuzz_assign;
+mod library;
 mod modules;
 mod optimizer;
 mod perf;
