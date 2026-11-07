@@ -36,7 +36,6 @@ regex = "1.12.3"
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0.145"
 sha2 = "0.11.1"
-# Downgraded to work with chia-gaming.
 subprocess = { version = "1.1.0", optional = true }
 tempfile = "=3.27.0"
 unicode-segmentation = "1.13.3"
