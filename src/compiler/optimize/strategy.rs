@@ -114,7 +114,7 @@ impl Optimization for ExistingStrategy {
         Ok(res)
     }
 
-    fn post_codegen_function_optimize(
+    fn after_codegen_function_optimize(
         &mut self,
         allocator: &mut Allocator,
         runner: Rc<dyn TRunProgram>,
@@ -153,7 +153,7 @@ impl Optimization for ExistingStrategy {
         Ok(res)
     }
 
-    fn post_codegen_output_optimize(
+    fn after_codegen_output_optimize(
         &mut self,
         opts: Rc<dyn CompilerOpts>,
         generated: SExp,

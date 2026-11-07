@@ -96,8 +96,8 @@ pub struct CodegenOptimizationResult {
 ///   - Apply elision
 ///
 /// Global optimization must be performed when the code generator is requesting
-/// optimizations on the main expression, therefore there is no post-code generator
-/// optimization in this scheme.
+/// optimizations on the main expression, so this scheme has no optimization after
+/// code generation.
 ///
 pub trait Optimization {
     /// Represents frontend optimizations
@@ -147,7 +147,7 @@ pub trait Optimization {
         defun: &DefunData,
     ) -> Result<Rc<BodyForm>, CompileErr>;
 
-    fn post_codegen_function_optimize(
+    fn after_codegen_function_optimize(
         &mut self,
         allocator: &mut Allocator,
         runner: Rc<dyn TRunProgram>,
@@ -164,7 +164,7 @@ pub trait Optimization {
         codegen: &PrimaryCodegen,
     ) -> Result<Rc<BodyForm>, CompileErr>;
 
-    fn post_codegen_output_optimize(
+    fn after_codegen_output_optimize(
         &mut self,
         opts: Rc<dyn CompilerOpts>,
         generated: SExp,

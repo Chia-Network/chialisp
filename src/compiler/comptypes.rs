@@ -1781,6 +1781,17 @@ impl PrimaryCodegen {
         let hash = sha256tree(value.code);
         let hash_str = Bytes::new(Some(BytesFromType::Raw(hash))).hex();
         let name = Bytes::new(Some(BytesFromType::Raw(name.to_owned()))).decode();
+        if codegen_copy
+            .function_symbols
+            .get(&hash_str)
+            .is_some_and(|previous| previous != &name)
+        {
+            // The legacy table has only one slot per hash. Preserve evidence of
+            // collisions so structural metadata cannot mislabel both functions.
+            codegen_copy
+                .function_symbols
+                .insert(format!("{hash_str}_ambiguous"), "1".to_string());
+        }
         codegen_copy.function_symbols.insert(hash_str.clone(), name);
         if left_env {
             codegen_copy

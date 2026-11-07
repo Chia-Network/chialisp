@@ -14,6 +14,15 @@ class _CompileResultWithSymbols(TypedDict):
     output: str
     symbols: dict[str, str]
 
+class DebugCompileArtifact(TypedDict):
+    export_name: str | None
+    program: bytes
+    debug: bytes
+    symbols: dict[str, str]
+
+class DebugCompileResult(TypedDict):
+    artifacts: list[DebugCompileArtifact]
+
 def get_version() -> str: ...
 
 @overload
@@ -44,6 +53,12 @@ def compile(
     export_symbols: Literal[True] = ...,
 ) -> _CompileResultWithSymbols: ...
 
+def compile_debug(
+    source: str,
+    filename: str = ...,
+    search_paths: list[str] = ...,
+) -> DebugCompileResult: ...
+
 def check_dependencies(input_path: Any, search_paths: list[str] = ...) -> list[str]: ...
 def start_clvm_program(
     hex_prog: str,
@@ -65,12 +80,15 @@ from . import binutils as binutils
 __all__ = [
     "CldbError",
     "CompError",
+    "DebugCompileArtifact",
+    "DebugCompileResult",
     "PythonRunStep",
     "binutils",
     "call_tool",
     "check_dependencies",
     "compile",
     "compile_clvm",
+    "compile_debug",
     "compose_run_function",
     "get_version",
     "launch_tool",

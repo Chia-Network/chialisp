@@ -17,7 +17,7 @@ use crate::compiler::comptypes::{
     DefconstData, DefunCall, DefunData, HelperForm, InlineFunction, LetData, LetFormInlineHint,
     LetFormKind, ModulePhase, PrimaryCodegen, RawCallSpec, SyntheticType,
 };
-use crate::compiler::debug::{build_swap_table_mut, relabel};
+use crate::compiler::debug::{build_swap_table_mut, relabel, restore_macro_locations};
 use crate::compiler::evaluate::{is_apply_atom, Evaluator, EVAL_STACK_LIMIT};
 use crate::compiler::frontend::{compile_bodyform, make_provides_set};
 use crate::compiler::gensym::gensym;
@@ -558,7 +558,7 @@ pub fn process_macro_call(
 ) -> Result<CompiledCode, CompileErr> {
     let converted_args: Vec<Rc<SExp>> = args.iter().map(|b| b.to_sexp()).collect();
     let mut swap_table = HashMap::new();
-    let args_to_macro = list_to_cons(l.clone(), &converted_args);
+    let args_to_macro = Rc::new(list_to_cons(l.clone(), &converted_args));
     build_swap_table_mut(&mut swap_table, &args_to_macro);
 
     let runner = context.runner();
@@ -567,17 +567,22 @@ pub fn process_macro_call(
         runner,
         opts.prim_map(),
         code,
-        Rc::new(args_to_macro),
+        args_to_macro.clone(),
         None,
         Some(MACRO_TIME_LIMIT),
     )
     .map_err(|e| match e {
-        RunFailure::RunExn(ml, x) => CompileErr(l, format!("macro aborted at {ml} with {x}")),
-        RunFailure::RunErr(rl, e) => CompileErr(l, format!("error executing macro: {rl} {e}")),
+        RunFailure::RunExn(ml, x) => {
+            CompileErr(l.clone(), format!("macro aborted at {ml} with {x}"))
+        }
+        RunFailure::RunErr(rl, e) => {
+            CompileErr(l.clone(), format!("error executing macro: {rl} {e}"))
+        }
     })
     .and_then(|v| {
         let relabeled_expr = relabel(&swap_table, &v);
-        compile_bodyform(opts.clone(), Rc::new(relabeled_expr))
+        let sourced_expr = restore_macro_locations(&args_to_macro, &v, &relabeled_expr, &l);
+        compile_bodyform(opts.clone(), Rc::new(sourced_expr))
     })
     .and_then(|body| generate_expr_code(context, opts, compiler, Rc::new(body)))
 }
@@ -1247,8 +1252,11 @@ fn codegen_(
                     }
                 };
 
-                let code =
-                    context.post_codegen_function_optimize(opts.clone(), Some(h), Rc::new(code))?;
+                let code = context.after_codegen_function_optimize(
+                    opts.clone(),
+                    Some(h),
+                    Rc::new(code),
+                )?;
                 let code = if allow_redef {
                     code
                 } else {
@@ -2280,8 +2288,11 @@ fn final_codegen(
     let optimizer_opts = opts.clone();
     generate_expr_code(context, opts, compiler, opt_final_expr).and_then(|code| {
         let mut final_comp = compiler.clone();
-        let optimized_code =
-            context.post_codegen_function_optimize(optimizer_opts.clone(), None, code.1.clone())?;
+        let optimized_code = context.after_codegen_function_optimize(
+            optimizer_opts.clone(),
+            None,
+            code.1.clone(),
+        )?;
         final_comp.final_code = Some(CompiledCode(code.0, optimized_code));
         Ok(final_comp)
     })
