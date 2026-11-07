@@ -37,33 +37,20 @@ jobs:
       with:
         repository: Chia-Network/chia-gaming
         path: chia-gaming
-        ref: bd44edda7b68e33c66fd00d424aed6246fc44231
+        ref: d6d3bf8e7ba5165b03a4c00dbef902296b91d449
 
     - name: Replace chialisp pkg in chia-gaming
       run: |
         python3 support/change-chialisp-rev.py ${{ github.sha }} chia-gaming/Cargo.toml
-        # Keep NodePtr and Allocator types on the same evaluator revision.
-        python3 - <<'PY'
-        from pathlib import Path
-        import tomllib
-
-        chialisp = tomllib.loads(Path("Cargo.toml").read_text())
-        path = Path("chia-gaming/Cargo.toml")
-        gaming = tomllib.loads(path.read_text())
-        old_rev = gaming["patch"]["crates-io"]["clvmr"]["rev"]
-        new_rev = chialisp["dependencies"]["clvmr"]["rev"]
-        path.write_text(path.read_text().replace(old_rev, new_rev))
-        PY
 
     - name: Install chia-gaming dependencies
       run: |
         cd chia-gaming
         ./tools/check-build-deps.sh --install --yes
 
-    - name: Update constrained transitive dependencies
+    - name: Resolve the compiler under test
       working-directory: chia-gaming
-      # The pinned lockfile predates Chialisp's SHA-2 and security minimums.
-      run: cargo update --package sha2@0.11.0 --package crypto-bigint --package ctutils
+      run: cargo update --package chialisp
 
     - name: Rebuild chia-gaming chialisp
       run: |
