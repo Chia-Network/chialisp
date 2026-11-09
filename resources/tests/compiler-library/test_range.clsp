@@ -1,0 +1,4 @@
+(include *standard-cl-26*)
+(import std.range)
+
+(export (X) (range X))
