@@ -10,6 +10,9 @@ chialisp
 
 Theory of operation of the modern compiler: ./HOW_CHIALISP_IS_COMPILED.md
 -
+The [structural debug metadata format](DEBUG_METADATA_FORMAT.md) specifies the
+binary sidecar format and includes conformance vectors for other implementations.
+
 This repo can be installed via cargo
 
     cargo install chialisp
