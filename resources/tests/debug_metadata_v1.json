@@ -1,0 +1,359 @@
+{
+  "programs": [
+    {
+      "name": "minimal",
+      "program_hex": "01",
+      "shadow_program_hex": "01",
+      "metadata_hex": "ff8e434849414c4953505f4445425547ff01ffff01ff0880ffa04bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459aff80ff80ff80ff80ffff80ff80ff80ff80ff018080",
+      "exact": true,
+      "environment_hex": "80",
+      "function": null,
+      "arguments": [],
+      "files": [],
+      "strings": [],
+      "spans": [],
+      "functions": [],
+      "parameter_paths": [],
+      "root_references": [
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "name": "raw-byte-zero",
+      "program_hex": "00",
+      "shadow_program_hex": "00",
+      "metadata_hex": "ff8e434849414c4953505f4445425547ff01ffff01ff0880ffa06e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01dff80ff80ff80ff80ffff80ff80ff80ff80ff008080",
+      "exact": true,
+      "environment_hex": "80",
+      "function": null,
+      "arguments": [],
+      "files": [],
+      "strings": [],
+      "spans": [],
+      "functions": [],
+      "parameter_paths": [],
+      "root_references": [
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "name": "annotated-pair",
+      "program_hex": "ff012a",
+      "shadow_program_hex": "ff012a",
+      "metadata_hex": "ff8e434849414c4953505f4445425547ff01ffff01ff0880ffa0aa084973ea140c5795b7288241c3e2c0902c6e0edcd03bc038ad255eab3c687bffffff8964656d6f2e636c7370ff86cebb09580d0a8080ffff66ff5880ffffff80ff01ff08ff01ff098080ffffff80ff80ffff02ffff01ff01ff02ffff018080ffff8080808080ffff01ff01ff01ff01ffff80ff80ff80ff80ff0180ffff80ff80ff80ff80ff2a808080",
+      "exact": true,
+      "environment_hex": "ff2a80",
+      "function": "f",
+      "arguments": [
+        [
+          "X",
+          "Runtime",
+          "integer",
+          "2a"
+        ]
+      ],
+      "files": [
+        [
+          "demo.clsp",
+          "λ\tX\r\n"
+        ]
+      ],
+      "strings": [
+        "f",
+        "X"
+      ],
+      "spans": [
+        [
+          0,
+          1,
+          8,
+          1,
+          9
+        ]
+      ],
+      "functions": [
+        [
+          0,
+          false
+        ]
+      ],
+      "parameter_paths": [
+        [
+          "X",
+          "02"
+        ]
+      ],
+      "root_references": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "captured-env-and-rest",
+      "program_hex": "01",
+      "shadow_program_hex": "01",
+      "metadata_hex": "ff8e434849414c4953505f4445425547ff01ffff01ff0880ffa04bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459aff80ffff66ff58ff845245535480ff80ffffff80ff01ffff02ffff01ff01ff05ffff018080ffff01ff02ff07ffff808080808080ffff80ff80ff80ff01ff018080",
+      "exact": true,
+      "environment_hex": "ff8668696464656eff2aff2b2c",
+      "function": "f",
+      "arguments": [
+        [
+          "X",
+          "Runtime",
+          "integer",
+          "2a"
+        ],
+        [
+          "REST",
+          "Runtime",
+          "unknown",
+          "ff2b2c"
+        ]
+      ],
+      "files": [],
+      "strings": [
+        "f",
+        "X",
+        "REST"
+      ],
+      "spans": [],
+      "functions": [
+        [
+          0,
+          true
+        ]
+      ],
+      "parameter_paths": [
+        [
+          "X",
+          "05"
+        ],
+        [
+          "REST",
+          "07"
+        ]
+      ],
+      "root_references": [
+        null,
+        null,
+        0
+      ]
+    },
+    {
+      "name": "associated-curry",
+      "program_hex": "ff02ffff0101ffff04ffff012aff018080",
+      "shadow_program_hex": "01",
+      "metadata_hex": "ff8e434849414c4953505f4445425547ff01ffff01ff0880ffa07079891ee3947f3f8959679d7b3d5b1cd5504d0edbac7ad796e05435bea4092eff80ffff66ff5880ff80ffffff80ff80ffff02ffff01ff01ff02ffff018080ffff8080808080ffff80ff80ff80ff01ff018080",
+      "exact": false,
+      "environment_hex": "80",
+      "function": "f",
+      "arguments": [
+        [
+          "X",
+          "Bound",
+          "integer",
+          "2a"
+        ]
+      ],
+      "files": [],
+      "strings": [
+        "f",
+        "X"
+      ],
+      "spans": [],
+      "functions": [
+        [
+          0,
+          false
+        ]
+      ],
+      "parameter_paths": [
+        [
+          "X",
+          "02"
+        ]
+      ],
+      "root_references": [
+        null,
+        null,
+        0
+      ]
+    }
+  ],
+  "integers": [
+    {
+      "payload_hex": "",
+      "decimal": "0"
+    },
+    {
+      "payload_hex": "01",
+      "decimal": "1"
+    },
+    {
+      "payload_hex": "7f",
+      "decimal": "127"
+    },
+    {
+      "payload_hex": "0080",
+      "decimal": "128"
+    },
+    {
+      "payload_hex": "00ff",
+      "decimal": "255"
+    },
+    {
+      "payload_hex": "0100",
+      "decimal": "256"
+    },
+    {
+      "payload_hex": "0100000000",
+      "decimal": "4294967296"
+    },
+    {
+      "payload_hex": "00ffffffffffffffff",
+      "decimal": "18446744073709551615"
+    },
+    {
+      "payload_hex": "0100000000000000000000",
+      "decimal": "1208925819614629174706176"
+    }
+  ],
+  "invalid_integer_payloads": [
+    "00",
+    "0000",
+    "0001",
+    "007f",
+    "80",
+    "ff",
+    "000080"
+  ],
+  "constraints": [
+    {
+      "name": "unknown",
+      "hex": "ff8080",
+      "display": "unknown",
+      "canonical_hex": "ff8080"
+    },
+    {
+      "name": "integer",
+      "hex": "ff0180",
+      "display": "integer",
+      "canonical_hex": "ff0180"
+    },
+    {
+      "name": "atom",
+      "hex": "ff0280",
+      "display": "atom",
+      "canonical_hex": "ff0280"
+    },
+    {
+      "name": "pair",
+      "hex": "ff0480",
+      "display": "pair",
+      "canonical_hex": "ff0480"
+    },
+    {
+      "name": "proper-list",
+      "hex": "ff0580",
+      "display": "proper-list",
+      "canonical_hex": "ff0580"
+    },
+    {
+      "name": "bytes-zero",
+      "hex": "ff03ff8080",
+      "display": "bytes[0]",
+      "canonical_hex": "ff03ff8080"
+    },
+    {
+      "name": "bytes-128",
+      "hex": "ff03ff82008080",
+      "display": "bytes[128]",
+      "canonical_hex": "ff03ff82008080"
+    },
+    {
+      "name": "ordered-union",
+      "hex": "ff06ffffff0180ffff0280ffff03ff0180ffff03ff82008080ffff0480ffff05808080",
+      "display": "integer|atom|bytes[1]|bytes[128]|pair|proper-list",
+      "canonical_hex": "ff06ffffff0180ffff0280ffff03ff0180ffff03ff82008080ffff0480ffff05808080"
+    },
+    {
+      "name": "unknown-tag",
+      "hex": "ff63ffff89657874656e73696f6e8080",
+      "display": "unknown",
+      "canonical_hex": "ff8080"
+    },
+    {
+      "name": "union-with-unknown",
+      "hex": "ff06ffffff6380ffff01808080",
+      "display": "unknown",
+      "canonical_hex": "ff8080"
+    },
+    {
+      "name": "trailing-field",
+      "hex": "ff03ff820080ffff89657874656e73696f6e8080",
+      "display": "bytes[128]",
+      "canonical_hex": "ff03ff82008080"
+    }
+  ],
+  "invalid_constraints": [
+    {
+      "name": "empty",
+      "hex": "80"
+    },
+    {
+      "name": "missing-length",
+      "hex": "ff0380"
+    },
+    {
+      "name": "singleton-union",
+      "hex": "ff06ffffff01808080"
+    },
+    {
+      "name": "duplicate-union",
+      "hex": "ff06ffffff0180ffff01808080"
+    },
+    {
+      "name": "reversed-union",
+      "hex": "ff06ffffff0280ffff01808080"
+    },
+    {
+      "name": "reversed-byte-lengths",
+      "hex": "ff06ffffff03ff82008080ffff03ff01808080"
+    },
+    {
+      "name": "nested-union",
+      "hex": "ff06ffffff0180ffff06ffffff0280ffff048080808080"
+    },
+    {
+      "name": "malformed-known-with-unknown",
+      "hex": "ff06ffffff6380ffff03808080"
+    },
+    {
+      "name": "noncanonical-tag",
+      "hex": "ff0080"
+    }
+  ],
+  "coordinates": [
+    {
+      "line": "\tX",
+      "expanded": "       X"
+    },
+    {
+      "line": "1234567\tX",
+      "expanded": "1234567        X"
+    },
+    {
+      "line": "λ\tX",
+      "expanded": "λ      X"
+    },
+    {
+      "line": "é界\tX",
+      "expanded": "é界    X"
+    }
+  ]
+}

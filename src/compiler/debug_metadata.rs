@@ -16,8 +16,12 @@
 //! exclusive. Parameter trees use `(0)` for nil, `(1 NAME PATH CONSTRAINT)` for
 //! names, and `(2 LEFT RIGHT)` for destructuring. The shadow tree uses
 //! `(0 SPAN STRING FUNCTION ATOM)` for atoms and
-//! `(1 SPAN STRING FUNCTION LEFT RIGHT)` for pairs. Table references are
-//! encoded as `index + 1`; zero means absent.
+//! `(1 SPAN STRING FUNCTION LEFT RIGHT)` for pairs. Optional table references
+//! in shadow nodes are encoded as `index + 1`; zero means absent. Required
+//! file and name references are zero-based.
+//!
+//! The normative wire format, coordinate rules, and conformance vectors are in
+//! `DEBUG_METADATA_FORMAT.md` at the repository root.
 //!
 //! The version is a compatibility boundary, incremented for incompatible changes
 //! to required fields or structural tags. Additive extensions keep the same
@@ -1525,7 +1529,9 @@ fn encode_constraint(
         ParameterConstraint::ProperList => (5, None),
         ParameterConstraint::Union(values) => {
             if values.len() < 2
-                || values.windows(2).any(|pair| pair[0] >= pair[1])
+                || values
+                    .windows(2)
+                    .any(|pair| constraint_wire_order(&pair[0]) >= constraint_wire_order(&pair[1]))
                 || values.iter().any(|value| {
                     matches!(
                         value,
@@ -1575,7 +1581,9 @@ fn decode_constraint(allocator: &Allocator, node: NodePtr) -> Result<ParameterCo
                 return Ok(ParameterConstraint::Unknown);
             }
             if decoded.len() < 2
-                || decoded.windows(2).any(|pair| pair[0] >= pair[1])
+                || decoded
+                    .windows(2)
+                    .any(|pair| constraint_wire_order(&pair[0]) >= constraint_wire_order(&pair[1]))
                 || decoded.iter().any(|value| {
                     matches!(
                         value,
@@ -1606,6 +1614,10 @@ fn encode_parameter(
             path,
             constraint,
         } => {
+            validate_uint_bytes(path)?;
+            if path.is_empty() {
+                return Err("debug parameter has empty environment path".to_string());
+            }
             let tag = uint(allocator, 1)?;
             let name = uint(allocator, *name)?;
             let path = atom(allocator, path)?;
@@ -1639,6 +1651,7 @@ fn decode_parameter(
                 return Err("debug parameter name index out of range".to_string());
             }
             let path = atom_value(allocator, *path)?;
+            validate_uint_bytes(&path)?;
             if path.is_empty() {
                 return Err("debug parameter has empty environment path".to_string());
             }
@@ -1745,13 +1758,18 @@ fn proper_list(allocator: &Allocator, mut node: NodePtr) -> Result<Vec<NodePtr>,
     }
 }
 
-fn decode_uint(bytes: &[u8]) -> Result<usize, String> {
-    if bytes.is_empty() {
-        return Ok(0);
-    }
-    if bytes[0] & 0x80 != 0 || (bytes.len() > 1 && bytes[0] == 0 && bytes[1] & 0x80 == 0) {
+fn validate_uint_bytes(bytes: &[u8]) -> Result<(), String> {
+    if bytes == [0]
+        || bytes.first().is_some_and(|byte| byte & 0x80 != 0)
+        || (bytes.len() > 1 && bytes[0] == 0 && bytes[1] & 0x80 == 0)
+    {
         return Err("non-canonical or negative debug metadata integer".to_string());
     }
+    Ok(())
+}
+
+fn decode_uint(bytes: &[u8]) -> Result<usize, String> {
+    validate_uint_bytes(bytes)?;
     let mut result = 0usize;
     for byte in bytes {
         result = result
@@ -2307,6 +2325,20 @@ fn materialize_frame_arguments(
     Ok(result)
 }
 
+// Version 1 orders union members by wire tag, then by byte length for tag 3.
+// Do not make the file format depend on the Rust enum's declaration order.
+fn constraint_wire_order(constraint: &ParameterConstraint) -> (u8, usize) {
+    match constraint {
+        ParameterConstraint::Unknown => (0, 0),
+        ParameterConstraint::Integer => (1, 0),
+        ParameterConstraint::Atom => (2, 0),
+        ParameterConstraint::Bytes(length) => (3, *length),
+        ParameterConstraint::Pair => (4, 0),
+        ParameterConstraint::ProperList => (5, 0),
+        ParameterConstraint::Union(_) => (6, 0),
+    }
+}
+
 impl ParameterConstraint {
     pub fn union(self, other: ParameterConstraint) -> ParameterConstraint {
         if self == other {
@@ -2322,7 +2354,7 @@ impl ParameterConstraint {
                 value => members.push(value),
             }
         }
-        members.sort();
+        members.sort_by_key(constraint_wire_order);
         members.dedup();
         ParameterConstraint::Union(members)
     }
@@ -2988,6 +3020,249 @@ mod tests {
         let mut sources = HashMap::new();
         sources.insert("fixture.clsp".to_string(), source.to_string());
         (program, symbols, sources)
+    }
+
+    fn conformance_vectors() -> serde_json::Value {
+        // Fixed bytes built independently of this module's encoder, with the
+        // expected meanings specified in DEBUG_METADATA_FORMAT.md.
+        serde_json::from_str(include_str!("../../resources/tests/debug_metadata_v1.json")).unwrap()
+    }
+
+    fn vector_bytes(vector: &serde_json::Value, field: &str) -> Vec<u8> {
+        hex::decode(vector[field].as_str().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn v1_conformance_programs() {
+        use serde_json::json;
+
+        fn paths(
+            parameter: &DebugParameter,
+            strings: &[String],
+            result: &mut Vec<serde_json::Value>,
+        ) {
+            match parameter {
+                DebugParameter::Nil => {}
+                DebugParameter::Name { name, path, .. } => {
+                    result.push(json!([strings[*name], hex::encode(path)]));
+                }
+                DebugParameter::Pair(left, right) => {
+                    paths(left, strings, result);
+                    paths(right, strings, result);
+                }
+            }
+        }
+
+        for vector in conformance_vectors()["programs"].as_array().unwrap() {
+            let name = vector["name"].as_str().unwrap();
+            let bytes = vector_bytes(vector, "metadata_hex");
+            let program = vector_bytes(vector, "program_hex");
+            let metadata = DebugMetadata::decode(&bytes).expect(name);
+            assert_eq!(metadata.encode().unwrap(), bytes, "{name}");
+            assert_eq!(
+                metadata.program_sha256.as_slice(),
+                Sha256::digest(&program).as_slice(),
+                "{name}"
+            );
+            assert_eq!(
+                metadata.verify_program(&program).is_ok(),
+                vector["exact"].as_bool().unwrap(),
+                "{name}"
+            );
+            assert_eq!(
+                shadow_bytes(&metadata.tree),
+                vector_bytes(vector, "shadow_program_hex"),
+                "{name}"
+            );
+            let files: Vec<_> = metadata
+                .files
+                .iter()
+                .map(|f| [&f.path, &f.source])
+                .collect();
+            assert_eq!(json!(files), vector["files"], "{name}");
+            assert_eq!(json!(metadata.strings), vector["strings"], "{name}");
+            let spans: Vec<_> = metadata
+                .spans
+                .iter()
+                .map(|s| {
+                    [
+                        s.file,
+                        s.start_line,
+                        s.start_column,
+                        s.end_line,
+                        s.end_column,
+                    ]
+                })
+                .collect();
+            assert_eq!(json!(spans), vector["spans"], "{name}");
+            let functions: Vec<_> = metadata
+                .functions
+                .iter()
+                .map(|f| json!([f.name, f.left_env]))
+                .collect();
+            assert_eq!(json!(functions), vector["functions"], "{name}");
+            let mut parameter_paths = Vec::new();
+            for function in &metadata.functions {
+                paths(
+                    &function.parameters,
+                    &metadata.strings,
+                    &mut parameter_paths,
+                );
+            }
+            assert_eq!(json!(parameter_paths), vector["parameter_paths"], "{name}");
+            let references = match &metadata.tree {
+                DebugNode::Atom {
+                    span,
+                    label,
+                    function,
+                    ..
+                }
+                | DebugNode::Pair {
+                    span,
+                    label,
+                    function,
+                    ..
+                } => [span, label, function],
+            };
+            assert_eq!(json!(references), vector["root_references"], "{name}");
+
+            let mut collection = DebugMetadataCollection::default();
+            collection.insert_metadata(metadata).unwrap();
+            let frame = collection
+                .symbolize_serialized_frame(&SerializedFrame {
+                    program,
+                    environment: vector_bytes(vector, "environment_hex"),
+                })
+                .expect(name)
+                .frame;
+            assert_eq!(
+                frame.matched,
+                if vector["exact"] == true {
+                    FrameMatch::Exact
+                } else {
+                    FrameMatch::Curried
+                },
+                "{name}"
+            );
+            assert_eq!(json!(frame.function), vector["function"], "{name}");
+            let arguments: Vec<_> = frame
+                .arguments
+                .iter()
+                .map(|a| {
+                    json!([
+                        a.name,
+                        format!("{:?}", a.binding),
+                        a.constraint.to_string(),
+                        hex::encode(&a.value)
+                    ])
+                })
+                .collect();
+            assert_eq!(json!(arguments), vector["arguments"], "{name}");
+        }
+    }
+
+    #[test]
+    fn v1_conformance_integers_and_parameter_paths() {
+        let vectors = conformance_vectors();
+        let mut allocator = Allocator::new();
+        for vector in vectors["integers"].as_array().unwrap() {
+            let bytes = vector_bytes(vector, "payload_hex");
+            validate_uint_bytes(&bytes).unwrap();
+            match vector["decimal"].as_str().unwrap().parse::<usize>() {
+                Ok(value) => {
+                    assert_eq!(decode_uint(&bytes), Ok(value));
+                    let node = uint(&mut allocator, value).unwrap();
+                    assert_eq!(atom_value(&allocator, node).unwrap(), bytes);
+                }
+                Err(_) => assert_eq!(
+                    decode_uint(&bytes).unwrap_err(),
+                    "debug metadata integer overflow"
+                ),
+            }
+        }
+        let invalid: Vec<_> = vectors["invalid_integer_payloads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| hex::decode(value.as_str().unwrap()).unwrap())
+            .collect();
+        for bytes in &invalid {
+            assert!(decode_uint(bytes).is_err(), "{}", hex::encode(bytes));
+        }
+
+        // Paths use the same canonical signed-positive bytes but do not inherit
+        // usize's range limit. Test both codec directions, including empty zero.
+        let valid_paths = vectors["integers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .skip(1)
+            .map(|v| vector_bytes(v, "payload_hex"));
+        for (path, valid) in valid_paths
+            .map(|p| (p, true))
+            .chain(invalid.into_iter().chain([vec![]]).map(|p| (p, false)))
+        {
+            let parameter = DebugParameter::Name {
+                name: 0,
+                path: path.clone(),
+                constraint: ParameterConstraint::Unknown,
+            };
+            assert_eq!(encode_parameter(&mut allocator, &parameter).is_ok(), valid);
+            // Assemble a record directly so malformed paths reach the decoder.
+            let tag = uint(&mut allocator, 1).unwrap();
+            let name = uint(&mut allocator, 0).unwrap();
+            let path = atom(&mut allocator, &path).unwrap();
+            let constraint = list(&mut allocator, &[name]).unwrap();
+            let node = list(&mut allocator, &[tag, name, path, constraint]).unwrap();
+            let decoded = decode_parameter(&allocator, node, 1);
+            if valid {
+                assert_eq!(decoded.unwrap(), parameter);
+            } else {
+                assert!(decoded.is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn v1_conformance_constraints() {
+        let vectors = conformance_vectors();
+        let mut allocator = Allocator::new();
+        for vector in vectors["constraints"].as_array().unwrap() {
+            let name = vector["name"].as_str().unwrap();
+            let node = decode_clvm(&mut allocator, &vector_bytes(vector, "hex"), name).unwrap();
+            let decoded = decode_constraint(&allocator, node).expect(name);
+            assert_eq!(
+                decoded.to_string(),
+                vector["display"].as_str().unwrap(),
+                "{name}"
+            );
+            let encoded = encode_constraint(&mut allocator, &decoded).unwrap();
+            assert_eq!(
+                node_to_bytes(&allocator, encoded).unwrap(),
+                vector_bytes(vector, "canonical_hex"),
+                "{name}"
+            );
+        }
+        for vector in vectors["invalid_constraints"].as_array().unwrap() {
+            let name = vector["name"].as_str().unwrap();
+            let node = decode_clvm(&mut allocator, &vector_bytes(vector, "hex"), name).unwrap();
+            assert!(decode_constraint(&allocator, node).is_err(), "{name}");
+        }
+    }
+
+    #[test]
+    fn v1_conformance_coordinates() {
+        for vector in conformance_vectors()["coordinates"].as_array().unwrap() {
+            assert_eq!(
+                expand_tabs(vector["line"].as_str().unwrap()),
+                vector["expanded"].as_str().unwrap()
+            );
+        }
+        let source = "λ\tX\r\n";
+        let index = SourceIndex::new(source);
+        assert_eq!(index.line(source, 1), Some("λ\tX"));
+        assert_eq!(source_display_column(source, &index, 1, 8), 8);
+        assert_eq!(source_display_column(source, &index, 1, 9), 9);
     }
 
     #[test]
