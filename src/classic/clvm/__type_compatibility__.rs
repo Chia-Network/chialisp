@@ -306,6 +306,8 @@ pub struct Stream {
     seek: usize,
     length: usize,
     buffer: Vec<u8>,
+    #[cfg(test)]
+    reallocations: usize,
 }
 
 impl Stream {
@@ -315,6 +317,8 @@ impl Stream {
                 seek: 0,
                 length: 0,
                 buffer: vec![],
+                #[cfg(test)]
+                reallocations: 0,
             },
             Some(b) => {
                 let data = b.data().to_vec();
@@ -322,6 +326,8 @@ impl Stream {
                     seek: 0,
                     length: data.len(),
                     buffer: data,
+                    #[cfg(test)]
+                    reallocations: 0,
                 }
             }
         }
@@ -359,22 +365,23 @@ impl Stream {
             s = 4294967295;
         }
 
-        let mut buf = Vec::<u8>::with_capacity(s);
-        for by in &self.buffer {
-            buf.push(*by);
+        if s > self.buffer.capacity() {
+            self.buffer.reserve_exact(s - self.buffer.len());
+            #[cfg(test)]
+            {
+                self.reallocations += 1;
+            }
         }
-        self.buffer = buf;
     }
 
     pub fn write(&mut self, b: Bytes) -> usize {
-        let new_length = max(self.buffer.len(), b.length() + self.seek);
-        if new_length > self.buffer.len() {
-            self.re_allocate(Some(new_length * BUF_ALLOC_MULTIPLIER));
+        let new_length = max(self.length, b.length() + self.seek);
+        if new_length > self.buffer.capacity() {
+            self.re_allocate(Some(new_length.saturating_mul(BUF_ALLOC_MULTIPLIER)));
         }
 
         if b.length() > 0 {
-            self.buffer
-                .resize(max(self.seek + b.length(), self.buffer.len()), 0);
+            self.buffer.resize(max(new_length, self.buffer.len()), 0);
 
             for i in 0..b.length() {
                 self.buffer[i + self.seek] = b.at(i);
@@ -438,4 +445,28 @@ pub fn set_u32(vec: &mut [u8], n: usize, v: u32) {
     vec[n + 1] = ((v >> 16) & 0xff) as u8;
     vec[n + 2] = ((v >> 8) & 0xff) as u8;
     vec[n + 3] = (v & 0xff) as u8;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_growth_is_geometric_and_preserves_bytes() {
+        let mut stream = Stream::new(None);
+        let byte = Bytes::new(Some(BytesFromType::Raw(vec![0x5a])));
+        for _ in 0..100_000 {
+            stream.write(byte.clone());
+        }
+
+        assert_eq!(stream.get_length(), 100_000);
+        assert!(
+            stream.reallocations <= 10,
+            "single-byte appends must not reallocate for every write"
+        );
+        stream.set_seek(2);
+        stream.write(Bytes::new(Some(BytesFromType::Raw(vec![9, 8]))));
+        assert_eq!(stream.get_length(), 100_000);
+        assert_eq!(&stream.get_value().data()[..5], &[0x5a, 0x5a, 9, 8, 0x5a]);
+    }
 }

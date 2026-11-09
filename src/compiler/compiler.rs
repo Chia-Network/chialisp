@@ -163,7 +163,7 @@ pub fn finish_compilation(
     // generate code from AST, optionally with optimization
     let generated = codegen(context, opts.clone(), &p3)?;
 
-    let g2 = context.post_codegen_output_optimize(opts, generated)?;
+    let g2 = context.after_codegen_output_optimize(opts, generated)?;
 
     Ok(g2)
 }
@@ -819,6 +819,37 @@ pub fn compile_file(
         CompileContextWrapper::new(runner, symbol_table, get_optimizer(&srcloc, opts.clone())?);
 
     compile_pre_forms(context_wrapper.context(), opts, &pre_forms)
+}
+
+/// Compile using the same optional final classic optimization as the public
+/// compile APIs and CLI. Module exports have already been finalized individually.
+pub fn compile_file_maybe_opt(
+    allocator: &mut Allocator,
+    runner: Rc<dyn TRunProgram>,
+    opts: Rc<dyn CompilerOpts>,
+    content: &str,
+    symbol_table: &mut HashMap<String, String>,
+    do_optimize: bool,
+) -> Result<CompilerOutput, CompileErr> {
+    match compile_file(
+        allocator,
+        runner.clone(),
+        opts.clone(),
+        content,
+        symbol_table,
+    )? {
+        CompilerOutput::Program(includes, program) => {
+            let program = crate::compiler::optimize::maybe_finalize_program_via_classic_optimizer(
+                allocator,
+                runner,
+                opts,
+                do_optimize,
+                &program,
+            )?;
+            Ok(CompilerOutput::Program(includes, program.as_ref().clone()))
+        }
+        module => Ok(module),
+    }
 }
 
 impl CompilerOpts for DefaultCompilerOpts {

@@ -17,7 +17,7 @@ Then build with
 
 ```bash
 # Make sure you're at <chialisp root>/wasm
-export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS='--cfg=getrandom_backend="unsupported" -Ctarget-cpu=mvp -Ctarget-feature=+reference-types'
+export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS='--cfg=getrandom_backend="wasm_js" -Ctarget-cpu=mvp -Ctarget-feature=+reference-types'
 wasm-pack build --release --target=nodejs
 ```
 

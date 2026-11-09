@@ -12,12 +12,15 @@ CHIALISP_DEP_RE = re.compile(
     r'(?P<rev>[A-Fa-f0-9]+)'
     r'(?P<suffix>"\s*\}\s*)$'
 )
+CHIALISP_VERSION_DEP_RE = re.compile(
+    r'^(?P<prefix>\s*chialisp\s*=\s*)"[^"\r\n]+"(?P<suffix>\s*)$'
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Replace chialisp git dependency rev values in matching lines."
+            "Point chialisp registry or git dependencies at a git revision."
         )
     )
     parser.add_argument(
@@ -51,6 +54,15 @@ def update_file(path: Path, new_rev: str) -> int:
 
         match = CHIALISP_DEP_RE.match(stripped)
         if match is None:
+            version_match = CHIALISP_VERSION_DEP_RE.match(stripped)
+            if version_match is not None:
+                replacements += 1
+                out_lines.append(
+                    f'{version_match.group("prefix")}{{ '
+                    f'git = "https://github.com/Chia-Network/chialisp.git", '
+                    f'rev = "{new_rev}" }}{version_match.group("suffix")}{ending}'
+                )
+                continue
             out_lines.append(line)
             continue
 

@@ -1,11 +1,12 @@
 use std::borrow::Borrow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::classic::clvm::__type_compatibility__::{sha256, Bytes, BytesFromType};
 
+use crate::compiler::clvm::integer_atom_bytes;
 use crate::compiler::sexp::SExp;
-use crate::util::u8_from_number;
+use crate::compiler::srcloc::Srcloc;
 
 /// Given an SExp and a transformation, make a map of the transformed subtrees of
 /// the given SExp in code that's indexed by treehash.  This will merge equivalent
@@ -77,11 +78,9 @@ pub fn build_table_mut<X>(
         SExp::QuotedString(l, _, a) => {
             build_table_mut(code_map, tx, &SExp::Atom(l.clone(), a.clone()))
         }
-        SExp::Integer(l, i) => build_table_mut(
-            code_map,
-            tx,
-            &SExp::Atom(l.clone(), u8_from_number(i.clone())),
-        ),
+        SExp::Integer(l, i) => {
+            build_table_mut(code_map, tx, &SExp::Atom(l.clone(), integer_atom_bytes(i)))
+        }
         SExp::Nil(l) => build_table_mut(code_map, tx, &SExp::Atom(l.clone(), Vec::new())),
     }
 }
@@ -169,4 +168,185 @@ pub fn relabel(code_map: &HashMap<String, SExp>, code: &SExp) -> SExp {
         swap_table.insert(ent.1.clone(), ent.0.clone());
     }
     relabel_inner_(code_map, &swap_table, code)
+}
+
+/// Retain the macro evaluator's input origins independently of the value-based
+/// restoration of Chialisp atom types. Equal input values can have different
+/// locations; relabeling by hash alone would assign them the same origin.
+/// Syntax created by the macro has no input origin, so use the invocation.
+pub(crate) fn restore_macro_locations(
+    args: &SExp,
+    result: &SExp,
+    relabeled: &SExp,
+    invocation: &Srcloc,
+) -> SExp {
+    type Location = (Rc<String>, usize, usize, Option<(usize, usize)>);
+
+    fn key(loc: &Srcloc) -> Location {
+        (
+            loc.file.clone(),
+            loc.line,
+            loc.col,
+            loc.until.as_ref().map(|end| (end.line, end.col)),
+        )
+    }
+
+    fn collect(node: &SExp, locations: &mut HashSet<Location>) {
+        locations.insert(key(&node.loc()));
+        if let SExp::Cons(_, left, right) = node {
+            collect(left, locations);
+            collect(right, locations);
+        }
+    }
+
+    fn restore(
+        result: &SExp,
+        relabeled: &SExp,
+        locations: &HashSet<Location>,
+        invocation: &Srcloc,
+    ) -> SExp {
+        let origin = result.loc();
+        let loc = if locations.contains(&key(&origin)) {
+            origin
+        } else {
+            invocation.clone()
+        };
+        match (result, relabeled) {
+            (SExp::Cons(_, left, right), SExp::Cons(_, typed_left, typed_right)) => SExp::Cons(
+                loc,
+                Rc::new(restore(left, typed_left, locations, invocation)),
+                Rc::new(restore(right, typed_right, locations, invocation)),
+            ),
+            _ => relabeled.with_loc(loc),
+        }
+    }
+
+    let mut locations = HashSet::new();
+    collect(args, &mut locations);
+    restore(result, relabeled, &locations, invocation)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+
+    use clvm_rs::chia_dialect::{ChiaDialect, ClvmFlags};
+    use clvm_rs::serde::{node_from_bytes, node_to_bytes};
+    use clvm_rs::{run_program_with_diagnostics, Allocator};
+
+    use crate::classic::clvm_tools::binutils::assemble;
+    use crate::compiler::compiler::DefaultCompilerOpts;
+    use crate::compiler::debug_metadata::{
+        compile_with_debug, DebugMetadataCollection, SerializedFrame, StackFrameStyle,
+    };
+
+    fn macro_trace(source: &str, environment: &str) -> (Vec<u8>, String) {
+        let artifact = compile_with_debug(
+            Rc::new(DefaultCompilerOpts::new("macro-origin.clsp")),
+            source,
+        )
+        .expect("compile macro fixture")
+        .remove(0);
+        let mut metadata = DebugMetadataCollection::default();
+        metadata.insert(&artifact.metadata).expect("load sidecar");
+        let mut allocator = Allocator::new();
+        let program = node_from_bytes(&mut allocator, &artifact.program).unwrap();
+        let environment = assemble(&mut allocator, environment).unwrap();
+        let failure = run_program_with_diagnostics(
+            &mut allocator,
+            &ChiaDialect::new(ClvmFlags::empty()),
+            program,
+            environment,
+            1_000_000,
+            64,
+        )
+        .expect_err("macro fixture must fail");
+        let frames = failure
+            .frames
+            .iter()
+            .map(|frame| SerializedFrame {
+                program: node_to_bytes(&allocator, frame.program).unwrap(),
+                environment: node_to_bytes(&allocator, frame.environment).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let rendered = metadata
+            .format_captured_stack(&frames, failure.truncated, StackFrameStyle::Python)
+            .unwrap();
+        (artifact.program, rendered)
+    }
+
+    #[test]
+    fn macro_trace_uses_invocation_and_argument_locations() {
+        let source = indoc! {"
+            (mod (X)
+              (include *standard-cl-23*)
+              (defun check (A)
+                (if (> A 0)
+                  (* A A)
+                  (x)))
+              (check X))
+        "};
+        let (program, rendered) = macro_trace(source, "(-1)");
+        // Recorded before source attribution changed: debug origins must not
+        // change the compiled program or the deployed puzzle's identity.
+        let mut allocator = Allocator::new();
+        let expected = assemble(
+            &mut allocator,
+            "(2 (1 2 2 (4 2 (4 5 ()))) (4 (1 2 (1 2 (3 (21 5 (1)) (1 2 (1 18 5 5) 1) (1 2 (1 8) 1)) 1) 1) 1))",
+        )
+        .unwrap();
+        assert_eq!(program, node_to_bytes(&allocator, expected).unwrap());
+        assert!(
+            rendered.contains("line 4, column 6, in check"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("line 6, column 8"), "{rendered}");
+        assert!(!rendered.contains("*macros*"), "{rendered}");
+    }
+
+    #[test]
+    fn macro_trace_distinguishes_equal_input_occurrences() {
+        let source = indoc! {"
+            (mod ()
+              (include *standard-cl-23*)
+              (defmacro second (A B) B)
+              (second
+                (x)
+                (x)))
+        "};
+        let (_, rendered) = macro_trace(source, "()");
+        assert!(rendered.contains("line 6, column 6"), "{rendered}");
+        assert!(!rendered.contains("line 5,"), "{rendered}");
+    }
+
+    #[test]
+    fn macro_trace_generated_nested_forms_use_outer_invocation() {
+        let (expected_program, _) =
+            macro_trace("(mod (X) (include *standard-cl-23*) (x X))", "(7)");
+        for kind in ["defmacro", "defmac"] {
+            let source = format!(
+                "(mod (X)\n  (include *standard-cl-23*)\n  ({kind} inner (A) (qq (x (unquote A))))\n  ({kind} outer (A) (qq (inner (unquote A))))\n  (outer X))\n"
+            );
+            let (program, rendered) = macro_trace(&source, "(7)");
+            assert_eq!(program, expected_program, "{kind}");
+            assert!(rendered.contains("line 5,"), "{kind}: {rendered}");
+            assert!(!rendered.contains("line 3,"), "{kind}: {rendered}");
+            assert!(!rendered.contains("line 4,"), "{kind}: {rendered}");
+            assert!(!rendered.contains("*macros*"), "{kind}: {rendered}");
+        }
+    }
+
+    #[test]
+    fn macro_trace_generated_value_does_not_inherit_equal_input_location() {
+        let source = indoc! {"
+            (mod ()
+              (include *standard-cl-23*)
+              (defmacro generated (A) (q . (x)))
+              (generated
+                (x)))
+        "};
+        let (_, rendered) = macro_trace(source, "()");
+        assert!(rendered.contains("line 4, column 4"), "{rendered}");
+        assert!(!rendered.contains("line 5,"), "{rendered}");
+    }
 }
