@@ -40,11 +40,7 @@ fn runtime_prints_to_js(output: RuntimePrintOutput) -> Result<Array, JsValue> {
         };
         Reflect::set(&object, &JsString::from("kind"), &JsString::from(kind))?;
         if let Some(source) = record.source {
-            Reflect::set(
-                &object,
-                &JsString::from("source"),
-                &JsString::from(source),
-            )?;
+            Reflect::set(&object, &JsString::from("source"), &JsString::from(source))?;
         }
         Reflect::set(
             &object,
@@ -702,11 +698,7 @@ impl Program {
                     _ => e.to_string(),
                 };
                 let error = js_sys::Error::new(&err_str);
-                Reflect::set(
-                    &error,
-                    &JsString::from("prints"),
-                    print_records.as_ref(),
-                )?;
+                Reflect::set(&error, &JsString::from("prints"), print_records.as_ref())?;
                 return Err(error.into());
             }
         };

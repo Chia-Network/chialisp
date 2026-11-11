@@ -19,9 +19,7 @@ use crate::jsval::{
 use crate::objects::Program;
 use chialisp::classic::clvm::__type_compatibility__::{Bytes, Stream, UnvalidatedBytesFromType};
 use chialisp::classic::clvm::serialize::sexp_to_stream;
-use chialisp::classic::clvm_tools::clvmc::{
-    compile_clvm_inner, compiler_opts_for_source,
-};
+use chialisp::classic::clvm_tools::clvmc::{compile_clvm_inner, compiler_opts_for_source};
 use chialisp::classic::clvm_tools::stages::stage_0::{DefaultProgramRunner, TRunProgram};
 use chialisp::compiler::cldb::{
     hex_to_modern_sexp, CldbOverrideBespokeCode, CldbRun, CldbRunEnv, CldbRunnable,
@@ -388,9 +386,7 @@ pub fn compile_debug(
                     3,
                     js_pair(
                         JsValue::from_str("symbols"),
-                        object_to_value(
-                            &js_sys::Object::from_entries(&symbol_entries).unwrap(),
-                        ),
+                        object_to_value(&js_sys::Object::from_entries(&symbol_entries).unwrap()),
                     ),
                 );
                 result.set(
