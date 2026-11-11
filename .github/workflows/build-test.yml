@@ -110,14 +110,26 @@ jobs:
 
 
     - name: Ensure clvm, clvm_rs, chialisp are installed
+      shell: python
       run: |
-        python -c 'import clvm; print("clvm:", clvm.__file__)'
-        python -c 'import clvm_rs; print("clvm_rs", clvm_rs.__file__)'
-        python -c 'import chialisp; print("chialisp:", chialisp.__file__)'
-        python -c 'import clvm_tools_rs; print("clvm_tools_rs:", clvm_tools_rs.__file__)'
-        CHIALISP_VERSION=$(python -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
-        bash support/verify_compiler_version.sh "$CHIALISP_VERSION"
-        echo "CHIALISP_VERSION=$CHIALISP_VERSION" >> "$GITHUB_ENV"
+        import os
+        import tomllib
+        from importlib.metadata import version
+        import clvm
+        import clvm_rs
+        import chialisp
+        import clvm_tools_rs
+
+        for module in (clvm, clvm_rs, chialisp, clvm_tools_rs):
+            print(module.__name__, module.__file__)
+        with open("Cargo.toml", "rb") as manifest_file:
+            manifest = tomllib.load(manifest_file)
+        expected_version = manifest["package"]["version"]
+        assert version("chialisp") == chialisp.get_version() == expected_version
+        assert clvm_tools_rs.get_version() == expected_version
+        assert version("clvm_rs") == manifest["dependencies"]["clvmr"]["version"]
+        with open(os.environ["GITHUB_ENV"], "a") as environment_file:
+            environment_file.write(f"CHIALISP_VERSION={expected_version}\n")
 
     # Test cldb output both run from python and via its command line tool.
     - name: "Run step run tests"
