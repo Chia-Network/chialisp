@@ -12,7 +12,7 @@ git clone https://github.com/Chia-Network/clvm.git --branch=main --single-branch
 python -m pip install ./clvm
 
 echo "installing clvm_rs via pip"
-pip install clvm_rs
+pip install clvm_rs==0.22.0
 
 echo "installing clvm_tools for clvm tests"
 

@@ -19,7 +19,7 @@ This repo can be installed via cargo
 
 or via pip
 
-    pip install chialisp@git+https://github.com/Chia-Network/clvm_tools_rs.git@e17412032aa7d3b8b1d1f931893fb5802eee626a
+    python -m pip install --upgrade chialisp
 
 Note: `pip` installs a subset of the tools installed by `cargo`, including `brun`, `run`, `opc` and `opd`.
 

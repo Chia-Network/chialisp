@@ -79,13 +79,13 @@ jobs:
         . ./venv/bin/activate
         git clone https://github.com/Chia-Network/clvm.git --branch=main --single-branch
         python -m pip install ./clvm
-        python -m pip install clvm_rs
+        python -m pip install clvm_rs==0.22.0
 
         git clone https://github.com/Chia-Network/clvm_tools.git --branch=main --single-branch
         python -m pip install ./clvm_tools
 
         # Install chialisp pkg as "clvm_tools_rs" for older test framework
-        pip install -e ./tmp
+        pip install --find-links target/wheels/ -e ./tmp
 
     - name: Ensure clvm, clvm_rs, clvm_tools are installed
       run: |

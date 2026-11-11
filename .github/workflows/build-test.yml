@@ -96,7 +96,7 @@ jobs:
         python -m pip install ./clvm
 
         echo "installing clvm_rs via pip"
-        pip install clvm_rs
+        pip install clvm_rs==0.22.0
 
         # Ensure clvm_tools is installed from its own repo.
         echo "installing clvm_tools for clvm tests"
@@ -106,7 +106,7 @@ jobs:
         # Install chialisp pkg as "clvm_tools_rs" for older test framework
         pip uninstall -v -y clvm_tools_rs
         pip install chialisp
-        pip install -e ./tmp
+        pip install --find-links target/wheels/ -e ./tmp
 
 
     - name: Ensure clvm, clvm_rs, chialisp are installed
@@ -115,8 +115,9 @@ jobs:
         python -c 'import clvm_rs; print("clvm_rs", clvm_rs.__file__)'
         python -c 'import chialisp; print("chialisp:", chialisp.__file__)'
         python -c 'import clvm_tools_rs; print("clvm_tools_rs:", clvm_tools_rs.__file__)'
-        echo "CLVM_TOOLS_RS_VERSION=$(python -c 'import clvm_tools_rs; print(clvm_tools_rs.get_version())')" >> "$GITHUB_ENV"
-        echo "CHIALISP_VERSION=$(python -c 'import chialisp; print(chialisp.get_version())')" >> "$GITHUB_ENV"
+        CHIALISP_VERSION=$(python -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+        bash support/verify_compiler_version.sh "$CHIALISP_VERSION"
+        echo "CHIALISP_VERSION=$CHIALISP_VERSION" >> "$GITHUB_ENV"
 
     # Test cldb output both run from python and via its command line tool.
     - name: "Run step run tests"
@@ -127,7 +128,7 @@ jobs:
         # have happened due to pulling in the trunk versions of other packages that
         # depend on chialisp.
         pip install --no-index --find-links target/wheels/ chialisp
-        pip install clvm_rs
+        pip install clvm_rs==0.22.0
         pip install clvm_tools
         cd resources/tests
         python test_clvm_step.py
@@ -173,9 +174,9 @@ jobs:
         pip install -v --no-index --find-links target/wheels/ chialisp && \
         pip uninstall -v -y clvm_tools_rs && \
         echo "PWD:" $(pwd) && \
-        pip install -e ./tmp && \
+        pip install --find-links target/wheels/ -e ./tmp && \
         (cd chia_puzzles && export PYTHONPATH=${PYTHONPATH}:$(pwd) && \
-        ./verify_compiler_version.sh ${CLVM_TOOLS_RS_VERSION} && . .venv/bin/activate && \
+        ./verify_compiler_version.sh ${CHIALISP_VERSION} && . .venv/bin/activate && \
         echo "Running check" && \
         python chia_puzzles_py/manage_clvm.py check && \
         echo "Check successful")

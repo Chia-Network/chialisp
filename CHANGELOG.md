@@ -8,6 +8,8 @@
 
 ### Changed
 - Use clvmr 0.22.0 for the Rust, Python, and WASM packages.
+- Match the Python test runtime to clvm_rs 0.22.0 and keep the legacy test
+  import adapter on chialisp 0.7.0 instead of downgrading to 0.4.1.
 - WASM `Program.run` now throws an `Error` for evaluator failures instead of a
   string. Use `error.message` for the failure text; `error.prints` contains the
   runtime prints captured before the failure.

@@ -85,14 +85,14 @@ jobs:
         python -m pip install ./clvm
 
         echo "installing clvm_rs via pip"
-        pip install clvm_rs
+        pip install clvm_rs==0.22.0
 
         echo "installing clvm_tools for clvm tests"
         # clvm tools is required to run the tests is clvm
         python -m pip install clvm_tools
 
         # Install chialisp pkg as "clvm_tools_rs" for older test framework
-        pip install -e ./tmp
+        pip install --find-links target/wheels/ -e ./tmp
 
 
     - name: Run game referee test
