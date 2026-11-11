@@ -178,7 +178,7 @@ dependencies = [
 
 [[package]]
 name = "chialisp"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "binascii",
  "chia-bls",
@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "clvm_tools_wasm"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "chialisp",
  "clvmr",
