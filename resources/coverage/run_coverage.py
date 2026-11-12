@@ -43,9 +43,9 @@ def is_my_code(desc):
 
     return True
 
-def collect_coverage():
-    profile_files = get_profile_files('.')
-    args = ['grcov','--binary-path','target/debug','--output-type','covdir','--output-path',coverage_file] + profile_files
+def collect_coverage(profile_dir='.', binary_path='target/debug'):
+    profile_files = [os.path.join(profile_dir, f) for f in get_profile_files(profile_dir)]
+    args = ['grcov','--binary-path',binary_path,'--output-type','covdir','--output-path',coverage_file] + profile_files
     subprocess.check_call(args)
     result = distill_coverage_results.CoverageResult()
 
@@ -61,12 +61,16 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--require-percent', help="required percentage to succeed", default=None)
     parser.add_argument('--test-args', help="arguments to cargo test", default=[], type=str, action="append")
+    parser.add_argument('--skip-tests', help="collect existing .profraw files instead of running cargo test", action="store_true")
+    parser.add_argument('--profile-dir', help="directory holding .profraw files", default='.')
+    parser.add_argument('--binary-path', help="directory holding the instrumented binaries", default='target/debug')
 
     args = parser.parse_args()
 
-    delete_coverage_files()
-    run_coverage_test(args.test_args)
-    result = collect_coverage()
+    if not args.skip_tests:
+        delete_coverage_files()
+        run_coverage_test(args.test_args)
+    result = collect_coverage(args.profile_dir, args.binary_path)
     print(json.dumps(result, indent=4))
 
     if args.require_percent is not None:

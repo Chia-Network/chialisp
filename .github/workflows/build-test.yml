@@ -241,13 +241,6 @@ jobs:
       if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.12')
       run: cargo test -- --include-ignored assign
 
-    - name: Check coverage
-      if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.12')
-      run: |
-        cargo install grcov
-        rustup component add llvm-tools-preview
-        python ./resources/coverage/run_coverage.py --require-percent 60
-
     - name: Build alpine wheel via docker
       if: startsWith(matrix.os, 'ubuntu') && startsWith(matrix.python, '3.12')
       run: |
@@ -429,6 +422,8 @@ jobs:
           export LLVM_PROFILE_FILE=$(pwd)/target/chialisp-%p-%m.profraw
           export CARGO_TARGET_DIR=$(pwd)/target
           cargo test --release --workspace
+      - name: Check coverage
+        run: python ./resources/coverage/run_coverage.py --skip-tests --profile-dir target --binary-path target/release --require-percent 60
       - name: Configure pip
         run: |
           echo "PWD:" $(pwd)
