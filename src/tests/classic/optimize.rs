@@ -18,7 +18,7 @@ fn test_cons_q_a(src: String) -> String {
     let input_ir = read_ir(&src, 0).unwrap();
     let assembled = assemble_from_ir(&mut allocator, Rc::new(input_ir)).unwrap();
     let runner = run_program_for_search_paths("*test*", &vec![".".to_string()], false, 0);
-    let optimized = cons_q_a_optimizer(&mut allocator, &memo, assembled, runner.clone()).unwrap();
+    let optimized = cons_q_a_optimizer(&mut allocator, &memo, &assembled, runner.clone()).unwrap();
     disassemble(&mut allocator, optimized, Some(0))
 }
 
@@ -28,7 +28,7 @@ fn test_children_optimizer(src: String) -> String {
     let input_ir = read_ir(&src, 0).unwrap();
     let assembled = assemble_from_ir(&mut allocator, Rc::new(input_ir)).unwrap();
     let runner = run_program_for_search_paths("*test*", &vec![".".to_string()], false, 0);
-    let optimized = children_optimizer(&mut allocator, &memo, assembled, runner.clone()).unwrap();
+    let optimized = children_optimizer(&mut allocator, &memo, &assembled, runner.clone()).unwrap();
     disassemble(&mut allocator, optimized, Some(0))
 }
 
@@ -39,7 +39,7 @@ fn test_constant_optimizer(src: String) -> String {
     let assembled = assemble_from_ir(&mut allocator, Rc::new(input_ir)).unwrap();
     let runner = run_program_for_search_paths("*test*", &vec![".".to_string()], false, 0);
     let optimized =
-        constant_optimizer(&mut allocator, &memo, assembled, 0, runner.clone()).unwrap();
+        constant_optimizer(&mut allocator, &memo, &assembled, 0, runner.clone()).unwrap();
     disassemble(&mut allocator, optimized, Some(0))
 }
 
@@ -48,7 +48,7 @@ fn test_optimizer(src: String) -> String {
     let input_ir = read_ir(&src, 0).unwrap();
     let assembled = assemble_from_ir(&mut allocator, Rc::new(input_ir)).unwrap();
     let runner = run_program_for_search_paths("*test*", &vec![".".to_string()], false, 0);
-    let optimized = optimize_sexp(&mut allocator, assembled, runner.clone()).unwrap();
+    let optimized = optimize_sexp(&mut allocator, &assembled, runner.clone()).unwrap();
     disassemble(&mut allocator, optimized, Some(0))
 }
 
@@ -58,7 +58,7 @@ fn test_sub_args(src: String) -> String {
     let assembled = assemble_from_ir(&mut allocator, Rc::new(input_ir)).unwrap();
     match allocator.sexp(assembled) {
         SExp::Pair(a, b) => {
-            let optimized = sub_args(&mut allocator, a, b).unwrap();
+            let optimized = sub_args(&mut allocator, &a, &b).unwrap();
             disassemble(&mut allocator, optimized, Some(0))
         }
         _ => {
@@ -133,7 +133,7 @@ fn seems_constant_quote_test() {
     let src = "(q . 15)".to_string();
     let input_ir = read_ir(&src, 0).unwrap();
     let assembled = assemble_from_ir(&mut allocator, Rc::new(input_ir)).unwrap();
-    assert_eq!(seems_constant(&mut allocator, assembled), true);
+    assert_eq!(seems_constant(&mut allocator, &assembled), true);
 }
 
 #[test]
