@@ -174,6 +174,101 @@ pub struct SymbolizedSerializedFrame {
     pub frame: SymbolizedFrame,
 }
 
+/// How a [`CapturedStackFrame`] was symbolized, for renderers that do not want
+/// to infer it from the frame's fields or from display names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CapturedFrameKind {
+    /// A call of a function record in the sidecar, exactly or through curry.
+    /// [`SymbolizedFrame::arguments`] carries its named parameters.
+    Function,
+    /// A frame whose program carries a name in the sidecar but no function
+    /// record, so no parameter names are known.
+    Label,
+    /// An unnamed expression with a source location.
+    Expression,
+    /// Identical code with different annotations. The frame has no location
+    /// or parameter names; `candidates` are the sorted, deduplicated function
+    /// or label names of the matching occurrences, and may be empty.
+    Ambiguous { candidates: Vec<String> },
+    /// A frame no sidecar describes, or one a sidecar matches without any
+    /// name or location.
+    Unknown,
+}
+
+impl CapturedFrameKind {
+    /// Exact and curried matches always come from a sidecar.
+    fn classify(frame: &SymbolizedFrame, candidates: Vec<String>) -> Self {
+        match frame.matched {
+            FrameMatch::Ambiguous => CapturedFrameKind::Ambiguous { candidates },
+            FrameMatch::Unknown => CapturedFrameKind::Unknown,
+            FrameMatch::Exact | FrameMatch::Curried => {
+                if frame.function_index.is_some() {
+                    CapturedFrameKind::Function
+                } else if frame.function.is_some() {
+                    CapturedFrameKind::Label
+                } else if frame.source_span.is_some() {
+                    CapturedFrameKind::Expression
+                } else {
+                    CapturedFrameKind::Unknown
+                }
+            }
+        }
+    }
+}
+
+/// One displayed entry of a captured stack.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CapturedStackFrame {
+    /// Index of the raw frame in the slice passed to
+    /// [`DebugMetadataCollection::symbolize_captured_stack`].
+    pub position: usize,
+    pub kind: CapturedFrameKind,
+    pub frame: SymbolizedSerializedFrame,
+    /// Identical calls that immediately followed this one and were folded
+    /// into it. The entry represents `1 + repeated` calls.
+    pub repeated: usize,
+}
+
+/// The frames [`DebugMetadataCollection::format_captured_stack`] displays,
+/// oldest first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CapturedStack {
+    /// Older frames not shown: those the caller reported as omitted, plus the
+    /// calls represented by entries dropped to bound the stack's length.
+    pub omitted: usize,
+    pub frames: Vec<CapturedStackFrame>,
+}
+
+/// A source span resolved against its sidecar's embedded files.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceExcerpt<'a> {
+    /// The file's display path.
+    pub path: &'a str,
+    pub span: &'a DebugSourceSpan,
+    /// The span's first line without its line ending, with tabs expanded so
+    /// that each character occupies one display column. `None` when the line
+    /// is outside the embedded source.
+    pub line: Option<String>,
+}
+
+impl SourceExcerpt<'_> {
+    /// The number of display columns to highlight on [`Self::line`] from the
+    /// span's start column: up to the end column for a single-line span, or
+    /// to the end of the line otherwise. Always at least 1.
+    pub fn highlight_width(&self) -> usize {
+        let span = self.span;
+        if span.end_line == span.start_line {
+            span.end_column.saturating_sub(span.start_column).max(1)
+        } else {
+            self.line
+                .as_deref()
+                .map_or(0, |line| line.chars().count())
+                .saturating_sub(span.start_column.saturating_sub(1))
+                .max(1)
+        }
+    }
+}
+
 /// Decoded sidecars indexed by the structural identities of their programs
 /// and nested executable forms.
 #[derive(Clone, Debug, Default)]
@@ -905,20 +1000,30 @@ impl DebugMetadata {
         runtime_arguments: &[Vec<u8>],
     ) -> Result<SymbolizedFrame, String> {
         self.symbolize_frame_with_environment(program_bytes, runtime_arguments, None, &mut None)
+            .map(|(frame, _)| frame)
     }
 
+    /// Also returns the candidate names of an ambiguous match.
     fn symbolize_frame_with_environment<'a>(
         &'a self,
         program_bytes: &[u8],
         runtime_arguments: &[Vec<u8>],
         runtime_tail: Option<&[u8]>,
         context: &mut Option<&'a DebugNode>,
-    ) -> Result<SymbolizedFrame, String> {
+    ) -> Result<(SymbolizedFrame, Vec<String>), String> {
         let mut allocator = Allocator::new();
         let program = decode_clvm(&mut allocator, program_bytes, "frame program")?;
         let mut bound_arguments = Vec::new();
+        let mut candidates = Vec::new();
         let (matched, fallback_function, source_span, function_index, uses_runtime) =
-            symbolize_node(&allocator, program, self, &mut bound_arguments, context);
+            symbolize_node(
+                &allocator,
+                program,
+                self,
+                &mut bound_arguments,
+                &mut candidates,
+                context,
+            );
         let (runtime_arguments, runtime_tail) = if uses_runtime {
             (runtime_arguments, runtime_tail)
         } else {
@@ -944,16 +1049,19 @@ impl DebugMetadata {
         let program_hash = clvm_tree_hash(&mut allocator, program)?;
         let mut serialized_runtime_arguments = runtime_arguments.to_vec();
         serialized_runtime_arguments.extend(runtime_tail.map(<[u8]>::to_vec));
-        Ok(SymbolizedFrame {
-            matched,
-            function,
-            function_index,
-            source_span,
-            program_hash,
-            bound_arguments,
-            runtime_arguments: serialized_runtime_arguments,
-            arguments,
-        })
+        Ok((
+            SymbolizedFrame {
+                matched,
+                function,
+                function_index,
+                source_span,
+                program_hash,
+                bound_arguments,
+                runtime_arguments: serialized_runtime_arguments,
+                arguments,
+            },
+            candidates,
+        ))
     }
 
     fn to_clvm(&self, allocator: &mut Allocator) -> Result<NodePtr, String> {
@@ -1164,14 +1272,16 @@ impl DebugMetadataCollection {
         captured: &SerializedFrame,
     ) -> Result<SymbolizedSerializedFrame, String> {
         self.symbolize_serialized_frame_with_owner(captured, None, &mut None)
+            .map(|(frame, _)| frame)
     }
 
+    /// Also returns the candidate names of an ambiguous match.
     fn symbolize_serialized_frame_with_owner<'a>(
         &'a self,
         captured: &SerializedFrame,
         owner: Option<usize>,
         context: &mut Option<&'a DebugNode>,
-    ) -> Result<SymbolizedSerializedFrame, String> {
+    ) -> Result<(SymbolizedSerializedFrame, Vec<String>), String> {
         let mut allocator = Allocator::new();
         let program = decode_clvm(&mut allocator, &captured.program, "frame program")?;
         let (runtime_arguments, runtime_tail) =
@@ -1221,11 +1331,14 @@ impl DebugMetadataCollection {
                 runtime_tail.as_deref(),
                 context,
             ) {
-                Ok(frame) if frame.matched != FrameMatch::Unknown => {
-                    return Ok(SymbolizedSerializedFrame {
-                        metadata_index: Some(index),
-                        frame,
-                    });
+                Ok((frame, candidates)) if frame.matched != FrameMatch::Unknown => {
+                    return Ok((
+                        SymbolizedSerializedFrame {
+                            metadata_index: Some(index),
+                            frame,
+                        },
+                        candidates,
+                    ));
                 }
                 Ok(_) => {}
                 Err(error) => return Err(error),
@@ -1236,35 +1349,47 @@ impl DebugMetadataCollection {
         }
 
         *context = None;
-        Ok(SymbolizedSerializedFrame {
-            metadata_index: None,
-            frame: SymbolizedFrame {
-                matched: FrameMatch::Unknown,
-                function: None,
-                function_index: None,
-                source_span: None,
-                program_hash: clvm_tree_hash(&mut allocator, program)?,
-                bound_arguments: Vec::new(),
-                runtime_arguments: runtime_arguments.into_iter().chain(runtime_tail).collect(),
-                arguments: Vec::new(),
+        Ok((
+            SymbolizedSerializedFrame {
+                metadata_index: None,
+                frame: SymbolizedFrame {
+                    matched: FrameMatch::Unknown,
+                    function: None,
+                    function_index: None,
+                    source_span: None,
+                    program_hash: clvm_tree_hash(&mut allocator, program)?,
+                    bound_arguments: Vec::new(),
+                    runtime_arguments: runtime_arguments.into_iter().chain(runtime_tail).collect(),
+                    arguments: Vec::new(),
+                },
             },
-        })
+            Vec::new(),
+        ))
     }
 
-    /// Format retained frames in evaluator order (oldest to newest). The
-    /// omitted count describes older frames dropped before the retained slice.
+    /// Symbolize retained frames in evaluator order (oldest to newest) and
+    /// select the frames that [`Self::format_captured_stack`] displays, as
+    /// data for callers that render stacks themselves. The omitted count
+    /// describes older frames dropped before the retained slice.
+    ///
     /// Matching prefers occurrences inside the last resolved shadow subtree.
     /// This local source-mapping heuristic needs no execution tracing or format
-    /// extensions; unknown or ambiguous frames discard the subtree hint.
-    pub fn format_captured_stack(
+    /// extensions; unknown or ambiguous frames discard the subtree hint. Each
+    /// frame is therefore symbolized in the context of the frames before it,
+    /// which [`Self::symbolize_serialized_frame`] cannot do for a single frame.
+    ///
+    /// The selection collapses canonical curry wrappers into the call they
+    /// describe, drops anonymous setup wrappers in favor of their body, keeps
+    /// only the deepest of consecutive expressions at one location, counts
+    /// identical repeated calls, and retains at most the newest 100 entries,
+    /// adding the calls of dropped entries to [`CapturedStack::omitted`].
+    pub fn symbolize_captured_stack(
         &self,
         frames: &[SerializedFrame],
         omitted: usize,
-        style: StackFrameStyle,
-    ) -> Result<String, String> {
+    ) -> Result<CapturedStack, String> {
         const MAX_FRAMES: usize = 100;
-        // Each displayed entry retains the number of calls it represents.
-        let mut rendered: Vec<(String, usize)> = Vec::with_capacity(MAX_FRAMES);
+        let mut retained: Vec<CapturedStackFrame> = Vec::with_capacity(MAX_FRAMES + 1);
         let mut omitted = omitted;
         let mut repeated = 0;
         let mut previous_captured: Option<&SerializedFrame> = None;
@@ -1276,7 +1401,7 @@ impl DebugMetadataCollection {
         let mut previous_curried_function = None;
         let mut previous_unannotated = false;
         for (position, captured) in frames.iter().enumerate() {
-            let symbolized =
+            let (symbolized, candidates) =
                 self.symbolize_serialized_frame_with_owner(captured, owner, &mut context)?;
             if symbolized.metadata_index.is_some() {
                 owner = symbolized.metadata_index;
@@ -1301,13 +1426,13 @@ impl DebugMetadataCollection {
                 }
                 // An anonymous setup wrapper supplies no additional location.
                 // Keep its body, including the actual failure leaf, instead.
-                rendered.pop();
+                retained.pop();
             }
             let expression = symbolized.frame.function.is_none() && location.is_some();
             if expression && location == previous_location {
                 if previous_expression {
                     // Keep the deepest expression, including the actual leaf.
-                    rendered.pop();
+                    retained.pop();
                 } else if position + 1 != frames.len() {
                     continue;
                 }
@@ -1327,24 +1452,11 @@ impl DebugMetadataCollection {
                 continue;
             }
             if repeated != 0 {
-                if let Some(last) = rendered.last_mut() {
-                    last.0
-                        .push_str(&format!("\n<... {repeated} identical frames repeated ...>"));
-                    last.1 += repeated;
+                if let Some(last) = retained.last_mut() {
+                    last.repeated += repeated;
                 }
                 repeated = 0;
             }
-            let frame = if let Some(index) = symbolized.metadata_index {
-                format_stack_frame_with_sources(
-                    &self.entries[index],
-                    &symbolized.frame,
-                    style,
-                    Some(&self.source_indices[index]),
-                )?
-            } else {
-                format_unknown_stack_frame(&symbolized.frame, style)
-            };
-            rendered.push((frame, 1));
             previous_location = location;
             previous_expression = expression;
             previous_captured = Some(captured);
@@ -1355,34 +1467,81 @@ impl DebugMetadataCollection {
             previous_unannotated = symbolized.frame.source_span.is_none()
                 && (symbolized.frame.function.is_none()
                     || symbolized.frame.matched == FrameMatch::Ambiguous);
-            if rendered.len() > MAX_FRAMES {
-                omitted += rendered.remove(0).1;
+            retained.push(CapturedStackFrame {
+                position,
+                kind: CapturedFrameKind::classify(&symbolized.frame, candidates),
+                frame: symbolized,
+                repeated: 0,
+            });
+            if retained.len() > MAX_FRAMES {
+                omitted += 1 + retained.remove(0).repeated;
             }
         }
         if repeated != 0 {
-            if let Some(last) = rendered.last_mut() {
-                last.0
-                    .push_str(&format!("\n<... {repeated} identical frames repeated ...>"));
-                last.1 += repeated;
+            if let Some(last) = retained.last_mut() {
+                last.repeated += repeated;
             }
         }
-        if omitted != 0 {
-            rendered.insert(
-                0,
-                (
-                    format!(
-                        "<... {omitted} older frame{} omitted ...>",
-                        if omitted == 1 { "" } else { "s" }
-                    ),
-                    0,
-                ),
-            );
+        Ok(CapturedStack {
+            omitted,
+            frames: retained,
+        })
+    }
+
+    /// Format retained frames in evaluator order (oldest to newest). The
+    /// omitted count describes older frames dropped before the retained slice.
+    /// This renders the frames that [`Self::symbolize_captured_stack`] selects.
+    pub fn format_captured_stack(
+        &self,
+        frames: &[SerializedFrame],
+        omitted: usize,
+        style: StackFrameStyle,
+    ) -> Result<String, String> {
+        let stack = self.symbolize_captured_stack(frames, omitted)?;
+        let mut rendered = Vec::with_capacity(stack.frames.len() + 1);
+        if stack.omitted != 0 {
+            rendered.push(format!(
+                "<... {} older frame{} omitted ...>",
+                stack.omitted,
+                if stack.omitted == 1 { "" } else { "s" }
+            ));
         }
-        Ok(rendered
-            .into_iter()
-            .map(|(text, _)| text)
-            .collect::<Vec<_>>()
-            .join("\n"))
+        for entry in &stack.frames {
+            let mut text = if let Some(index) = entry.frame.metadata_index {
+                format_stack_frame_with_sources(
+                    &self.entries[index],
+                    &entry.frame.frame,
+                    style,
+                    Some(&self.source_indices[index]),
+                )?
+            } else {
+                format_unknown_stack_frame(&entry.frame.frame, style)
+            };
+            if entry.repeated != 0 {
+                text.push_str(&format!(
+                    "\n<... {} identical frames repeated ...>",
+                    entry.repeated
+                ));
+            }
+            rendered.push(text);
+        }
+        Ok(rendered.join("\n"))
+    }
+
+    /// Resolve a span of the sidecar at `metadata_index` to its file path and
+    /// first source line. Returns `None` when either index, or the span's file
+    /// index in hand-built metadata, is out of range.
+    pub fn source_excerpt(
+        &self,
+        metadata_index: usize,
+        span_index: usize,
+    ) -> Option<SourceExcerpt<'_>> {
+        source_excerpt(
+            self.entries.get(metadata_index)?,
+            span_index,
+            self.source_indices.get(metadata_index).map(Vec::as_slice),
+        )
+        .ok()
     }
 }
 
@@ -2079,11 +2238,14 @@ fn curry_applies_to(wrapper: &SerializedFrame, body: &SerializedFrame) -> Result
     Ok(environment == body.environment)
 }
 
+/// Symbolize `node`, recording curry-bound values in `bound_arguments` and the
+/// sorted, deduplicated candidate names of an ambiguous match in `candidates`.
 fn symbolize_node<'a>(
     allocator: &Allocator,
     node: NodePtr,
     metadata: &'a DebugMetadata,
     bound_arguments: &mut Vec<Vec<u8>>,
+    candidates: &mut Vec<String>,
     context: &mut Option<&'a DebugNode>,
 ) -> (
     FrameMatch,
@@ -2131,6 +2293,7 @@ fn symbolize_node<'a>(
                 format!("<ambiguous: {}>", names.join(" | "))
             };
             *context = None;
+            *candidates = names;
             return (FrameMatch::Ambiguous, Some(label), None, None, true);
         }
         // Equivalent annotations can still occupy different subtrees. Do not
@@ -2148,8 +2311,14 @@ fn symbolize_node<'a>(
         *context = None;
         return (FrameMatch::Unknown, None, None, None, true);
     };
-    let (matched, function, source_span, function_index, base_uses_runtime) =
-        symbolize_node(allocator, base, metadata, bound_arguments, context);
+    let (matched, function, source_span, function_index, base_uses_runtime) = symbolize_node(
+        allocator,
+        base,
+        metadata,
+        bound_arguments,
+        candidates,
+        context,
+    );
     // A closed inner wrapper ignores the complete environment of an outer one.
     if base_uses_runtime {
         for argument in arguments {
@@ -2615,8 +2784,10 @@ pub fn render_clvm_value(serialized: &[u8]) -> Result<String, String> {
     ))
 }
 
-/// Render two list levels of a call parameter, abbreviating deeper pairs.
-fn render_stack_argument(serialized: &[u8]) -> Result<String, String> {
+/// Render a stack frame argument as the stack formatters do: two list levels,
+/// with deeper pairs shown as `(...)`, at most 100 list items, and atoms
+/// truncated to 100 characters. Use [`render_clvm_value`] for a full value.
+pub fn render_stack_argument(serialized: &[u8]) -> Result<String, String> {
     const MAX_ITEMS: usize = 100;
     const MAX_ATOM_CHARS: usize = 100;
     fn atom(allocator: &Allocator, value: NodePtr) -> String {
@@ -2691,6 +2862,36 @@ fn expand_tabs(line: &str) -> String {
         }
     }
     result
+}
+
+fn source_excerpt<'a>(
+    metadata: &'a DebugMetadata,
+    span_index: usize,
+    source_indices: Option<&[SourceIndex]>,
+) -> Result<SourceExcerpt<'a>, String> {
+    let span = metadata
+        .spans
+        .get(span_index)
+        .ok_or_else(|| "frame source span index out of range".to_string())?;
+    let file = metadata
+        .files
+        .get(span.file)
+        .ok_or_else(|| "frame source file index out of range".to_string())?;
+    let local_index;
+    let source_index = match source_indices.and_then(|indices| indices.get(span.file)) {
+        Some(index) => index,
+        None => {
+            local_index = SourceIndex::new(&file.source);
+            &local_index
+        }
+    };
+    Ok(SourceExcerpt {
+        path: &file.path,
+        span,
+        line: source_index
+            .line(&file.source, span.start_line)
+            .map(expand_tabs),
+    })
 }
 
 fn format_unknown_stack_frame(frame: &SymbolizedFrame, style: StackFrameStyle) -> String {
@@ -2779,37 +2980,14 @@ fn format_stack_frame_with_sources(
     }
 
     if let Some(span_index) = frame.source_span {
-        let span = metadata
-            .spans
-            .get(span_index)
-            .ok_or_else(|| "frame source span index out of range".to_string())?;
-        let file = metadata
-            .files
-            .get(span.file)
-            .ok_or_else(|| "frame source file index out of range".to_string())?;
-        let local_index;
-        let source_index = match source_indices.and_then(|indices| indices.get(span.file)) {
-            Some(index) => index,
-            None => {
-                local_index = SourceIndex::new(&file.source);
-                &local_index
-            }
-        };
-        if let Some(line) = source_index.line(&file.source, span.start_line) {
-            let expanded = expand_tabs(line);
-            let width = if span.end_line == span.start_line {
-                span.end_column.saturating_sub(span.start_column).max(1)
-            } else {
-                expanded
-                    .chars()
-                    .count()
-                    .saturating_sub(span.start_column - 1)
-                    .max(1)
-            };
+        let excerpt = source_excerpt(metadata, span_index, source_indices)?;
+        let span = excerpt.span;
+        let width = excerpt.highlight_width();
+        if let Some(expanded) = excerpt.line {
             output = match style {
                 StackFrameStyle::Lisp => format!(
                     "--> {}:{}:{}\n   |\n{:>3}| {}\n   | {}{}\n{output}",
-                    file.path,
+                    excerpt.path,
                     span.start_line,
                     span.start_column,
                     span.start_line,
@@ -2819,7 +2997,7 @@ fn format_stack_frame_with_sources(
                 ),
                 StackFrameStyle::Python => format!(
                     "File \"{}\", line {}, column {}{}\n  {}\n  {}{}",
-                    file.path,
+                    excerpt.path,
                     span.start_line,
                     span.start_column,
                     if frame.function.is_none() {
@@ -4101,6 +4279,30 @@ mod tests {
         assert!(first < unknown && unknown < newest, "{rendered}");
     }
 
+    /// Run a program that must fail and serialize its captured frames.
+    fn capture_failing_frames(program: &[u8], environment: &[u8]) -> Vec<SerializedFrame> {
+        let mut allocator = Allocator::new();
+        let program = decode_clvm(&mut allocator, program, "program").unwrap();
+        let environment = decode_clvm(&mut allocator, environment, "environment").unwrap();
+        let failure = clvm_rs::run_program_with_diagnostics(
+            &mut allocator,
+            &clvm_rs::chia_dialect::ChiaDialect::new(clvm_rs::chia_dialect::ClvmFlags::empty()),
+            program,
+            environment,
+            1_000_000,
+            64,
+        )
+        .expect_err("fixture fails");
+        failure
+            .frames
+            .iter()
+            .map(|frame| SerializedFrame {
+                program: node_to_bytes(&allocator, frame.program).unwrap(),
+                environment: node_to_bytes(&allocator, frame.environment).unwrap(),
+            })
+            .collect()
+    }
+
     fn captured_cl26_failure(
         filename: &str,
         source: &str,
@@ -4135,26 +4337,7 @@ mod tests {
             .into_iter()
             .find(|artifact| artifact.export_name.as_deref() == Some("program"))
             .expect("program export");
-        let mut allocator = Allocator::new();
-        let program = decode_clvm(&mut allocator, &artifact.program, "fixture").unwrap();
-        let environment = allocator.nil();
-        let failure = clvm_rs::run_program_with_diagnostics(
-            &mut allocator,
-            &clvm_rs::chia_dialect::ChiaDialect::new(clvm_rs::chia_dialect::ClvmFlags::empty()),
-            program,
-            environment,
-            1_000_000,
-            64,
-        )
-        .expect_err("fixture fails while accessing X");
-        let frames = failure
-            .frames
-            .into_iter()
-            .map(|frame| SerializedFrame {
-                program: node_to_bytes(&allocator, frame.program).unwrap(),
-                environment: node_to_bytes(&allocator, frame.environment).unwrap(),
-            })
-            .collect();
+        let frames = capture_failing_frames(&artifact.program, &serialized_sexp("()"));
         (artifact, frames)
     }
 
@@ -4279,27 +4462,8 @@ mod tests {
                 "LIMIT, ITEM",
             ),
         ] {
-            let mut allocator = Allocator::new();
-            let root = decode_clvm(&mut allocator, &serialized_sexp(&wrapper), "wrapper").unwrap();
-            let env =
-                decode_clvm(&mut allocator, &serialized_sexp(environment), "environment").unwrap();
-            let failure = clvm_rs::run_program_with_diagnostics(
-                &mut allocator,
-                &clvm_rs::chia_dialect::ChiaDialect::new(clvm_rs::chia_dialect::ClvmFlags::empty()),
-                root,
-                env,
-                1_000_000,
-                64,
-            )
-            .expect_err("closure assertion fails");
-            let frames: Vec<_> = failure
-                .frames
-                .iter()
-                .map(|frame| SerializedFrame {
-                    program: node_to_bytes(&allocator, frame.program).unwrap(),
-                    environment: node_to_bytes(&allocator, frame.environment).unwrap(),
-                })
-                .collect();
+            let frames =
+                capture_failing_frames(&serialized_sexp(&wrapper), &serialized_sexp(environment));
             assert!(frames.len() >= 3);
             for (style, header, binding, limit, item) in [
                 (
@@ -4335,6 +4499,29 @@ mod tests {
                     "failure leaf must remain: {rendered}"
                 );
             }
+
+            // The structured stack shows the wrapper once, as a curried call
+            // that keeps which arguments were bound, followed by the leaf.
+            let stack = collection.symbolize_captured_stack(&frames, 0).unwrap();
+            let calls = stack
+                .frames
+                .iter()
+                .filter(|entry| entry.kind == CapturedFrameKind::Function)
+                .collect::<Vec<_>>();
+            assert_eq!(calls.len(), 1, "{stack:?}");
+            assert_eq!(calls[0].position, 0);
+            assert_eq!(calls[0].frame.frame.matched, FrameMatch::Curried);
+            let bound_names = calls[0]
+                .frame
+                .frame
+                .arguments
+                .iter()
+                .filter(|argument| argument.binding == ArgumentBinding::Bound)
+                .map(|argument| argument.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            assert_eq!(bound_names, bound);
+            assert_eq!(stack.frames.last().unwrap().position, frames.len() - 1);
 
             // Matching function names and locations alone cannot justify a collapse.
             let mut differing = frames.clone();
@@ -4503,6 +4690,31 @@ mod tests {
         assert_eq!(frame.frame.function_index, None);
         assert_eq!(frame.frame.source_span, None);
         assert!(frame.frame.arguments.is_empty());
+        let stack = collection
+            .symbolize_captured_stack(std::slice::from_ref(&captured), 0)
+            .unwrap();
+        assert_eq!(
+            stack.frames[0].kind,
+            CapturedFrameKind::Ambiguous {
+                candidates: vec!["fixture".to_string(), "second".to_string()]
+            }
+        );
+        assert_eq!(stack.frames[0].frame, frame);
+        // Candidates survive curry, which wraps the ambiguous body.
+        let curried = SerializedFrame {
+            program: canonical_curry_bytes(&bytes, &[serialized_sexp("5")]),
+            environment: serialized_sexp("(6)"),
+        };
+        assert_eq!(
+            collection
+                .symbolize_captured_stack(&[curried], 0)
+                .unwrap()
+                .frames[0]
+                .kind,
+            CapturedFrameKind::Ambiguous {
+                candidates: vec!["fixture".to_string(), "second".to_string()]
+            }
+        );
         let rendered = collection
             .format_captured_stack(&[captured], 0, StackFrameStyle::Python)
             .unwrap();
@@ -5456,5 +5668,429 @@ mod tests {
         assert!(rendered.contains("U = \"opaque\""));
         assert!(rendered.contains("# bound: N"));
         assert!(rendered.contains("File \"typed.clsp\", line "));
+    }
+
+    fn captured_failure(
+        filename: &str,
+        source: &str,
+        environment: &str,
+    ) -> (DebugCompileArtifact, Vec<SerializedFrame>) {
+        let opts = Rc::new(crate::compiler::compiler::DefaultCompilerOpts::new(
+            filename,
+        ));
+        let artifact = compile_with_debug(opts, source).unwrap().remove(0);
+        let frames = capture_failing_frames(&artifact.program, &serialized_sexp(environment));
+        (artifact, frames)
+    }
+
+    /// A minimal Python-style renderer that uses only the public structured
+    /// API, for frames without bound or ambiguous arguments.
+    fn render_structured_python(
+        collection: &DebugMetadataCollection,
+        stack: &CapturedStack,
+    ) -> String {
+        let mut lines = Vec::new();
+        if stack.omitted != 0 {
+            lines.push(format!(
+                "<... {} older frame{} omitted ...>",
+                stack.omitted,
+                if stack.omitted == 1 { "" } else { "s" }
+            ));
+        }
+        for entry in &stack.frames {
+            let frame = &entry.frame.frame;
+            let name = match &entry.kind {
+                CapturedFrameKind::Function | CapturedFrameKind::Label => {
+                    Some(frame.function.clone().unwrap())
+                }
+                CapturedFrameKind::Expression => None,
+                CapturedFrameKind::Unknown => {
+                    Some(format!("<unknown:{}>", hex::encode(frame.program_hash)))
+                }
+                CapturedFrameKind::Ambiguous { .. } => unreachable!("not rendered here"),
+            };
+            let excerpt = entry
+                .frame
+                .metadata_index
+                .zip(frame.source_span)
+                .and_then(|(metadata, span)| collection.source_excerpt(metadata, span));
+            let mut text = match excerpt {
+                Some(excerpt) => {
+                    let line = excerpt.line.as_deref().unwrap();
+                    let indent = line.chars().take_while(|c| *c == ' ').count();
+                    format!(
+                        "File \"{}\", line {}, column {}{}\n  {}\n  {}{}",
+                        excerpt.path,
+                        excerpt.span.start_line,
+                        excerpt.span.start_column,
+                        name.map(|name| format!(", in {name}")).unwrap_or_default(),
+                        line.trim_start_matches(' '),
+                        " ".repeat(excerpt.span.start_column.saturating_sub(indent + 1)),
+                        "^".repeat(excerpt.highlight_width()),
+                    )
+                }
+                None => format!("in {}", name.unwrap()),
+            };
+            for argument in &frame.arguments {
+                assert_eq!(argument.binding, ArgumentBinding::Runtime);
+                text.push_str(&format!(
+                    "\n  {} = {}",
+                    argument.name,
+                    render_stack_argument(&argument.value).unwrap()
+                ));
+            }
+            if entry.repeated != 0 {
+                text.push_str(&format!(
+                    "\n<... {} identical frames repeated ...>",
+                    entry.repeated
+                ));
+            }
+            lines.push(text);
+        }
+        lines.join("\n")
+    }
+
+    #[test]
+    fn structured_captured_stack_selects_the_formatted_frames() {
+        let source = indoc::indoc! {"
+            (mod (X)
+              (include *standard-cl-23*)
+              (defun check (A B)
+                (if (> A 10)
+                  A
+                  (x \"too small\")))
+              (defun outer (N)
+                (check N (* N 2)))
+              (outer X))
+        "};
+        let (artifact, frames) = captured_failure("structured.clsp", source, "(3)");
+        let mut collection = DebugMetadataCollection::default();
+        collection.insert(&artifact.metadata).unwrap();
+        let stack = collection.symbolize_captured_stack(&frames, 0).unwrap();
+        assert_eq!(stack.omitted, 0);
+        let summary = stack
+            .frames
+            .iter()
+            .map(|entry| {
+                (
+                    entry.kind.clone(),
+                    entry.frame.frame.function.as_deref(),
+                    entry.frame.metadata_index,
+                    entry.repeated,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            summary,
+            [
+                (CapturedFrameKind::Function, Some("<main>"), Some(0), 0),
+                (CapturedFrameKind::Function, Some("outer"), Some(0), 0),
+                (CapturedFrameKind::Function, Some("check"), Some(0), 0),
+                (CapturedFrameKind::Expression, None, Some(0), 0),
+            ]
+        );
+        // Positions index the raw frames, which include the skipped steps.
+        let positions = stack
+            .frames
+            .iter()
+            .map(|entry| entry.position)
+            .collect::<Vec<_>>();
+        assert!(
+            positions.windows(2).all(|pair| pair[0] < pair[1]),
+            "{positions:?}"
+        );
+        assert_eq!(positions.last(), Some(&(frames.len() - 1)));
+        for entry in &stack.frames {
+            assert_eq!(
+                collection
+                    .symbolize_serialized_frame(&frames[entry.position])
+                    .unwrap()
+                    .frame
+                    .program_hash,
+                entry.frame.frame.program_hash
+            );
+        }
+        let check = &stack.frames[2].frame.frame;
+        assert_eq!(
+            check
+                .arguments
+                .iter()
+                .map(|argument| (
+                    argument.name.as_str(),
+                    render_clvm_value(&argument.value).unwrap()
+                ))
+                .collect::<Vec<_>>(),
+            [("A", "3".to_string()), ("B", "6".to_string())]
+        );
+        let leaf = &stack.frames[3].frame;
+        let excerpt = collection
+            .source_excerpt(
+                leaf.metadata_index.unwrap(),
+                leaf.frame.source_span.unwrap(),
+            )
+            .unwrap();
+        assert_eq!(excerpt.path, "structured.clsp");
+        assert_eq!((excerpt.span.start_line, excerpt.span.start_column), (6, 8));
+        assert_eq!(excerpt.line.as_deref(), Some("      (x \"too small\")))"));
+
+        let formatted = collection
+            .format_captured_stack(&frames, 0, StackFrameStyle::Python)
+            .unwrap();
+        assert_eq!(render_structured_python(&collection, &stack), formatted);
+    }
+
+    #[test]
+    fn structured_captured_stack_counts_repetitions_and_omissions() {
+        let (program, symbols, sources) = fixture();
+        let mut collection = DebugMetadataCollection::default();
+        collection
+            .insert_metadata(DebugMetadata::from_program(&program, &symbols, &sources).unwrap())
+            .unwrap();
+        let call = |environment: &str| SerializedFrame {
+            program: serialize_program(&program).unwrap(),
+            environment: serialized_sexp(environment),
+        };
+
+        let frames = vec![call("(5 6)"); 3];
+        let stack = collection.symbolize_captured_stack(&frames, 0).unwrap();
+        assert_eq!(stack.omitted, 0);
+        assert_eq!(stack.frames.len(), 1);
+        assert_eq!(stack.frames[0].kind, CapturedFrameKind::Function);
+        assert_eq!((stack.frames[0].position, stack.frames[0].repeated), (0, 2));
+        assert_eq!(
+            render_structured_python(&collection, &stack),
+            collection
+                .format_captured_stack(&frames, 0, StackFrameStyle::Python)
+                .unwrap()
+        );
+
+        // The oldest entry dropped to bound the stack counts every call it
+        // represents, including folded repetitions.
+        let mut frames = vec![call("(5 6)"); 4];
+        frames.extend((100..200).map(|value| call(&format!("({value} 6)"))));
+        let stack = collection.symbolize_captured_stack(&frames, 2).unwrap();
+        assert_eq!(stack.omitted, 6);
+        assert_eq!(stack.frames.len(), 100);
+        assert_eq!(stack.frames[0].position, 4);
+        assert_eq!(stack.frames[99].position, 103);
+        assert!(stack.frames.iter().all(|entry| entry.repeated == 0));
+        assert_eq!(
+            render_structured_python(&collection, &stack),
+            collection
+                .format_captured_stack(&frames, 2, StackFrameStyle::Python)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn structured_captured_stack_classifies_labels_and_unknown_frames() {
+        // The Chialisp compiler records a function for every name, but other
+        // producers can label a node without one.
+        let (program, symbols, sources) = fixture();
+        let mut metadata = DebugMetadata::from_program(&program, &symbols, &sources).unwrap();
+        match &mut metadata.tree {
+            DebugNode::Atom { function, .. } | DebugNode::Pair { function, .. } => *function = None,
+        }
+        let mut collection = DebugMetadataCollection::default();
+        collection.insert_metadata(metadata).unwrap();
+        let frames = [
+            SerializedFrame {
+                program: serialize_program(&program).unwrap(),
+                environment: serialized_sexp("(5 6)"),
+            },
+            SerializedFrame {
+                program: serialized_sexp("(- 9 3)"),
+                environment: serialized_sexp("()"),
+            },
+        ];
+        let stack = collection.symbolize_captured_stack(&frames, 1).unwrap();
+        assert_eq!(stack.omitted, 1);
+        let [label, unknown] = &stack.frames[..] else {
+            panic!("{stack:?}");
+        };
+        assert_eq!(label.kind, CapturedFrameKind::Label);
+        assert_eq!(label.frame.frame.function.as_deref(), Some("fixture"));
+        assert_eq!(label.frame.frame.function_index, None);
+        assert!(label.frame.frame.arguments.is_empty());
+        assert_eq!(unknown.kind, CapturedFrameKind::Unknown);
+        assert_eq!(unknown.frame.metadata_index, None);
+        assert_eq!(
+            render_structured_python(&collection, &stack),
+            collection
+                .format_captured_stack(&frames, 1, StackFrameStyle::Python)
+                .unwrap()
+        );
+
+        // A sidecar match with neither a name nor a location renders as
+        // unknown, so it is classified as unknown while keeping its sidecar.
+        let mut metadata = DebugMetadata::from_program(&program, &symbols, &sources).unwrap();
+        match &mut metadata.tree {
+            DebugNode::Atom {
+                function,
+                label,
+                span,
+                ..
+            }
+            | DebugNode::Pair {
+                function,
+                label,
+                span,
+                ..
+            } => {
+                *function = None;
+                *label = None;
+                *span = None;
+            }
+        }
+        let mut collection = DebugMetadataCollection::default();
+        collection.insert_metadata(metadata).unwrap();
+        let stack = collection
+            .symbolize_captured_stack(&frames[..1], 0)
+            .unwrap();
+        assert_eq!(stack.frames[0].kind, CapturedFrameKind::Unknown);
+        assert_eq!(stack.frames[0].frame.frame.matched, FrameMatch::Exact);
+        assert_eq!(stack.frames[0].frame.metadata_index, Some(0));
+        assert_eq!(
+            render_structured_python(&collection, &stack),
+            collection
+                .format_captured_stack(&frames[..1], 0, StackFrameStyle::Python)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn source_excerpts_expand_tabs_and_tolerate_missing_lines() {
+        let source = "\t(\"é\" 参数)\r\n(f\n  X)";
+        let program = parse_sexp(Srcloc::start("excerpt.clsp"), source.bytes())
+            .unwrap()
+            .remove(0);
+        let sources = HashMap::from([("excerpt.clsp".to_string(), source.to_string())]);
+        let mut metadata =
+            DebugMetadata::from_program(&program, &HashMap::new(), &sources).unwrap();
+        let first = metadata.spans.len();
+        metadata.spans.extend([
+            DebugSourceSpan {
+                file: 0,
+                start_line: 1,
+                start_column: 8,
+                end_line: 1,
+                end_column: 12,
+            },
+            DebugSourceSpan {
+                file: 0,
+                start_line: 2,
+                start_column: 1,
+                end_line: 3,
+                end_column: 5,
+            },
+            DebugSourceSpan {
+                file: 0,
+                start_line: 9,
+                start_column: 1,
+                end_line: 9,
+                end_column: 1,
+            },
+        ]);
+        let mut collection = DebugMetadataCollection::default();
+        collection.insert_metadata(metadata).unwrap();
+
+        let excerpt = collection.source_excerpt(0, first).unwrap();
+        assert_eq!(excerpt.path, "excerpt.clsp");
+        assert_eq!(excerpt.line.as_deref(), Some("       (\"é\" 参数)"));
+        assert_eq!(excerpt.highlight_width(), 4);
+
+        // A multi-line span highlights to the end of its first line.
+        let excerpt = collection.source_excerpt(0, first + 1).unwrap();
+        assert_eq!(excerpt.line.as_deref(), Some("(f"));
+        assert_eq!(excerpt.highlight_width(), 2);
+
+        let excerpt = collection.source_excerpt(0, first + 2).unwrap();
+        assert_eq!(excerpt.line, None);
+        assert_eq!(excerpt.highlight_width(), 1);
+
+        assert_eq!(collection.source_excerpt(0, first + 3), None);
+        assert_eq!(collection.source_excerpt(1, 0), None);
+    }
+
+    #[test]
+    fn captured_stack_text_matches_recorded_output() {
+        // Recorded before the formatter rendered from the structured stack.
+        // Covers omitted, unknown, expression, repeated and leaf frames.
+        let source = "(mod (X)\n  (include *standard-cl-23*)\n  (defun check (A B)\n    (if (> A 10)\n      A\n      (x \"too small\")))\n  (defun outer (N)\n    (check N (* N 2)))\n  (outer X))\n";
+        let (artifact, mut frames) = captured_failure("golden.clsp", source, "(3)");
+        let call = frames[2].clone();
+        frames.insert(2, call.clone());
+        frames.insert(2, call);
+        frames.insert(
+            1,
+            SerializedFrame {
+                program: serialized_sexp("(16 1)"),
+                environment: serialized_sexp("()"),
+            },
+        );
+        let mut collection = DebugMetadataCollection::default();
+        collection.insert(&artifact.metadata).unwrap();
+        let python = collection
+            .format_captured_stack(&frames, 1, StackFrameStyle::Python)
+            .unwrap();
+        assert_eq!(
+            python,
+            r#"<... 1 older frame omitted ...>
+File "golden.clsp", line 9, column 4, in <main>
+  (outer X))
+   ^^^^^
+  X = 3
+in <unknown:7f06959301e2ecc85051557683ac587a47d0c7aba772ff6f5163dfd5f66d2a3a>
+File "golden.clsp", line 9, column 4
+  (outer X))
+   ^^^^^
+File "golden.clsp", line 8, column 6, in outer
+  (check N (* N 2)))
+   ^^^^^
+  N = 3
+<... 2 identical frames repeated ...>
+File "golden.clsp", line 4, column 6, in check
+  (if (> A 10)
+   ^^
+  A = 3
+  B = 6
+File "golden.clsp", line 6, column 8
+  (x "too small")))
+   ^"#
+        );
+        let lisp = collection
+            .format_captured_stack(&frames, 1, StackFrameStyle::Lisp)
+            .unwrap();
+        assert_eq!(
+            lisp,
+            r#"<... 1 older frame omitted ...>
+--> golden.clsp:9:4
+   |
+  9|   (outer X))
+   |    ^^^^^
+(<main> (X unknown 3))
+(<unknown:7f06959301e2ecc85051557683ac587a47d0c7aba772ff6f5163dfd5f66d2a3a>)
+--> golden.clsp:9:4
+   |
+  9|   (outer X))
+   |    ^^^^^
+(<unknown:0cb405cad33b1a95f5ee31f459d9249fdb0581eb14a2ba77392b06863b3cb4c9>)
+--> golden.clsp:8:6
+   |
+  8|     (check N (* N 2)))
+   |      ^^^^^
+(outer (N integer 3))
+<... 2 identical frames repeated ...>
+--> golden.clsp:4:6
+   |
+  4|     (if (> A 10)
+   |      ^^
+(check (A integer 3) (B unknown 6))
+--> golden.clsp:6:8
+   |
+  6|       (x "too small")))
+   |        ^
+(<unknown:69874403257c415345f06fe4369a6f24fc248721d40948a975b87d2cf12e73ad>)"#
+        );
     }
 }
