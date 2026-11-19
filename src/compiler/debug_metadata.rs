@@ -196,17 +196,17 @@ pub enum CapturedFrameKind {
 }
 
 impl CapturedFrameKind {
-    fn classify(frame: &SymbolizedSerializedFrame, candidates: Vec<String>) -> Self {
-        let symbolized = &frame.frame;
-        match symbolized.matched {
+    /// Exact and curried matches always come from a sidecar.
+    fn classify(frame: &SymbolizedFrame, candidates: Vec<String>) -> Self {
+        match frame.matched {
             FrameMatch::Ambiguous => CapturedFrameKind::Ambiguous { candidates },
             FrameMatch::Unknown => CapturedFrameKind::Unknown,
             FrameMatch::Exact | FrameMatch::Curried => {
-                if symbolized.function_index.is_some() {
+                if frame.function_index.is_some() {
                     CapturedFrameKind::Function
-                } else if symbolized.function.is_some() {
+                } else if frame.function.is_some() {
                     CapturedFrameKind::Label
-                } else if frame.metadata_index.is_some() && symbolized.source_span.is_some() {
+                } else if frame.source_span.is_some() {
                     CapturedFrameKind::Expression
                 } else {
                     CapturedFrameKind::Unknown
@@ -1469,7 +1469,7 @@ impl DebugMetadataCollection {
                     || symbolized.frame.matched == FrameMatch::Ambiguous);
             retained.push(CapturedStackFrame {
                 position,
-                kind: CapturedFrameKind::classify(&symbolized, candidates),
+                kind: CapturedFrameKind::classify(&symbolized.frame, candidates),
                 frame: symbolized,
                 repeated: 0,
             });
@@ -1529,7 +1529,8 @@ impl DebugMetadataCollection {
     }
 
     /// Resolve a span of the sidecar at `metadata_index` to its file path and
-    /// first source line. Returns `None` when either index is out of range.
+    /// first source line. Returns `None` when either index, or the span's file
+    /// index in hand-built metadata, is out of range.
     pub fn source_excerpt(
         &self,
         metadata_index: usize,
@@ -4278,6 +4279,30 @@ mod tests {
         assert!(first < unknown && unknown < newest, "{rendered}");
     }
 
+    /// Run a program that must fail and serialize its captured frames.
+    fn capture_failing_frames(program: &[u8], environment: &[u8]) -> Vec<SerializedFrame> {
+        let mut allocator = Allocator::new();
+        let program = decode_clvm(&mut allocator, program, "program").unwrap();
+        let environment = decode_clvm(&mut allocator, environment, "environment").unwrap();
+        let failure = clvm_rs::run_program_with_diagnostics(
+            &mut allocator,
+            &clvm_rs::chia_dialect::ChiaDialect::new(clvm_rs::chia_dialect::ClvmFlags::empty()),
+            program,
+            environment,
+            1_000_000,
+            64,
+        )
+        .expect_err("fixture fails");
+        failure
+            .frames
+            .iter()
+            .map(|frame| SerializedFrame {
+                program: node_to_bytes(&allocator, frame.program).unwrap(),
+                environment: node_to_bytes(&allocator, frame.environment).unwrap(),
+            })
+            .collect()
+    }
+
     fn captured_cl26_failure(
         filename: &str,
         source: &str,
@@ -4312,26 +4337,7 @@ mod tests {
             .into_iter()
             .find(|artifact| artifact.export_name.as_deref() == Some("program"))
             .expect("program export");
-        let mut allocator = Allocator::new();
-        let program = decode_clvm(&mut allocator, &artifact.program, "fixture").unwrap();
-        let environment = allocator.nil();
-        let failure = clvm_rs::run_program_with_diagnostics(
-            &mut allocator,
-            &clvm_rs::chia_dialect::ChiaDialect::new(clvm_rs::chia_dialect::ClvmFlags::empty()),
-            program,
-            environment,
-            1_000_000,
-            64,
-        )
-        .expect_err("fixture fails while accessing X");
-        let frames = failure
-            .frames
-            .into_iter()
-            .map(|frame| SerializedFrame {
-                program: node_to_bytes(&allocator, frame.program).unwrap(),
-                environment: node_to_bytes(&allocator, frame.environment).unwrap(),
-            })
-            .collect();
+        let frames = capture_failing_frames(&artifact.program, &serialized_sexp("()"));
         (artifact, frames)
     }
 
@@ -4456,27 +4462,8 @@ mod tests {
                 "LIMIT, ITEM",
             ),
         ] {
-            let mut allocator = Allocator::new();
-            let root = decode_clvm(&mut allocator, &serialized_sexp(&wrapper), "wrapper").unwrap();
-            let env =
-                decode_clvm(&mut allocator, &serialized_sexp(environment), "environment").unwrap();
-            let failure = clvm_rs::run_program_with_diagnostics(
-                &mut allocator,
-                &clvm_rs::chia_dialect::ChiaDialect::new(clvm_rs::chia_dialect::ClvmFlags::empty()),
-                root,
-                env,
-                1_000_000,
-                64,
-            )
-            .expect_err("closure assertion fails");
-            let frames: Vec<_> = failure
-                .frames
-                .iter()
-                .map(|frame| SerializedFrame {
-                    program: node_to_bytes(&allocator, frame.program).unwrap(),
-                    environment: node_to_bytes(&allocator, frame.environment).unwrap(),
-                })
-                .collect();
+            let frames =
+                capture_failing_frames(&serialized_sexp(&wrapper), &serialized_sexp(environment));
             assert!(frames.len() >= 3);
             for (style, header, binding, limit, item) in [
                 (
@@ -4713,6 +4700,21 @@ mod tests {
             }
         );
         assert_eq!(stack.frames[0].frame, frame);
+        // Candidates survive curry, which wraps the ambiguous body.
+        let curried = SerializedFrame {
+            program: canonical_curry_bytes(&bytes, &[serialized_sexp("5")]),
+            environment: serialized_sexp("(6)"),
+        };
+        assert_eq!(
+            collection
+                .symbolize_captured_stack(&[curried], 0)
+                .unwrap()
+                .frames[0]
+                .kind,
+            CapturedFrameKind::Ambiguous {
+                candidates: vec!["fixture".to_string(), "second".to_string()]
+            }
+        );
         let rendered = collection
             .format_captured_stack(&[captured], 0, StackFrameStyle::Python)
             .unwrap();
@@ -5677,27 +5679,7 @@ mod tests {
             filename,
         ));
         let artifact = compile_with_debug(opts, source).unwrap().remove(0);
-        let mut allocator = Allocator::new();
-        let program = decode_clvm(&mut allocator, &artifact.program, "program").unwrap();
-        let environment =
-            decode_clvm(&mut allocator, &serialized_sexp(environment), "environment").unwrap();
-        let failure = clvm_rs::run_program_with_diagnostics(
-            &mut allocator,
-            &clvm_rs::chia_dialect::ChiaDialect::new(clvm_rs::chia_dialect::ClvmFlags::empty()),
-            program,
-            environment,
-            1_000_000,
-            64,
-        )
-        .expect_err("fixture fails");
-        let frames = failure
-            .frames
-            .iter()
-            .map(|frame| SerializedFrame {
-                program: node_to_bytes(&allocator, frame.program).unwrap(),
-                environment: node_to_bytes(&allocator, frame.environment).unwrap(),
-            })
-            .collect();
+        let frames = capture_failing_frames(&artifact.program, &serialized_sexp(environment));
         (artifact, frames)
     }
 
@@ -5938,6 +5920,42 @@ mod tests {
                 .format_captured_stack(&frames, 1, StackFrameStyle::Python)
                 .unwrap()
         );
+
+        // A sidecar match with neither a name nor a location renders as
+        // unknown, so it is classified as unknown while keeping its sidecar.
+        let mut metadata = DebugMetadata::from_program(&program, &symbols, &sources).unwrap();
+        match &mut metadata.tree {
+            DebugNode::Atom {
+                function,
+                label,
+                span,
+                ..
+            }
+            | DebugNode::Pair {
+                function,
+                label,
+                span,
+                ..
+            } => {
+                *function = None;
+                *label = None;
+                *span = None;
+            }
+        }
+        let mut collection = DebugMetadataCollection::default();
+        collection.insert_metadata(metadata).unwrap();
+        let stack = collection
+            .symbolize_captured_stack(&frames[..1], 0)
+            .unwrap();
+        assert_eq!(stack.frames[0].kind, CapturedFrameKind::Unknown);
+        assert_eq!(stack.frames[0].frame.frame.matched, FrameMatch::Exact);
+        assert_eq!(stack.frames[0].frame.metadata_index, Some(0));
+        assert_eq!(
+            render_structured_python(&collection, &stack),
+            collection
+                .format_captured_stack(&frames[..1], 0, StackFrameStyle::Python)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -5961,7 +5979,7 @@ mod tests {
             DebugSourceSpan {
                 file: 0,
                 start_line: 2,
-                start_column: 2,
+                start_column: 1,
                 end_line: 3,
                 end_column: 5,
             },
@@ -5984,7 +6002,7 @@ mod tests {
         // A multi-line span highlights to the end of its first line.
         let excerpt = collection.source_excerpt(0, first + 1).unwrap();
         assert_eq!(excerpt.line.as_deref(), Some("(f"));
-        assert_eq!(excerpt.highlight_width(), 1);
+        assert_eq!(excerpt.highlight_width(), 2);
 
         let excerpt = collection.source_excerpt(0, first + 2).unwrap();
         assert_eq!(excerpt.line, None);
