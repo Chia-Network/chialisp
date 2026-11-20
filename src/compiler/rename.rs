@@ -214,13 +214,7 @@ fn rename_in_bodyform(
             ))
         }
 
-        BodyForm::Quoted(atom) => match atom {
-            SExp::Atom(l, n) => match namemap.get(n) {
-                Some(named) => Ok(BodyForm::Quoted(SExp::Atom(l.clone(), named.to_vec()))),
-                None => Ok(BodyForm::Quoted(atom.clone())),
-            },
-            _ => Ok(BodyForm::Quoted(atom.clone())),
-        },
+        BodyForm::Quoted(atom) => Ok(BodyForm::Quoted(atom.clone())),
 
         BodyForm::Value(atom) => match atom {
             SExp::Atom(l, n) => match namemap.get(n) {
@@ -298,7 +292,7 @@ pub fn desugar_sequential_let_bindings(
     }
 }
 
-fn rename_args_bodyform(b: &BodyForm) -> Result<BodyForm, CompileErr> {
+pub(super) fn rename_args_bodyform(b: &BodyForm) -> Result<BodyForm, CompileErr> {
     match b {
         BodyForm::Let(LetFormKind::Sequential, letdata) => {
             // Renaming a sequential let is exactly as if the bindings were

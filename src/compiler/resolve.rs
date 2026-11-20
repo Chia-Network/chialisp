@@ -10,29 +10,29 @@ use crate::compiler::comptypes::{
     DefmacData, DefunData, HelperForm, ImportLongName, LambdaData, LetData, LetFormKind,
     LongNameTranslation, ModuleImportListedName, ModuleImportSpec, NamespaceData,
 };
-use crate::compiler::rename::rename_args_helperform;
+use crate::compiler::rename::{rename_args_bodyform, rename_args_helperform};
 use crate::compiler::sexp::{decode_string, SExp};
 
 /// Ensure that we know the full set of local names referenced by a lambda so we know that they
 /// aren't external references.
 ///
-/// This just captures atoms in the argument set.  Captured or internal both count as 'local'
-/// here for module resolution purposes.
-fn capture_scope(in_scope: &mut HashSet<Vec<u8>>, args: Rc<SExp>) {
+/// Captured and internal names are both local. Report whether a name already
+/// belonged to the scope as we add the entire pattern.
+fn capture_scope(in_scope: &mut HashSet<Vec<u8>>, args: Rc<SExp>) -> bool {
     match args.borrow() {
         SExp::Cons(_, a, b) => {
             if let Some((parent, children)) = is_at_capture(a.clone(), b.clone()) {
-                in_scope.insert(parent.clone());
-                capture_scope(in_scope, children);
+                let parent_shadowed = !in_scope.insert(parent);
+                let children_shadowed = capture_scope(in_scope, children);
+                parent_shadowed || children_shadowed
             } else {
-                capture_scope(in_scope, a.clone());
-                capture_scope(in_scope, b.clone());
+                let left = capture_scope(in_scope, a.clone());
+                let right = capture_scope(in_scope, b.clone());
+                left || right
             }
         }
-        SExp::Atom(_, a) => {
-            in_scope.insert(a.clone());
-        }
-        _ => {}
+        SExp::Atom(_, a) => !in_scope.insert(a.clone()) && a != b"@",
+        _ => false,
     }
 }
 
@@ -332,23 +332,11 @@ fn is_compiler_builtin(name: &[u8]) -> bool {
     name == b"com" || name == b"@"
 }
 
-/// Find and record binding names in let and assign forms in order to ensure we don't try to match
-/// them to external references.
-fn add_binding_names(bindings: &mut HashSet<Vec<u8>>, pattern: &BindingPattern) {
+/// Add the binding names and report whether a variable was already in scope.
+fn add_binding_names(bindings: &mut HashSet<Vec<u8>>, pattern: &BindingPattern) -> bool {
     match pattern {
-        BindingPattern::Name(n) => {
-            bindings.insert(n.clone());
-        }
-        BindingPattern::Complex(c) => match c.borrow() {
-            SExp::Cons(_, a, b) => {
-                add_binding_names(bindings, &BindingPattern::Complex(a.clone()));
-                add_binding_names(bindings, &BindingPattern::Complex(b.clone()));
-            }
-            SExp::Atom(_, a) => {
-                bindings.insert(a.clone());
-            }
-            _ => {}
-        },
+        BindingPattern::Name(n) => !bindings.insert(n.clone()) && n != b"@",
+        BindingPattern::Complex(c) => capture_scope(bindings, c.clone()),
     }
 }
 
@@ -364,6 +352,27 @@ fn resolve_namespaces_in_expr(
     in_scope: &HashSet<Vec<u8>>,
     expr: Rc<BodyForm>,
 ) -> Result<Rc<BodyForm>, CompileErr> {
+    // Main exports arrive here without helper-style variable renaming. A
+    // shadowing local must have its own name before lets are lifted to helpers.
+    let shadows = match expr.as_ref() {
+        BodyForm::Let(_, ld) => {
+            let mut visible = in_scope.clone();
+            ld.bindings
+                .iter()
+                .any(|b| add_binding_names(&mut visible, &b.pattern))
+        }
+        BodyForm::Lambda(ld) => {
+            let mut captures = HashSet::new();
+            capture_scope(&mut captures, ld.capture_args.clone());
+            capture_scope(&mut captures, ld.args.clone())
+        }
+        _ => false,
+    };
+    let expr = if shadows {
+        Rc::new(rename_args_bodyform(&expr)?)
+    } else {
+        expr
+    };
     match expr.borrow() {
         BodyForm::Call(loc, args, tail) => {
             let new_tail = if let Some(t) = tail.as_ref() {
