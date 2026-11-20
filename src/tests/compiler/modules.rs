@@ -818,6 +818,55 @@ fn test_module_phase_deinline_does_not_blow_up() {
 }
 
 #[test]
+fn test_main_export_local_bindings_shadow_arguments() {
+    for (body, expected) in [
+        ("(let ((value (f value))) (+ value extra))", "111"),
+        (
+            "(assign source value (assign (value . tail) source (+ value tail extra)))",
+            "133",
+        ),
+        ("(a (lambda ((& value) value) value) (list extra))", "100"),
+        ("(let* ((x (f value)) (x (+ x extra))) x)", "111"),
+    ] {
+        let source = format!("(include *standard-cl-26*) (export (value extra) {body})");
+        test_compile_and_run_program_with_modules(
+            "shadow.clsp",
+            &source,
+            &[HexArgumentOutcome {
+                hexfile: "shadow.hex",
+                argument: "((11 . 22) 100)",
+                outcome: Run(expected),
+            }],
+        );
+    }
+}
+
+#[test]
+fn test_module_renaming_preserves_quoted_bindings() {
+    let source = r#"
+        (include *standard-cl-26*)
+        (defun helper (name)
+            (= (q . name) "name"))
+        (defmac quoted-name (name)
+            (c 1 (q . name)))
+        (export (name)
+            (let ((name (+ name 1)))
+                (all (helper name)
+                     (= (quoted-name name) "name")
+                     (= (q . name) "name"))))
+    "#;
+    test_compile_and_run_program_with_modules(
+        "quote.clsp",
+        source,
+        &[HexArgumentOutcome {
+            hexfile: "quote.hex",
+            argument: "(11)",
+            outcome: Run("1"),
+        }],
+    );
+}
+
+#[test]
 fn test_single_program_module_compile_is_deterministic() {
     use crate::classic::clvm_tools::comp_input::RunAndCompileInputData;
     use crate::classic::platform::argparse::ArgumentValue;
